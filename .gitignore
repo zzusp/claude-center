@@ -9,3 +9,4 @@ out/
 *.tsbuildinfo
 worker-data/
 docs/tmp/
+.idea/
