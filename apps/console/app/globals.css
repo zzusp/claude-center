@@ -1050,10 +1050,19 @@ table.table {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  transition: box-shadow 160ms ease;
+  cursor: pointer;
+  transition: box-shadow 160ms ease, border-color 160ms ease, transform 160ms ease;
 }
 
 .worker-card:hover {
+  box-shadow: var(--shadow-2);
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.worker-card:focus-visible {
+  outline: none;
+  border-color: var(--running);
   box-shadow: var(--shadow-2);
 }
 
