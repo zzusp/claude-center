@@ -13,8 +13,9 @@ import {
   UserRound
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { Empty, KvRow, StatusBadge, TaskTypeBadge, fmtTime, metaOf, postJson } from "./shared";
+import { usePolling } from "../lib/use-polling";
 
 type DetailTab = "overview" | "timeline" | "logs" | "conversation";
 
@@ -62,48 +63,37 @@ export default function TaskDetailPage({
     }
   }
 
-  useEffect(() => {
-    let active = true;
-    async function load() {
+  usePolling(
+    async (isActive) => {
       try {
         const response = await fetch(`/api/tasks/${taskId}`, { cache: "no-store" });
         if (!response.ok) return;
         const data = (await response.json()) as { task: Task; predecessors: TaskPredecessor[] };
-        if (active) {
+        if (isActive()) {
           setTask(data.task);
           setPredecessors(data.predecessors);
         }
       } catch {
         /* 轮询失败静默，下次重试 */
       }
-    }
-    const timer = window.setInterval(load, 3000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [taskId]);
+    },
+    [taskId]
+  );
 
   // 真实 task_events，喂给时间线。
-  useEffect(() => {
-    let active = true;
-    async function load() {
+  usePolling(
+    async (isActive) => {
       try {
         const response = await fetch(`/api/tasks/${taskId}/events`, { cache: "no-store" });
         if (!response.ok) return;
         const data = (await response.json()) as { events: TaskEvent[] };
-        if (active) setEvents(data.events);
+        if (isActive()) setEvents(data.events);
       } catch {
         /* 轮询失败静默，下次重试 */
       }
-    }
-    void load();
-    const timer = window.setInterval(load, 3000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [taskId]);
+    },
+    [taskId]
+  );
 
   function handleBack() {
     // 多数情况由列表点击进入，回退即回到来源页；直接打开链接（无历史）时退回首页。
@@ -463,25 +453,19 @@ function TaskConversation({
     }
   }
 
-  useEffect(() => {
-    let active = true;
-    async function load() {
+  usePolling(
+    async (isActive) => {
       try {
         const response = await fetch(`/api/tasks/${task.id}/comments`, { cache: "no-store" });
         if (!response.ok) return;
         const data = (await response.json()) as { comments: TaskComment[] };
-        if (active) setComments(data.comments);
+        if (isActive()) setComments(data.comments);
       } catch {
         /* 轮询失败静默，下次重试 */
       }
-    }
-    void load();
-    const timer = window.setInterval(load, 3000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [task.id]);
+    },
+    [task.id]
+  );
 
   async function submitReply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

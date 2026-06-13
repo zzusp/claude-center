@@ -127,6 +127,14 @@ export async function promoteDueScheduledTasks(client: pg.Pool | pg.PoolClient):
   return result.rowCount ?? 0;
 }
 
+// 当前处于 scheduled（定时待发）的任务数，供总览「调度器」卡片展示待发队列深度。
+export async function countScheduledTasks(client: pg.Pool | pg.PoolClient): Promise<number> {
+  const result = await client.query<{ count: number }>(
+    `SELECT count(*)::int AS count FROM tasks WHERE status = 'scheduled'`
+  );
+  return result.rows[0]?.count ?? 0;
+}
+
 export async function listRecentTasks(client: pg.Pool | pg.PoolClient, limit = 50): Promise<Task[]> {
   const result = await client.query<Task>(
     `SELECT tasks.*,

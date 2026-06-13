@@ -92,6 +92,14 @@ try {
   }
   const payload = await overview.json();
 
+  // 4b) 健康块应随 overview 返回：DB 连接池 + 定时调度器状态。
+  if (!payload.health || !payload.health.db || !payload.health.scheduler) {
+    throw new Error(`overview 缺少 health 块：${JSON.stringify(payload.health)}`);
+  }
+  if (payload.health.db.ok !== true || typeof payload.health.db.latencyMs !== "number") {
+    throw new Error(`health.db 异常：${JSON.stringify(payload.health.db)}`);
+  }
+
   // 4) 带 cookie 访问首页（中控台）应为 200。
   const page = await fetch(baseUrl, { headers: { cookie } });
   if (!page.ok) {
@@ -107,7 +115,8 @@ try {
         projects: payload.projects.length,
         workers: payload.workers.length,
         tasks: payload.tasks.length,
-        commands: payload.commands.length
+        commands: payload.commands.length,
+        health: payload.health
       },
       null,
       2

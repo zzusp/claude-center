@@ -4,6 +4,8 @@
 //
 // 仅在 nodejs 运行时启用（edge 运行时连不了 pg）。用 globalThis 标志位防 dev HMR 重复起定时器。
 
+import { recordSchedulerStart, recordSchedulerTick } from "./app/lib/scheduler-state";
+
 const DEFAULT_INTERVAL_MS = 30_000;
 
 export async function register(): Promise<void> {
@@ -30,14 +32,17 @@ export async function register(): Promise<void> {
   async function tick(): Promise<void> {
     try {
       const promoted = await promoteDueScheduledTasks(getPool());
+      recordSchedulerTick(promoted, new Date().toISOString(), null);
       if (promoted > 0) {
         console.log(`[scheduler] 提升 ${promoted} 个到点定时任务进入待处理队列`);
       }
     } catch (error) {
+      recordSchedulerTick(0, new Date().toISOString(), error instanceof Error ? error.message : String(error));
       console.error("[scheduler] 提升定时任务失败：", error);
     }
   }
 
+  recordSchedulerStart(intervalMs, new Date().toISOString());
   // 启动即跑一次，随后周期跑。unref 让定时器不阻止进程退出。
   void tick();
   const timer = setInterval(() => void tick(), intervalMs);

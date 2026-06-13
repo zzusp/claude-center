@@ -219,3 +219,18 @@ scheduled ──到点(自动) / 人工立即发布──▶ pending ──▶ c
 - **Worker 提交全量改动**：`finalizeTask` 原按 `target_files` 限定 `git add` 范围，移除后恒定 `git add --all`；`taskPrompt` 不再输出「Target files」段。
 - **任务流列表**：排序从工具栏下拉移到「更新」表头（点击切换 `updated_at` 升/降序，默认降序）；新增「项目」「类型」两列、去掉「优先级」列；「更新」列时间格式改为 `YYYY-MM-dd HH:mm:ss`。
 - 该能力依赖数据库迁移 `010_task_drop_priority_target_files.sql`（`DROP COLUMN tasks.priority` / `tasks.target_files`、重建 `tasks_queue_idx`）。升级后务必先跑 `npm run db:migrate`。
+
+## 系统运行状态总览
+
+总览页在业务量卡片下新增「系统运行状态」区，三张健康卡：
+
+- **数据库连接**：连接池 `total/idle/waiting`（上限 10）+ `SELECT 1` 往返延迟。
+- **定时调度器**：检查周期、上次检查时间、`scheduled` 待发队列深度、累计提升数、最近错误（若有）。
+- **实时同步**：客户端轮询节奏与上次同步时间。
+
+实现要点：
+
+- 这三样分属共享库 / Console 服务进程 / 浏览器三个上下文，**代码各自留在原处**（不强行合并），总览页只做统一的运行健康视图。
+- 健康数据**搭 `/api/overview` 既有 3s 轮询返回**（新增 `health: { db, scheduler }` 块），不另开端点、不加定时器。`db` 走 `getPoolStats` + `pingDatabase`；`scheduler` 由 `apps/console/app/lib/scheduler-state.ts` 把调度器的启动 / tick 状态记在 `globalThis`（instrumentation 写、route 读）。
+- 全站客户端轮询统一到 `apps/console/app/lib/use-polling.ts` 的 `POLL_INTERVAL_MS` 常量 + `usePolling` hook，取代散落的 `setInterval(…, 3000)`。
+- 纯内存调度器状态在单 Console 进程下成立；多实例时为 per-instance 视图。详见 `docs/spec/runtime-health-overview.md`。
