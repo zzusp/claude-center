@@ -245,6 +245,8 @@ export type SortDir = "asc" | "desc";
 
 export type ListTasksFilters = {
   status?: string[];
+  // 合并状态（多选）：unknown / unmerged / merged，与状态筛选独立叠加。
+  mergeStatus?: string[];
   projectId?: string | null;
   // 项目级隔离：非 admin 传入其可访问项目 id 集合，约束只返回范围内任务（空集合 → 无结果）。
   projectIds?: string[] | null;
@@ -265,6 +267,10 @@ export async function listTasks(
   if (filters.status && filters.status.length > 0) {
     params.push(filters.status);
     conditions.push(`tasks.status = ANY($${params.length}::text[])`);
+  }
+  if (filters.mergeStatus && filters.mergeStatus.length > 0) {
+    params.push(filters.mergeStatus);
+    conditions.push(`tasks.merge_status = ANY($${params.length}::text[])`);
   }
   if (filters.projectId) {
     params.push(filters.projectId);
@@ -599,6 +605,65 @@ export async function setTaskMergeChecked(
         SET merge_checked_at = now()
       WHERE id = $1 AND claimed_by = $2`,
     [taskId, workerId]
+  );
+}
+
+/* ===== Console 侧定时合并检查（独立于上面的 Worker 清理流程）=====
+ * 方案见 docs/spec/task-merge-status-check.md。Console 不持有本地工作树，只读 repo_url 远程判定
+ * work_branch 是否已并入 target_branch；检测到合并把 success 工作任务自动转 accepted。
+ */
+
+// 候选附带项目 repo_url，供 Console 检测助手做 gh / git 远程判定。
+export type MergeCheckCandidate = Task & { repo_url: string };
+
+// Console 合并检查候选：success 待验收的工作类任务（有 work/target 分支），按 merge_status_checked_at
+// 轮转取最久未查的一个（NULL 优先）。只读，不翻状态——是否合并由检测助手判定后回写。
+export async function claimNextMergeCheckCandidate(
+  client: pg.Pool | pg.PoolClient
+): Promise<MergeCheckCandidate | null> {
+  const result = await client.query<MergeCheckCandidate>(
+    `SELECT tasks.*, projects.repo_url
+       FROM tasks
+       JOIN projects ON projects.id = tasks.project_id
+      WHERE tasks.status = 'success'
+        AND tasks.task_type = 'work'
+        AND tasks.work_branch <> ''
+        AND tasks.target_branch <> ''
+      ORDER BY tasks.merge_status_checked_at ASC NULLS FIRST
+      LIMIT 1`
+  );
+  return result.rows[0] ?? null;
+}
+
+// 检测到已合并：仅 success 可自动验收，原子翻 accepted + merge_status=merged。返回 true 表示翻态成功。
+export async function markTaskMergeAccepted(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string
+): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE tasks
+        SET status = 'accepted',
+            merge_status = 'merged',
+            merge_status_checked_at = now(),
+            updated_at = now()
+      WHERE id = $1 AND status = 'success'`,
+    [taskId]
+  );
+  if ((result.rowCount ?? 0) === 0) {
+    return false;
+  }
+  await addTaskEvent(client, taskId, null, "merge_accepted", "检测到开发分支已合并进目标分支，自动验收", {});
+  return true;
+}
+
+// 检测未合并：仅打合并状态 + 轮转游标，不动 updated_at（避免每轮把 success 任务顶到列表排序顶部）。
+export async function setTaskMergeUnmerged(client: pg.Pool | pg.PoolClient, taskId: string): Promise<void> {
+  await client.query(
+    `UPDATE tasks
+        SET merge_status = 'unmerged',
+            merge_status_checked_at = now()
+      WHERE id = $1 AND status = 'success'`,
+    [taskId]
   );
 }
 

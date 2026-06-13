@@ -38,6 +38,13 @@ export function metaOf(status: string) {
   return STATUS_META[status] ?? { glyph: "·", label: status, tone: "cancelled" as Tone };
 }
 
+// 合并状态（work_branch → target_branch）：Console 定时检查的结果，独立于任务状态。
+export const MERGE_STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> = {
+  unknown: { glyph: "·", label: "未检查", tone: "cancelled" },
+  unmerged: { glyph: "◌", label: "未合并", tone: "pending" },
+  merged: { glyph: "✔", label: "已合并", tone: "merged" }
+};
+
 export async function postJson(path: string, body: unknown): Promise<void> {
   const response = await fetch(path, {
     method: "POST",
@@ -70,6 +77,16 @@ export function fmtDateTime(value: string | null): string {
 
 export function StatusBadge({ status }: { status: string }) {
   const meta = metaOf(status);
+  return (
+    <span className="badge" data-tone={meta.tone}>
+      <span className="glyph">{meta.glyph}</span>
+      {meta.label}
+    </span>
+  );
+}
+
+export function MergeStatusBadge({ status }: { status: string }) {
+  const meta = MERGE_STATUS_META[status] ?? { glyph: "·", label: status, tone: "cancelled" as Tone };
   return (
     <span className="badge" data-tone={meta.tone}>
       <span className="glyph">{meta.glyph}</span>

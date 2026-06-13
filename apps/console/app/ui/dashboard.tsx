@@ -54,7 +54,19 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Empty, KvRow, StatusBadge, StatusDot, TaskTypeBadge, fmtDateTime, fmtTime, metaOf, postJson, type Tone } from "./shared";
+import {
+  Empty,
+  KvRow,
+  MergeStatusBadge,
+  StatusBadge,
+  StatusDot,
+  TaskTypeBadge,
+  fmtDateTime,
+  fmtTime,
+  metaOf,
+  postJson,
+  type Tone
+} from "./shared";
 import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
 
 type Health = {
@@ -691,6 +703,13 @@ const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: "cancelled", label: "已取消" }
 ];
 
+const MERGE_STATUS_FILTERS: { value: string; label: string }[] = [
+  { value: "", label: "全部合并状态" },
+  { value: "unknown", label: "未检查" },
+  { value: "unmerged", label: "未合并" },
+  { value: "merged", label: "已合并" }
+];
+
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 function TasksView({
@@ -705,6 +724,7 @@ function TasksView({
   canCreateTask: boolean;
 }) {
   const [status, setStatus] = useState("");
+  const [mergeStatus, setMergeStatus] = useState("");
   const [projectId, setProjectId] = useState("");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
@@ -724,12 +744,13 @@ function TasksView({
   // 任一筛选条件变化都回到第 1 页
   useEffect(() => {
     setPage(1);
-  }, [status, projectId, debouncedQ, dir, pageSize]);
+  }, [status, mergeStatus, projectId, debouncedQ, dir, pageSize]);
 
   usePolling(
     async (isActive) => {
       const params = new URLSearchParams();
       if (status) params.set("status", status);
+      if (mergeStatus) params.set("mergeStatus", mergeStatus);
       if (projectId) params.set("projectId", projectId);
       if (debouncedQ) params.set("q", debouncedQ);
       params.set("dir", dir);
@@ -746,7 +767,7 @@ function TasksView({
         if (isActive()) setLoading(false);
       }
     },
-    [status, projectId, debouncedQ, dir, page, pageSize]
+    [status, mergeStatus, projectId, debouncedQ, dir, page, pageSize]
   );
 
   const totalPages = Math.max(1, Math.ceil(data.total / pageSize));
@@ -755,7 +776,7 @@ function TasksView({
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
 
-  const hasFilter = Boolean(status || projectId || debouncedQ);
+  const hasFilter = Boolean(status || mergeStatus || projectId || debouncedQ);
 
   return (
     <>
@@ -792,6 +813,13 @@ function TasksView({
           />
           <Select
             className="tb-select"
+            value={mergeStatus}
+            onChange={setMergeStatus}
+            options={MERGE_STATUS_FILTERS}
+            ariaLabel="按合并状态筛选"
+          />
+          <Select
+            className="tb-select"
             value={projectId}
             onChange={setProjectId}
             options={[
@@ -818,6 +846,7 @@ function TasksView({
                     <th>项目</th>
                     <th>类型</th>
                     <th>分支</th>
+                    <th>合并</th>
                     <th
                       className="t-right"
                       style={{ cursor: "pointer", userSelect: "none" }}
@@ -845,6 +874,7 @@ function TasksView({
                         <TaskTypeBadge type={task.task_type} />
                       </td>
                       <td className="mono">{task.task_type === "qa" ? "对话" : task.work_branch}</td>
+                      <td>{task.task_type === "qa" ? <span className="t-meta">—</span> : <MergeStatusBadge status={task.merge_status} />}</td>
                       <td className="t-right t-num">{fmtDateTime(task.updated_at)}</td>
                     </tr>
                   ))}
