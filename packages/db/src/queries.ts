@@ -69,11 +69,15 @@ export async function createTask(
     submitMode: TaskSubmitMode;
     targetFiles: string[];
     priority: number;
+    // 指定发布时间则落 'scheduled' 定时态，到点由调度器转 pending；为空走默认 'draft'。
+    scheduledAt?: string | null;
   }
 ): Promise<Task> {
+  const scheduledAt = input.scheduledAt ?? null;
+  const status = scheduledAt ? "scheduled" : "draft";
   const result = await client.query<Task>(
-    `INSERT INTO tasks (project_id, task_type, title, description, base_branch, work_branch, target_branch, submit_mode, target_files, priority)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO tasks (project_id, task_type, title, description, base_branch, work_branch, target_branch, submit_mode, target_files, priority, status, scheduled_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING *`,
     [
       input.projectId,
@@ -85,24 +89,46 @@ export async function createTask(
       input.targetBranch,
       input.submitMode,
       input.targetFiles,
-      input.priority
+      input.priority,
+      status,
+      scheduledAt
     ]
   );
   return result.rows[0]!;
 }
 
-// 发布草稿任务：draft → pending，进入可认领队列。WHERE status='draft' 保证只有草稿
-// 可发布，对已认领/运行中/已完成任务无副作用；未命中返回 null（任务不存在或非草稿）。
+// 发布任务：draft / scheduled → pending，进入可认领队列。对 scheduled 任务即「立即发布」
+// （到点前手动提前发布，覆盖定时）。WHERE 限定初始态保证对已认领/运行中/已完成任务无副作用；
+// 未命中返回 null（任务不存在或已不是待发布态）。
 export async function publishTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
   const result = await client.query<Task>(
     `UPDATE tasks
         SET status = 'pending',
             updated_at = now()
-      WHERE id = $1 AND status = 'draft'
+      WHERE id = $1 AND status IN ('draft', 'scheduled')
       RETURNING *`,
     [taskId]
   );
   return result.rows[0] ?? null;
+}
+
+// 调度器：把所有到点的定时任务（scheduled 且 scheduled_at <= now()）翻成 pending。
+// 幂等（WHERE status='scheduled'），多次/并发触发安全；逐条落 scheduled_published 审计事件。
+// 返回本次提升的任务条数。
+export async function promoteDueScheduledTasks(client: pg.Pool | pg.PoolClient): Promise<number> {
+  const result = await client.query<{ id: string }>(
+    `UPDATE tasks
+        SET status = 'pending',
+            updated_at = now()
+      WHERE status = 'scheduled'
+        AND scheduled_at IS NOT NULL
+        AND scheduled_at <= now()
+      RETURNING id`
+  );
+  for (const row of result.rows) {
+    await addTaskEvent(client, row.id, null, "scheduled_published", "定时到点，自动进入待处理队列", {});
+  }
+  return result.rowCount ?? 0;
 }
 
 export async function listRecentTasks(client: pg.Pool | pg.PoolClient, limit = 50): Promise<Task[]> {

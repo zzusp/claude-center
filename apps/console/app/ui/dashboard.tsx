@@ -75,6 +75,7 @@ type Tone =
   | "queued"
   | "waiting"
   | "draft"
+  | "scheduled"
   | "review"
   | "rejected";
 
@@ -108,6 +109,7 @@ const SPARK_CAP = 24;
 
 const STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> = {
   draft: { glyph: "✎", label: "草稿", tone: "draft" },
+  scheduled: { glyph: "⏰", label: "定时待发", tone: "scheduled" },
   pending: { glyph: "○", label: "待处理", tone: "pending" },
   claimed: { glyph: "◻", label: "已认领", tone: "queued" },
   running: { glyph: "◐", label: "执行中", tone: "running" },
@@ -132,6 +134,7 @@ const TONE_COLOR: Record<Tone, string> = {
   queued: "var(--queued)",
   waiting: "var(--waiting)",
   draft: "var(--draft)",
+  scheduled: "var(--scheduled)",
   review: "var(--review)",
   rejected: "var(--rejected)"
 };
@@ -306,6 +309,9 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
+    // datetime-local 取到的是本地时间（无时区），转 ISO（带时区）再发；留空即非定时任务。
+    const scheduledLocal = String(data.get("scheduledAt") ?? "").trim();
+    const scheduledAt = scheduledLocal ? new Date(scheduledLocal).toISOString() : undefined;
     setBusy(true);
     try {
       await postJson("/api/tasks", {
@@ -319,12 +325,15 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
         submitMode: data.get("submitMode"),
         targetFilesText: data.get("targetFilesText"),
         priority: Number(data.get("priority") || 0),
-        dependsOn: data.getAll("dependsOn").map(String)
+        dependsOn: data.getAll("dependsOn").map(String),
+        scheduledAt
       });
       form.reset();
       await loadOverview();
       setDrawerOpen(false);
-      setMessage("任务已创建为草稿，发布后 Worker 才会认领");
+      setMessage(
+        scheduledAt ? "已创建定时任务，到点自动进入待处理队列" : "任务已创建为草稿，发布后 Worker 才会认领"
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "任务创建失败");
     } finally {
@@ -544,6 +553,7 @@ function DashboardView({
       "running",
       "waiting",
       "pending",
+      "scheduled",
       "draft",
       "claimed",
       "success",
@@ -736,6 +746,7 @@ type ListResponse = { tasks: Task[]; total: number; page: number; pageSize: numb
 const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: "", label: "全部状态" },
   { value: "draft", label: "草稿" },
+  { value: "scheduled", label: "定时待发" },
   { value: "pending", label: "待处理" },
   { value: "claimed", label: "已认领" },
   { value: "running", label: "执行中" },
@@ -1109,6 +1120,12 @@ function ComposeTaskForm({
       </div>
       <div className="field">
         <label className="field-label">
+          定时发布 <span className="field-hint">留空即建为草稿手动发布；设定时间则到点自动进入待处理队列</span>
+        </label>
+        <input name="scheduledAt" type="datetime-local" />
+      </div>
+      <div className="field">
+        <label className="field-label">
           前置任务 <span className="field-hint">同项目，可多选；前置全部「已验收 / 已合并」后才会被领取</span>
         </label>
         {dependencyCandidates.length === 0 ? (
@@ -1136,7 +1153,8 @@ const EVENT_LABEL: Record<string, string> = {
   success: "执行完成",
   merged: "已合并",
   failed: "执行失败",
-  waiting: "等待回复"
+  waiting: "等待回复",
+  scheduled_published: "定时到点·进入待处理"
 };
 
 function TaskDrawer({
@@ -1350,7 +1368,7 @@ function TaskDetailBody({
                 PR
               </a>
             ) : null}
-            {task.status === "draft" && canCreateTask ? (
+            {(task.status === "draft" || task.status === "scheduled") && canCreateTask ? (
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
@@ -1358,7 +1376,7 @@ function TaskDetailBody({
                 onClick={() => onPublishTask(task.id)}
               >
                 <Send size={14} />
-                发布
+                {task.status === "scheduled" ? "立即发布" : "发布"}
               </button>
             ) : null}
           </div>
@@ -1451,6 +1469,16 @@ function TaskDetailBody({
                     <a href={task.pr_url} target="_blank" rel="noreferrer">
                       {task.pr_url}
                     </a>
+                  }
+                />
+              ) : null}
+              {task.scheduled_at ? (
+                <KvRow
+                  k="定时发布"
+                  v={
+                    task.status === "scheduled"
+                      ? `${fmtTime(task.scheduled_at)}（到点自动进入待处理）`
+                      : fmtTime(task.scheduled_at)
                   }
                 />
               ) : null}

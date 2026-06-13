@@ -12,7 +12,7 @@ import { requirePermission, requireUser } from "../../lib/session";
 
 export const dynamic = "force-dynamic";
 
-const TASK_STATUSES = ["draft", "pending", "claimed", "running", "waiting", "success", "failed", "cancelled"];
+const TASK_STATUSES = ["draft", "scheduled", "pending", "claimed", "running", "waiting", "success", "failed", "cancelled"];
 const SORT_VALUES: TaskSort[] = ["updated", "created", "priority"];
 const PAGE_SIZES = [20, 50, 100];
 
@@ -89,10 +89,25 @@ export async function POST(request: NextRequest) {
       targetFilesText?: string;
       priority?: number;
       dependsOn?: string[];
+      scheduledAt?: string;
     };
 
     if (!body.projectId || !body.title?.trim() || !body.description?.trim()) {
       return NextResponse.json({ error: "Project, title and description are required" }, { status: 400 });
+    }
+
+    // 定时发布时间（可选）：必须可解析且为将来时间；落 scheduled 态，到点由调度器转 pending。
+    let scheduledAt: string | null = null;
+    const scheduledRaw = body.scheduledAt?.trim();
+    if (scheduledRaw) {
+      const when = new Date(scheduledRaw);
+      if (Number.isNaN(when.getTime())) {
+        return NextResponse.json({ error: "定时发布时间格式无效" }, { status: 400 });
+      }
+      if (when.getTime() <= Date.now()) {
+        return NextResponse.json({ error: "定时发布时间必须晚于当前时间" }, { status: 400 });
+      }
+      scheduledAt = when.toISOString();
     }
 
     // 项目隔离：非 admin 只能在分配给自己的项目里建任务。
@@ -130,7 +145,8 @@ export async function POST(request: NextRequest) {
         targetBranch: taskType === "qa" ? "" : body.targetBranch?.trim() || baseBranch,
         submitMode: taskType === "qa" ? "pr" : submitMode,
         targetFiles,
-        priority: Number.isFinite(body.priority) ? Number(body.priority) : 0
+        priority: Number.isFinite(body.priority) ? Number(body.priority) : 0,
+        scheduledAt
       });
       await addTaskDependencies(client, task.id, dependsOn);
       await client.query("COMMIT");

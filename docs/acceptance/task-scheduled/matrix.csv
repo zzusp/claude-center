@@ -1,0 +1,16 @@
+case,description,round-1
+C1,createTask 指定将来时间→status=scheduled+scheduled_at写入,PASS
+C2,createTask 不指定时间→status=draft,PASS
+C3,createTask 指定过去时间→status=scheduled(待提升),PASS
+C4,promoteDueScheduledTasks 提升到点任务、将来/草稿不动,PASS
+C5,提升后写入 scheduled_published 审计事件,PASS
+C6,publishTask 对 scheduled 任务即立即发布→pending,PASS
+C7,无到点任务时再提升返回0(幂等),PASS
+C8,调度器在真实 Next 服务进程里把到点任务提升为 pending,PASS
+C9,POST /api/tasks 过去/非法 scheduledAt→400,PASS
+C10,POST /api/tasks 将来 scheduledAt→201+scheduled,PASS
+C11,POST /api/tasks 无 scheduledAt→201+draft,PASS
+C12,npm run typecheck 全过,PASS
+C13,npm run build 全过(含 instrumentation 编译),PASS
+C14,npm run db:migrate 应用 009,PASS
+C15,dev server 健康(verify:console 401/200/200),PASS
