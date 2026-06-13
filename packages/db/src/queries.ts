@@ -22,6 +22,18 @@ export type WorkerRegistration = {
   appVersion: string;
   capabilities?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  // 客户端策略与并行上限：register 写入初值，运行时经 updateWorkerInfo 刷新。
+  allowRemoteControl?: boolean;
+  maxParallel?: number;
+};
+
+// worker 周期性上报的动态信息（claude 版本 / 订阅 / 用量）+ 当前客户端策略。
+export type WorkerInfoUpdate = {
+  claudeVersion: string | null;
+  subscriptionType: string;
+  usage: Record<string, unknown>;
+  allowRemoteControl: boolean;
+  maxParallel: number;
 };
 
 export type ProjectLinkInput = {
@@ -321,8 +333,11 @@ export async function listTaskEvents(client: pg.Pool | pg.PoolClient, taskId: st
 
 export async function listWorkers(client: pg.Pool | pg.PoolClient): Promise<Worker[]> {
   const result = await client.query<Worker>(
-    `SELECT *,
-            CASE WHEN last_seen_at > now() - interval '60 seconds' THEN 'online' ELSE 'offline' END AS status
+    `SELECT workers.*,
+            CASE WHEN last_seen_at > now() - interval '60 seconds' THEN 'online' ELSE 'offline' END AS status,
+            (SELECT count(*)::int FROM tasks
+              WHERE tasks.claimed_by = workers.id
+                AND tasks.status IN ('claimed', 'running')) AS active_task_count
        FROM workers
       ORDER BY last_seen_at DESC`
   );
@@ -330,15 +345,20 @@ export async function listWorkers(client: pg.Pool | pg.PoolClient): Promise<Work
 }
 
 export async function registerWorker(client: pg.Pool | pg.PoolClient, input: WorkerRegistration): Promise<Worker> {
+  // working_state 不在这里写：只靠 INSERT 的表默认值（新 worker = idle）落初值，
+  // ON CONFLICT 刻意不更新它，使本地/远程切换过的工作态在重连/重启后保留。
   const result = await client.query<Worker>(
-    `INSERT INTO workers (id, name, host_name, app_version, capabilities, metadata, status, last_seen_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 'online', now())
+    `INSERT INTO workers (id, name, host_name, app_version, capabilities, metadata,
+                          allow_remote_control, max_parallel, status, last_seen_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'online', now())
      ON CONFLICT (id) DO UPDATE SET
        name = EXCLUDED.name,
        host_name = EXCLUDED.host_name,
        app_version = EXCLUDED.app_version,
        capabilities = EXCLUDED.capabilities,
        metadata = EXCLUDED.metadata,
+       allow_remote_control = EXCLUDED.allow_remote_control,
+       max_parallel = EXCLUDED.max_parallel,
        status = 'online',
        last_seen_at = now(),
        updated_at = now()
@@ -349,7 +369,9 @@ export async function registerWorker(client: pg.Pool | pg.PoolClient, input: Wor
       input.hostName,
       input.appVersion,
       input.capabilities ?? {},
-      input.metadata ?? {}
+      input.metadata ?? {},
+      input.allowRemoteControl ?? false,
+      input.maxParallel ?? 1
     ]
   );
   return result.rows[0]!;
@@ -362,6 +384,76 @@ export async function heartbeatWorker(client: pg.Pool | pg.PoolClient, workerId:
       WHERE id = $1`,
     [workerId]
   );
+}
+
+// 周期性刷新 worker 的动态信息（claude 版本 / 订阅 / 用量）与客户端策略。
+// 不动 working_state（由切换接口管）与 last_seen_at（由 heartbeat 管）。
+export async function updateWorkerInfo(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string,
+  input: WorkerInfoUpdate
+): Promise<void> {
+  await client.query(
+    `UPDATE workers
+        SET claude_version = $2,
+            subscription_type = $3,
+            usage = $4,
+            allow_remote_control = $5,
+            max_parallel = $6,
+            updated_at = now()
+      WHERE id = $1`,
+    [
+      workerId,
+      input.claudeVersion,
+      input.subscriptionType,
+      input.usage,
+      input.allowRemoteControl,
+      input.maxParallel
+    ]
+  );
+}
+
+// 切换工作态。viaRemote=true（web 远程）时加 allow_remote_control 门槛，
+// 客户端不允许远程控制则 0 行更新，调用方据此回 403/blocked。返回是否更新成功。
+export async function setWorkerWorkingState(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string,
+  state: "idle" | "working",
+  opts: { viaRemote?: boolean } = {}
+): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE workers
+        SET working_state = $2, updated_at = now()
+      WHERE id = $1${opts.viaRemote ? " AND allow_remote_control = true" : ""}`,
+    [workerId, state]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// worker 每个 tick 读它决定是否领任务、并行上限多少。worker 不存在返回 null。
+export async function getWorkerRuntime(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<{ working_state: "idle" | "working"; max_parallel: number } | null> {
+  const result = await client.query<{ working_state: "idle" | "working"; max_parallel: number }>(
+    `SELECT working_state, max_parallel FROM workers WHERE id = $1`,
+    [workerId]
+  );
+  return result.rows[0] ?? null;
+}
+
+// worktree GC 用：该 worker 仍「持有工作树」的任务 id（非终态）。终态任务的残留工作树会被清掉。
+export async function listActiveTaskIdsForWorker(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<string[]> {
+  const result = await client.query<{ id: string }>(
+    `SELECT id FROM tasks
+      WHERE claimed_by = $1
+        AND status IN ('claimed', 'running', 'waiting', 'success', 'rejected')`,
+    [workerId]
+  );
+  return result.rows.map((row) => row.id);
 }
 
 export async function upsertWorkerProjectLink(
@@ -402,17 +494,10 @@ export async function claimNextTask(client: pg.Pool | pg.PoolClient, workerId: s
         WHERE tasks.status = 'pending'
           AND worker_project_links.worker_id = $1
           AND worker_project_links.enabled = true
-          -- 同 worker 在该项目已有「等待用户回复的工作类任务」时，不领新任务：该任务
-          -- 工作树有未提交改动，新任务会在同一本地工作树 git checkout 清掉它。问答类
-          -- 等待任务是只读对话、不持有改动，不锁工作树，故不阻止领新任务。
-          AND NOT EXISTS (
-            SELECT 1
-              FROM tasks waiting
-             WHERE waiting.project_id = tasks.project_id
-               AND waiting.claimed_by = $1
-               AND waiting.status = 'waiting'
-               AND waiting.task_type = 'work'
-          )
+          -- 注：旧的「同项目有等待中工作类任务则不领新任务」护栏已移除——它的存在理由是
+          -- 旧串行模型下同项目共用一个工作树、新任务 git checkout 会清掉等待任务的未提交改动。
+          -- 现在每个工作类任务用独立 git worktree 隔离（见 apps/worker/src/worktree.ts），
+          -- 同项目可真并发，等待中任务的工作树独立持有改动、不被新任务触碰，故护栏不再需要。
           -- 前置依赖门控：任一前置任务未到达「已完成」终态则不可领取。已完成 = accepted
           -- （人工验收通过）或 merged（PR 已合并清理 / 直推已落地，工作已进目标分支）。
           AND NOT EXISTS (

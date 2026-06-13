@@ -19,6 +19,7 @@ import {
 } from "@claude-center/db";
 import type { WorkerConfig } from "./config.js";
 import { runCommand, runPowerShell, type CommandResult } from "./shell.js";
+import { ensureWorktree, removeWorktree, worktreePathFor } from "./worktree.js";
 
 const CLAUDE_TIMEOUT_MS = 60 * 60_000;
 
@@ -182,7 +183,13 @@ function extractPrUrl(output: string): string | null {
 
 // 处理一轮 Claude 输出：先记下续接所需 session；若请求确认则落评论 + 转入等待；
 // 否则按 git 改动收尾（commit / push / PR）。
-async function handleClaudeTurn(config: WorkerConfig, task: Task, localPath: string, turn: ClaudeTurn): Promise<void> {
+async function handleClaudeTurn(
+  config: WorkerConfig,
+  task: Task,
+  localPath: string,
+  wtPath: string,
+  turn: ClaudeTurn
+): Promise<void> {
   const pool = getPool();
   if (turn.sessionId) {
     await setTaskClaudeSession(pool, task.id, config.workerId, turn.sessionId);
@@ -190,13 +197,14 @@ async function handleClaudeTurn(config: WorkerConfig, task: Task, localPath: str
 
   const question = extractQuestion(turn.result);
   if (question) {
+    // 等待用户回复期间，工作树原样保留（持有未提交改动），续接时复用。
     await addTaskComment(pool, { taskId: task.id, author: "worker", workerId: config.workerId, body: question });
     await setTaskWaiting(pool, task.id, config.workerId, turn.sessionId);
     await addTaskEvent(pool, task.id, config.workerId, "waiting", "Worker is waiting for user reply", { question });
     return;
   }
 
-  await finalizeTask(config, task, localPath, turn.result);
+  await finalizeTask(config, task, localPath, wtPath, turn.result);
 }
 
 // 问答类一轮：记下续接 session → 把回答落为 worker 评论 → 转入等待，让用户继续追问或
@@ -213,34 +221,42 @@ async function handleQaTurn(config: WorkerConfig, task: Task, turn: ClaudeTurn):
   await addTaskEvent(pool, task.id, config.workerId, "waiting", "Q&A answered, waiting for next message", {});
 }
 
-// 收尾：无改动直接成功；有改动则提交，并按 submit_mode 分流（PR 或直接推送目标分支）。
-async function finalizeTask(config: WorkerConfig, task: Task, localPath: string, claudeOutput: string): Promise<void> {
+// 收尾：在任务专属工作树（wtPath）里检查/提交，并按 submit_mode 分流（PR 或直接推送目标分支）。
+// localPath 是项目主仓，仅用于 push（push 模式落地即 merged）后移除工作树。
+async function finalizeTask(
+  config: WorkerConfig,
+  task: Task,
+  localPath: string,
+  wtPath: string,
+  claudeOutput: string
+): Promise<void> {
   const pool = getPool();
-  const status = await runCommand("git", ["-C", localPath, "status", "--porcelain"], { timeoutMs: 60_000 });
+  const status = await runCommand("git", ["-C", wtPath, "status", "--porcelain"], { timeoutMs: 60_000 });
   if (!status.stdout.trim()) {
+    // 无改动也保留工作树：可能被打回重跑续接同一会话；进终态后由 GC 清理。
     await markTaskSuccess(
       pool,
       task.id,
       config.workerId,
-      { localPath, noChanges: true, claudeResult: claudeOutput },
+      { workdir: wtPath, noChanges: true, claudeResult: claudeOutput },
       null
     );
     return;
   }
 
-  await runCommand("git", ["-C", localPath, "add", "--all"], { timeoutMs: 5 * 60_000 });
-  await runCommand("git", ["-C", localPath, "commit", "-m", `ClaudeCenter task: ${task.title}`], {
+  await runCommand("git", ["-C", wtPath, "add", "--all"], { timeoutMs: 5 * 60_000 });
+  await runCommand("git", ["-C", wtPath, "commit", "-m", `ClaudeCenter task: ${task.title}`], {
     timeoutMs: 5 * 60_000
   });
   if (task.submit_mode === "push") {
     // 直接把工作分支的提交推送到目标分支，不开 PR——落地即 merged（无需后续合并轮询/清理）。
     const push = await runCommand(
       "git",
-      ["-C", localPath, "push", "origin", `${task.work_branch}:${task.target_branch}`],
+      ["-C", wtPath, "push", "origin", `${task.work_branch}:${task.target_branch}`],
       { timeoutMs: 15 * 60_000 }
     );
     await markTaskMerged(pool, task.id, config.workerId, {
-      localPath,
+      workdir: wtPath,
       submitMode: "push",
       targetBranch: task.target_branch,
       gitStatusBeforeCommit: status.stdout,
@@ -248,10 +264,12 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
       pushStdout: push.stdout,
       pushStderr: push.stderr
     });
+    // push 模式落地即 merged（终态），工作树用完即拆。
+    await removeWorktree(localPath, wtPath);
     return;
   }
 
-  await runCommand("git", ["-C", localPath, "push", "-u", "origin", task.work_branch], {
+  await runCommand("git", ["-C", wtPath, "push", "-u", "origin", task.work_branch], {
     timeoutMs: 15 * 60_000
   });
 
@@ -262,7 +280,7 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
       pool,
       task.id,
       config.workerId,
-      { localPath, gitStatusBeforeCommit: status.stdout, claudeResult: claudeOutput, prReused: true },
+      { workdir: wtPath, gitStatusBeforeCommit: status.stdout, claudeResult: claudeOutput, prReused: true },
       task.pr_url
     );
     return;
@@ -282,7 +300,7 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
       "--body",
       prBody(task, claudeOutput)
     ],
-    { cwd: localPath, timeoutMs: 10 * 60_000 }
+    { cwd: wtPath, timeoutMs: 10 * 60_000 }
   );
   const prUrl = extractPrUrl(`${pr.stdout}\n${pr.stderr}`);
 
@@ -291,7 +309,7 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
     task.id,
     config.workerId,
     {
-      localPath,
+      workdir: wtPath,
       submitMode: "pr",
       gitStatusBeforeCommit: status.stdout,
       claudeResult: claudeOutput,
@@ -307,40 +325,48 @@ export async function executeTask(config: WorkerConfig, task: Task): Promise<voi
   const pool = getPool();
   await markTaskRunning(pool, task.id, config.workerId);
 
+  let localPath: string | null = null;
   try {
-    const localPath = await getTaskLocalPath(pool, task.id, config.workerId);
+    localPath = await getTaskLocalPath(pool, task.id, config.workerId);
     if (!localPath) {
       throw new Error(`No local path linked for task ${task.id}`);
     }
 
     if (task.task_type === "qa") {
+      // 问答类只读对话，不改文件、不需工作树隔离，仍在主仓只读地回答。
       const turn = await runClaudeJson(config, { prompt: qaPrompt(task), cwd: localPath });
       await handleQaTurn(config, task, turn);
       return;
     }
 
+    // 真并发隔离：每任务一棵独立工作树，从 origin/<base> 起新工作分支，互不踩主仓与彼此。
+    const wtPath = worktreePathFor(config, task.id);
     await runCommand("git", ["-C", localPath, "fetch", "origin"], { timeoutMs: 10 * 60_000 });
-    await runCommand("git", ["-C", localPath, "checkout", task.base_branch], { timeoutMs: 5 * 60_000 });
-    await runCommand("git", ["-C", localPath, "pull", "--ff-only", "origin", task.base_branch], {
-      timeoutMs: 10 * 60_000
+    await ensureWorktree(localPath, wtPath, {
+      workBranch: task.work_branch,
+      baseRef: `origin/${task.base_branch}`,
+      fresh: true
     });
-    await runCommand("git", ["-C", localPath, "checkout", "-B", task.work_branch], { timeoutMs: 5 * 60_000 });
 
-    const turn = await runClaudeJson(config, { prompt: taskPrompt(task), cwd: localPath });
-    await handleClaudeTurn(config, task, localPath, turn);
+    const turn = await runClaudeJson(config, { prompt: taskPrompt(task), cwd: wtPath });
+    await handleClaudeTurn(config, task, localPath, wtPath, turn);
   } catch (error) {
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
       failedAt: new Date().toISOString()
     });
+    if (localPath) {
+      await removeWorktree(localPath, worktreePathFor(config, task.id));
+    }
   }
 }
 
-// 续接：用户已回复，续接同一 Claude 会话继续执行。不重建分支，保留上一轮工作树改动。
+// 续接：用户已回复，续接同一 Claude 会话继续执行。复用任务工作树（持有上一轮未提交改动）。
 export async function resumeTask(config: WorkerConfig, task: Task): Promise<void> {
   const pool = getPool();
 
+  let localPath: string | null = null;
   try {
-    const localPath = await getTaskLocalPath(pool, task.id, config.workerId);
+    localPath = await getTaskLocalPath(pool, task.id, config.workerId);
     if (!localPath) {
       throw new Error(`No local path linked for task ${task.id}`);
     }
@@ -365,27 +391,33 @@ export async function resumeTask(config: WorkerConfig, task: Task): Promise<void
       return;
     }
 
+    const wtPath = worktreePathFor(config, task.id);
+    // 复用工作树；若已被清理（如曾 GC）则从 work_branch 重建。
+    await ensureWorktree(localPath, wtPath, { workBranch: task.work_branch, fresh: false });
     const turn = await runClaudeJson(config, {
       prompt: resumePrompt(reply),
-      cwd: localPath,
+      cwd: wtPath,
       resumeSessionId: task.claude_session_id
     });
-    await handleClaudeTurn(config, task, localPath, turn);
+    await handleClaudeTurn(config, task, localPath, wtPath, turn);
   } catch (error) {
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
       failedAt: new Date().toISOString()
     });
+    if (localPath) {
+      await removeWorktree(localPath, worktreePathFor(config, task.id));
+    }
   }
 }
 
-// 打回重跑：用户验收不通过并填了打回意见。改动已 commit/push 且工作树可能已被同项目其他
-// 任务切走分支，故先 checkout work_branch 恢复（不同于 resumeTask 不 checkout），再续接同
-// 一 Claude 会话带着打回意见修订。finalizeTask 会因 pr_url 已存在跳过建 PR、复用原 PR。
+// 打回重跑：用户验收不通过并填了打回意见。复用/重建任务工作树（不再切主仓分支），续接同一
+// Claude 会话带着打回意见修订。finalizeTask 会因 pr_url 已存在跳过建 PR、复用原 PR。
 export async function rerunRejectedTask(config: WorkerConfig, task: Task): Promise<void> {
   const pool = getPool();
 
+  let localPath: string | null = null;
   try {
-    const localPath = await getTaskLocalPath(pool, task.id, config.workerId);
+    localPath = await getTaskLocalPath(pool, task.id, config.workerId);
     if (!localPath) {
       throw new Error(`No local path linked for task ${task.id}`);
     }
@@ -398,19 +430,23 @@ export async function rerunRejectedTask(config: WorkerConfig, task: Task): Promi
       throw new Error(`Task ${task.id} was rejected without feedback`);
     }
 
+    const wtPath = worktreePathFor(config, task.id);
     await runCommand("git", ["-C", localPath, "fetch", "origin"], { timeoutMs: 10 * 60_000 });
-    await runCommand("git", ["-C", localPath, "checkout", task.work_branch], { timeoutMs: 5 * 60_000 });
+    await ensureWorktree(localPath, wtPath, { workBranch: task.work_branch, fresh: false });
 
     const turn = await runClaudeJson(config, {
       prompt: rejectionPrompt(feedback),
-      cwd: localPath,
+      cwd: wtPath,
       resumeSessionId: task.claude_session_id
     });
-    await handleClaudeTurn(config, task, localPath, turn);
+    await handleClaudeTurn(config, task, localPath, wtPath, turn);
   } catch (error) {
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
       failedAt: new Date().toISOString()
     });
+    if (localPath) {
+      await removeWorktree(localPath, worktreePathFor(config, task.id));
+    }
   }
 }
 
@@ -446,7 +482,8 @@ export async function cleanupMergedTask(config: WorkerConfig, task: Task): Promi
       return;
     }
 
-    // 已合并：把本地仓库切回签出分支并拉进改动，再删本地/远端工作分支。
+    // 已合并：先拆掉任务工作树（否则工作分支仍被 checkout，-D 删不掉），再把主仓拉新、删本地/远端工作分支。
+    await removeWorktree(localPath, worktreePathFor(config, task.id));
     await runCommand("git", ["-C", localPath, "fetch", "origin", "--prune"], { timeoutMs: 10 * 60_000 });
     await runCommand("git", ["-C", localPath, "checkout", task.base_branch], { timeoutMs: 5 * 60_000 });
     await runCommand("git", ["-C", localPath, "pull", "--ff-only", "origin", task.base_branch], {

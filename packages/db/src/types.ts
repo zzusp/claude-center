@@ -55,17 +55,41 @@ export type Project = {
   updated_at: string;
 };
 
+// 套餐订阅用量窗口：oauth/usage 给的是利用率百分比（0–100）+ 重置时间，没有绝对额度。
+export type UsageWindow = { utilization: number; resets_at: string };
+export type WorkerUsage = {
+  five_hour?: UsageWindow;
+  seven_day?: UsageWindow;
+  fetched_at?: string;
+};
+
+// 订阅类型：套餐档位 / api（按量计费）/ unknown（未识别）。
+export type WorkerSubscriptionType = "max" | "pro" | "team" | "enterprise" | "api" | "unknown";
+
+// 在线 ≠ 接任务：idle 时 worker 不领新任务，working 才领。
+export type WorkerWorkingState = "idle" | "working";
+
 export type Worker = {
   id: string;
   name: string;
   host_name: string;
   app_version: string;
   status: "online" | "offline";
+  // worker 机器上 claude CLI 版本（如 "2.1.177"），未采集到为 null。
+  claude_version: string | null;
+  subscription_type: WorkerSubscriptionType;
+  // 仅套餐账号有意义；api/unknown 或采集失败时为空对象。
+  usage: WorkerUsage;
+  working_state: WorkerWorkingState;
+  allow_remote_control: boolean;
+  max_parallel: number;
   capabilities: Record<string, unknown>;
   metadata: Record<string, unknown>;
   last_seen_at: string;
   created_at: string;
   updated_at: string;
+  // listWorkers 派生：该 worker 当前在途（claimed/running）任务数。
+  active_task_count?: number;
 };
 
 export type WorkerProjectLink = {
