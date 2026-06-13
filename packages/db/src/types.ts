@@ -1,7 +1,8 @@
-export type TaskStatus = "pending" | "claimed" | "running" | "waiting" | "success" | "failed" | "cancelled";
+export type TaskStatus = "draft" | "pending" | "claimed" | "running" | "waiting" | "success" | "failed" | "cancelled";
 export type TaskType = "work" | "qa";
 export type DirectCommandStatus = TaskStatus;
 export type DirectCommandName = "shell" | "claude_prompt";
+export type TaskSubmitMode = "pr" | "push";
 
 export type Project = {
   id: string;
@@ -47,6 +48,8 @@ export type Task = {
   description: string;
   base_branch: string;
   work_branch: string;
+  target_branch: string;
+  submit_mode: TaskSubmitMode;
   target_files: string[];
   priority: number;
   status: TaskStatus;
@@ -60,6 +63,16 @@ export type Task = {
   claude_session_id: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type TaskEvent = {
+  id: string;
+  task_id: string;
+  worker_id: string | null;
+  event_type: string;
+  message: string;
+  payload: Record<string, unknown>;
+  created_at: string;
 };
 
 export type TaskCommentAuthor = "worker" | "user";

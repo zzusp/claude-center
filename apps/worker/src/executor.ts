@@ -189,7 +189,7 @@ async function handleQaTurn(config: WorkerConfig, task: Task, turn: ClaudeTurn):
   await addTaskEvent(pool, task.id, config.workerId, "waiting", "Q&A answered, waiting for next message", {});
 }
 
-// 收尾：无改动直接成功；有改动则提交、推送并用 gh 创建 PR。
+// 收尾：无改动直接成功；有改动则提交，并按 submit_mode 分流（PR 或直接推送目标分支）。
 async function finalizeTask(config: WorkerConfig, task: Task, localPath: string, claudeOutput: string): Promise<void> {
   const pool = getPool();
   const status = await runCommand("git", ["-C", localPath, "status", "--porcelain"], { timeoutMs: 60_000 });
@@ -212,6 +212,31 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
   await runCommand("git", ["-C", localPath, "commit", "-m", `ClaudeCenter task: ${task.title}`], {
     timeoutMs: 5 * 60_000
   });
+  if (task.submit_mode === "push") {
+    // 直接把工作分支的提交推送到目标分支，不开 PR。
+    const push = await runCommand(
+      "git",
+      ["-C", localPath, "push", "origin", `${task.work_branch}:${task.target_branch}`],
+      { timeoutMs: 15 * 60_000 }
+    );
+    await markTaskSuccess(
+      pool,
+      task.id,
+      config.workerId,
+      {
+        localPath,
+        submitMode: "push",
+        targetBranch: task.target_branch,
+        gitStatusBeforeCommit: status.stdout,
+        claudeResult: claudeOutput,
+        pushStdout: push.stdout,
+        pushStderr: push.stderr
+      },
+      null
+    );
+    return;
+  }
+
   await runCommand("git", ["-C", localPath, "push", "-u", "origin", task.work_branch], {
     timeoutMs: 15 * 60_000
   });
@@ -222,7 +247,7 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
       "pr",
       "create",
       "--base",
-      task.base_branch,
+      task.target_branch,
       "--head",
       task.work_branch,
       "--title",
@@ -240,6 +265,7 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
     config.workerId,
     {
       localPath,
+      submitMode: "pr",
       gitStatusBeforeCommit: status.stdout,
       claudeResult: claudeOutput,
       prStdout: pr.stdout,

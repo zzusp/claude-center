@@ -18,7 +18,7 @@
 
 ## 方案
 
-### 数据模型（migration `003_task_types.sql`）
+### 数据模型（migration `005_task_types.sql`）
 
 `tasks` 新增列 `task_type text NOT NULL DEFAULT 'work'`，CHECK `task_type IN ('work','qa')`。默认 `work` → 既有任务与未带类型的请求行为不变。
 
@@ -58,7 +58,7 @@ AND NOT EXISTS (
 ### Console
 
 - API `/api/tasks` POST 增 `taskType`（`'work'|'qa'`，缺省 `work`）。qa 任务的 `base_branch`/`work_branch` 存空串、`target_files` 存空数组（这些字段对问答无意义）。
-- API 新增 `POST /api/tasks/[id]/complete` → `completeQaTask`。
+- API 复用任务状态切换端点 `PATCH /api/tasks/[id] { action: "complete" }` → `completeQaTask`（与 `publish` 同端点）。
 - 发布表单：加「类型」选择（工作类 / 问答类）。选问答类时隐藏 基准分支 / 工作分支 / 目标文件（不适用），描述字段语义转为「问题」。
 - 任务列表 / 详情：按类型显示——qa 不展示分支 / PR / 目标文件徽章，分支列显示「对话」；详情默认进「对话」tab，`waiting` 时对话框可继续追问并显示「结束对话」按钮。
 - 状态徽章 / 色板复用现有（qa 收尾用 `success`「已完成」）。
@@ -67,7 +67,7 @@ AND NOT EXISTS (
 
 - 静态：`npm run typecheck`、`npm run build`、`npm run verify:console`（本会话可跑）。
 - 端到端（需 Postgres + claude，待用户机器）：
-  1. `npm run db:migrate` 应用 003。
+  1. `npm run db:migrate` 应用 005。
   2. 发布一个「问答类」任务（如「这个仓库的 Worker 心跳间隔是多少？」）。
   3. 观察任务不建分支、Claude 回答落入对话区、任务转「等待回复」。
   4. 评论区追问 → Worker 续接 → 新答案落对话区。

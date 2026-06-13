@@ -1,5 +1,5 @@
 import type pg from "pg";
-import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, TaskType, Worker } from "./types.js";
+import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, TaskEvent, TaskSubmitMode, TaskType, Worker } from "./types.js";
 
 export type WorkerRegistration = {
   id: string;
@@ -37,6 +37,11 @@ export async function createProject(
   return result.rows[0]!;
 }
 
+export async function getProject(client: pg.Pool | pg.PoolClient, id: string): Promise<Project | null> {
+  const result = await client.query<Project>(`SELECT * FROM projects WHERE id = $1 LIMIT 1`, [id]);
+  return result.rows[0] ?? null;
+}
+
 export async function createTask(
   client: pg.Pool | pg.PoolClient,
   input: {
@@ -46,13 +51,15 @@ export async function createTask(
     description: string;
     baseBranch: string;
     workBranch: string;
+    targetBranch: string;
+    submitMode: TaskSubmitMode;
     targetFiles: string[];
     priority: number;
   }
 ): Promise<Task> {
   const result = await client.query<Task>(
-    `INSERT INTO tasks (project_id, task_type, title, description, base_branch, work_branch, target_files, priority)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO tasks (project_id, task_type, title, description, base_branch, work_branch, target_branch, submit_mode, target_files, priority)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING *`,
     [
       input.projectId,
@@ -61,11 +68,27 @@ export async function createTask(
       input.description,
       input.baseBranch,
       input.workBranch,
+      input.targetBranch,
+      input.submitMode,
       input.targetFiles,
       input.priority
     ]
   );
   return result.rows[0]!;
+}
+
+// 发布草稿任务：draft → pending，进入可认领队列。WHERE status='draft' 保证只有草稿
+// 可发布，对已认领/运行中/已完成任务无副作用；未命中返回 null（任务不存在或非草稿）。
+export async function publishTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET status = 'pending',
+            updated_at = now()
+      WHERE id = $1 AND status = 'draft'
+      RETURNING *`,
+    [taskId]
+  );
+  return result.rows[0] ?? null;
 }
 
 export async function listRecentTasks(client: pg.Pool | pg.PoolClient, limit = 50): Promise<Task[]> {
@@ -76,6 +99,77 @@ export async function listRecentTasks(client: pg.Pool | pg.PoolClient, limit = 5
       ORDER BY tasks.created_at DESC
       LIMIT $1`,
     [limit]
+  );
+  return result.rows;
+}
+
+export type TaskSort = "updated" | "created" | "priority";
+
+export type ListTasksFilters = {
+  status?: string[];
+  projectId?: string | null;
+  q?: string | null;
+  sort?: TaskSort;
+  limit: number;
+  offset: number;
+};
+
+// 排序白名单：避免把外部输入直接拼进 ORDER BY。
+const TASK_SORT_SQL: Record<TaskSort, string> = {
+  updated: "tasks.updated_at DESC",
+  created: "tasks.created_at DESC",
+  priority: "tasks.priority DESC, tasks.created_at DESC"
+};
+
+// 任务流分页/筛选查询：状态(多选) + 项目 + 关键词(标题/分支)；count(*) OVER() 单次拿总数。
+export async function listTasks(
+  client: pg.Pool | pg.PoolClient,
+  filters: ListTasksFilters
+): Promise<{ tasks: Task[]; total: number }> {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filters.status && filters.status.length > 0) {
+    params.push(filters.status);
+    conditions.push(`tasks.status = ANY($${params.length}::text[])`);
+  }
+  if (filters.projectId) {
+    params.push(filters.projectId);
+    conditions.push(`tasks.project_id = $${params.length}`);
+  }
+  const keyword = filters.q?.trim();
+  if (keyword) {
+    params.push(`%${keyword}%`);
+    conditions.push(`(tasks.title ILIKE $${params.length} OR tasks.work_branch ILIKE $${params.length})`);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const orderBy = TASK_SORT_SQL[filters.sort ?? "updated"];
+
+  params.push(filters.limit);
+  const limitIdx = params.length;
+  params.push(filters.offset);
+  const offsetIdx = params.length;
+
+  const result = await client.query<Task & { total_count: string }>(
+    `SELECT tasks.*, projects.name AS project_name, count(*) OVER() AS total_count
+       FROM tasks
+       JOIN projects ON projects.id = tasks.project_id
+       ${where}
+      ORDER BY ${orderBy}
+      LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    params
+  );
+
+  const total = result.rows[0] ? Number(result.rows[0].total_count) : 0;
+  const tasks = result.rows.map(({ total_count: _total, ...task }) => task as Task);
+  return { tasks, total };
+}
+
+export async function listTaskEvents(client: pg.Pool | pg.PoolClient, taskId: string): Promise<TaskEvent[]> {
+  const result = await client.query<TaskEvent>(
+    `SELECT * FROM task_events WHERE task_id = $1 ORDER BY created_at ASC`,
+    [taskId]
   );
   return result.rows;
 }
