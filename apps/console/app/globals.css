@@ -25,6 +25,7 @@
   --cancelled: #6b7280;
   --queued: #a855f7;
   --waiting: #0891b2;
+  --draft: #64748b;
 
   /* Shape */
   --r-sm: 8px;
@@ -513,6 +514,10 @@ a:hover {
   color: var(--waiting);
   background: rgba(8, 145, 178, 0.12);
 }
+.badge[data-tone="draft"] {
+  color: var(--draft);
+  background: rgba(100, 116, 139, 0.12);
+}
 
 .dot {
   display: inline-block;
@@ -546,6 +551,9 @@ a:hover {
 }
 .dot[data-tone="waiting"] {
   color: var(--waiting);
+}
+.dot[data-tone="draft"] {
+  color: var(--draft);
 }
 
 /* Running / online motion: breathing */

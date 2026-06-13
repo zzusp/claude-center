@@ -41,7 +41,7 @@ type Overview = {
 
 type ViewKey = "dashboard" | "tasks" | "workers" | "projects";
 type DetailTab = "overview" | "timeline" | "logs" | "conversation";
-type Tone = "success" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting";
+type Tone = "success" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting" | "draft";
 
 const emptyOverview: Overview = {
   projects: [],
@@ -54,6 +54,7 @@ const emptyOverview: Overview = {
 const SPARK_CAP = 24;
 
 const STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> = {
+  draft: { glyph: "✎", label: "草稿", tone: "draft" },
   pending: { glyph: "○", label: "待处理", tone: "pending" },
   claimed: { glyph: "◻", label: "已认领", tone: "queued" },
   running: { glyph: "◐", label: "执行中", tone: "running" },
@@ -72,7 +73,8 @@ const TONE_COLOR: Record<Tone, string> = {
   failed: "var(--failed)",
   cancelled: "var(--cancelled)",
   queued: "var(--queued)",
-  waiting: "var(--waiting)"
+  waiting: "var(--waiting)",
+  draft: "var(--draft)"
 };
 
 function metaOf(status: string) {
@@ -239,9 +241,30 @@ export default function Dashboard() {
       form.reset();
       await loadOverview();
       setRightMode("detail");
-      setMessage("任务已入队");
+      setMessage("任务已创建为草稿，发布后 Worker 才会认领");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "任务创建失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handlePublishTask(taskId: string) {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "publish" })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? `发布失败：${response.status}`);
+      }
+      await loadOverview();
+      setMessage("任务已发布，进入可认领队列");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "任务发布失败");
     } finally {
       setBusy(false);
     }
@@ -357,6 +380,7 @@ export default function Dashboard() {
               onSetTab={setDetailTab}
               onSetRightMode={setRightMode}
               onSubmitTask={handleTaskSubmit}
+              onPublishTask={handlePublishTask}
             />
           ) : null}
 
@@ -396,7 +420,7 @@ function DashboardView({
   const recentTasks = overview.tasks.slice(0, 7);
   const failedTasks = overview.tasks.filter((task) => task.status === "failed").slice(0, 4);
 
-  const donutSegments = (["running", "waiting", "pending", "claimed", "success", "failed", "cancelled"] as const)
+  const donutSegments = (["running", "waiting", "pending", "draft", "claimed", "success", "failed", "cancelled"] as const)
     .map((status) => ({
       status,
       label: metaOf(status).label,
@@ -580,7 +604,8 @@ function TasksView({
   onSelectTask,
   onSetTab,
   onSetRightMode,
-  onSubmitTask
+  onSubmitTask,
+  onPublishTask
 }: {
   overview: Overview;
   selectedTask: Task | null;
@@ -594,6 +619,7 @@ function TasksView({
   onSetTab: (tab: DetailTab) => void;
   onSetRightMode: (mode: "detail" | "compose") => void;
   onSubmitTask: (event: FormEvent<HTMLFormElement>) => void;
+  onPublishTask: (taskId: string) => void;
 }) {
   return (
     <>
@@ -670,7 +696,13 @@ function TasksView({
               onSubmit={onSubmitTask}
             />
           ) : (
-            <TaskDetail task={selectedTask} detailTab={detailTab} onSetTab={onSetTab} />
+            <TaskDetail
+              task={selectedTask}
+              detailTab={detailTab}
+              busy={busy}
+              onSetTab={onSetTab}
+              onPublishTask={onPublishTask}
+            />
           )}
         </div>
       </div>
@@ -754,11 +786,15 @@ function ComposeTaskCard({
 function TaskDetail({
   task,
   detailTab,
-  onSetTab
+  busy,
+  onSetTab,
+  onPublishTask
 }: {
   task: Task | null;
   detailTab: DetailTab;
+  busy: boolean;
   onSetTab: (tab: DetailTab) => void;
+  onPublishTask: (taskId: string) => void;
 }) {
   if (!task) {
     return (
@@ -811,6 +847,17 @@ function TaskDetail({
               <ExternalLink size={13} className="ico" />
               PR
             </a>
+          ) : null}
+          {task.status === "draft" ? (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={busy}
+              onClick={() => onPublishTask(task.id)}
+            >
+              <Send size={14} />
+              发布
+            </button>
           ) : null}
         </div>
       </div>
