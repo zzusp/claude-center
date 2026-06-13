@@ -88,8 +88,6 @@ export type Task = {
   work_branch: string;
   target_branch: string;
   submit_mode: TaskSubmitMode;
-  target_files: string[];
-  priority: number;
   status: TaskStatus;
   claimed_by: string | null;
   claimed_at: string | null;

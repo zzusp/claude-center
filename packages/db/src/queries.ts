@@ -67,8 +67,6 @@ export async function createTask(
     workBranch: string;
     targetBranch: string;
     submitMode: TaskSubmitMode;
-    targetFiles: string[];
-    priority: number;
     // 指定发布时间则落 'scheduled' 定时态，到点由调度器转 pending；为空走默认 'draft'。
     scheduledAt?: string | null;
   }
@@ -76,8 +74,8 @@ export async function createTask(
   const scheduledAt = input.scheduledAt ?? null;
   const status = scheduledAt ? "scheduled" : "draft";
   const result = await client.query<Task>(
-    `INSERT INTO tasks (project_id, task_type, title, description, base_branch, work_branch, target_branch, submit_mode, target_files, priority, status, scheduled_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    `INSERT INTO tasks (project_id, task_type, title, description, base_branch, work_branch, target_branch, submit_mode, status, scheduled_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING *`,
     [
       input.projectId,
@@ -88,8 +86,6 @@ export async function createTask(
       input.workBranch,
       input.targetBranch,
       input.submitMode,
-      input.targetFiles,
-      input.priority,
       status,
       scheduledAt
     ]
@@ -244,7 +240,8 @@ export async function addTaskDependencies(
   );
 }
 
-export type TaskSort = "updated" | "created" | "priority";
+// 任务流列表固定按更新时间排序，方向由列表头切换（默认 desc）。
+export type SortDir = "asc" | "desc";
 
 export type ListTasksFilters = {
   status?: string[];
@@ -252,16 +249,9 @@ export type ListTasksFilters = {
   // 项目级隔离：非 admin 传入其可访问项目 id 集合，约束只返回范围内任务（空集合 → 无结果）。
   projectIds?: string[] | null;
   q?: string | null;
-  sort?: TaskSort;
+  dir?: SortDir;
   limit: number;
   offset: number;
-};
-
-// 排序白名单：避免把外部输入直接拼进 ORDER BY。
-const TASK_SORT_SQL: Record<TaskSort, string> = {
-  updated: "tasks.updated_at DESC",
-  created: "tasks.created_at DESC",
-  priority: "tasks.priority DESC, tasks.created_at DESC"
 };
 
 // 任务流分页/筛选查询：状态(多选) + 项目 + 关键词(标题/分支)；count(*) OVER() 单次拿总数。
@@ -292,7 +282,8 @@ export async function listTasks(
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const orderBy = TASK_SORT_SQL[filters.sort ?? "updated"];
+  // 排序固定按 updated_at，仅方向可变（白名单 asc/desc），避免把外部输入拼进 ORDER BY。
+  const orderBy = `tasks.updated_at ${filters.dir === "asc" ? "ASC" : "DESC"}`;
 
   params.push(filters.limit);
   const limitIdx = params.length;
@@ -425,7 +416,7 @@ export async function claimNextTask(client: pg.Pool | pg.PoolClient, workerId: s
              WHERE dep.task_id = tasks.id
                AND pre.status NOT IN ('accepted', 'merged')
           )
-        ORDER BY tasks.priority DESC, tasks.created_at ASC
+        ORDER BY tasks.created_at ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
      )

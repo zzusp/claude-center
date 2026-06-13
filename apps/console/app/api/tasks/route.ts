@@ -5,7 +5,7 @@ import {
   listTasks,
   listUserProjectIds,
   userHasProject,
-  type TaskSort
+  type SortDir
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../lib/session";
@@ -13,7 +13,6 @@ import { requirePermission, requireUser } from "../../lib/session";
 export const dynamic = "force-dynamic";
 
 const TASK_STATUSES = ["draft", "scheduled", "pending", "claimed", "running", "waiting", "success", "failed", "cancelled"];
-const SORT_VALUES: TaskSort[] = ["updated", "created", "priority"];
 const PAGE_SIZES = [20, 50, 100];
 
 export async function GET(request: NextRequest) {
@@ -33,8 +32,8 @@ export async function GET(request: NextRequest) {
     const projectId = params.get("projectId")?.trim() || null;
     const q = params.get("q")?.trim() || null;
 
-    const sortParam = params.get("sort") as TaskSort | null;
-    const sort: TaskSort = sortParam && SORT_VALUES.includes(sortParam) ? sortParam : "updated";
+    // 排序方向：表头切换 updated_at 升/降序，白名单 asc/desc，默认 desc。
+    const dir: SortDir = params.get("dir") === "asc" ? "asc" : "desc";
 
     const pageSizeRaw = Number(params.get("pageSize"));
     const pageSize = PAGE_SIZES.includes(pageSizeRaw) ? pageSizeRaw : 20;
@@ -50,7 +49,7 @@ export async function GET(request: NextRequest) {
       projectId,
       projectIds,
       q,
-      sort,
+      dir,
       limit: pageSize,
       offset: (page - 1) * pageSize
     });
@@ -86,8 +85,6 @@ export async function POST(request: NextRequest) {
       workBranch?: string;
       targetBranch?: string;
       submitMode?: string;
-      targetFilesText?: string;
-      priority?: number;
       dependsOn?: string[];
       scheduledAt?: string;
     };
@@ -117,15 +114,6 @@ export async function POST(request: NextRequest) {
 
     const taskType = body.taskType === "qa" ? "qa" : "work";
 
-    // 问答类不碰 git：分支 / 目标文件对它无意义，统一存空。
-    const targetFiles =
-      taskType === "qa"
-        ? []
-        : (body.targetFilesText ?? "")
-            .split(/\r?\n/)
-            .map((line) => line.trim())
-            .filter(Boolean);
-
     const baseBranch = body.baseBranch?.trim() || "main";
     const submitMode = body.submitMode === "push" ? "push" : "pr";
 
@@ -144,8 +132,6 @@ export async function POST(request: NextRequest) {
         workBranch: taskType === "qa" ? "" : body.workBranch?.trim() || defaultWorkBranch(body.title),
         targetBranch: taskType === "qa" ? "" : body.targetBranch?.trim() || baseBranch,
         submitMode: taskType === "qa" ? "pr" : submitMode,
-        targetFiles,
-        priority: Number.isFinite(body.priority) ? Number(body.priority) : 0,
         scheduledAt
       });
       await addTaskDependencies(client, task.id, dependsOn);
