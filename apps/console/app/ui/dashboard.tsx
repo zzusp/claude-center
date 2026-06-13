@@ -17,6 +17,7 @@ import {
   Bot,
   Check,
   CircleAlert,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -48,7 +49,7 @@ import {
   X
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Empty, StatusBadge, StatusDot, fmtTime, metaOf, postJson, type Tone } from "./shared";
 
 type Overview = {
@@ -762,28 +763,30 @@ function TasksView({
             <Search size={15} className="ico" />
             <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="搜索标题或工作分支" />
           </div>
-          <select className="tb-select" value={status} onChange={(event) => setStatus(event.target.value)}>
-            {STATUS_FILTERS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <select className="tb-select" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
-            <option value="">全部项目</option>
-            {overview.projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-          <select className="tb-select" value={sort} onChange={(event) => setSort(event.target.value as TaskSort)}>
-            {SORT_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+          <Select
+            className="tb-select"
+            value={status}
+            onChange={setStatus}
+            options={STATUS_FILTERS}
+            ariaLabel="按状态筛选"
+          />
+          <Select
+            className="tb-select"
+            value={projectId}
+            onChange={setProjectId}
+            options={[
+              { value: "", label: "全部项目" },
+              ...overview.projects.map((project) => ({ value: project.id, label: project.name }))
+            ]}
+            ariaLabel="按项目筛选"
+          />
+          <Select
+            className="tb-select"
+            value={sort}
+            onChange={(value) => setSort(value as TaskSort)}
+            options={SORT_OPTIONS}
+            ariaLabel="排序方式"
+          />
         </div>
 
         <div className="card-body flush">
@@ -836,13 +839,13 @@ function TasksView({
               第 {Math.min(page, totalPages)} / {totalPages} 页 · 共 {data.total} 条
             </span>
             <div className="pager-controls">
-              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
-                {PAGE_SIZE_OPTIONS.map((size) => (
-                  <option key={size} value={size}>
-                    每页 {size} 条
-                  </option>
-                ))}
-              </select>
+              <Select
+                className="pager-select"
+                value={String(pageSize)}
+                onChange={(value) => setPageSize(Number(value))}
+                options={PAGE_SIZE_OPTIONS.map((size) => ({ value: String(size), label: `每页 ${size} 条` }))}
+                ariaLabel="每页条数"
+              />
               <button
                 type="button"
                 className="btn btn-sm"
@@ -885,6 +888,7 @@ function ComposeTaskForm({
   const [branches, setBranches] = useState<string[]>([]);
   const [branchState, setBranchState] = useState<"idle" | "loading" | "error">("idle");
   const [taskType, setTaskType] = useState<"work" | "qa">("work");
+  const [submitMode, setSubmitMode] = useState<"pr" | "push">("pr");
   const isQa = taskType === "qa";
 
   useEffect(() => {
@@ -933,24 +937,26 @@ function ComposeTaskForm({
     <form className="form" onSubmit={onSubmit}>
       <div className="field">
         <label className="field-label">类型</label>
-        <select
+        <Select
           name="taskType"
           value={taskType}
-          onChange={(event) => setTaskType(event.target.value as "work" | "qa")}
-        >
-          <option value="work">工作类 · 改代码并开 PR</option>
-          <option value="qa">问答类 · 纯对话不碰 git</option>
-        </select>
+          onChange={(value) => setTaskType(value as "work" | "qa")}
+          options={[
+            { value: "work", label: "工作类 · 改代码并开 PR" },
+            { value: "qa", label: "问答类 · 纯对话不碰 git" }
+          ]}
+          ariaLabel="任务类型"
+        />
       </div>
       <div className="field">
         <label className="field-label">项目</label>
-        <select value={selectedProjectId} onChange={(event) => onSelectProject(event.target.value)} required>
-          {overview.projects.map((project) => (
-            <option key={project.id} value={project.id}>
-              {project.name}
-            </option>
-          ))}
-        </select>
+        <Select
+          value={selectedProjectId}
+          onChange={onSelectProject}
+          options={overview.projects.map((project) => ({ value: project.id, label: project.name }))}
+          placeholder="选择项目"
+          ariaLabel="项目"
+        />
       </div>
       <div className="field">
         <label className="field-label">标题</label>
@@ -995,10 +1001,16 @@ function ComposeTaskForm({
             </div>
             <div className="field">
               <label className="field-label">提交模式</label>
-              <select name="submitMode" defaultValue="pr">
-                <option value="pr">创建 PR</option>
-                <option value="push">直接提交推送</option>
-              </select>
+              <Select
+                name="submitMode"
+                value={submitMode}
+                onChange={(value) => setSubmitMode(value as "pr" | "push")}
+                options={[
+                  { value: "pr", label: "创建 PR" },
+                  { value: "push", label: "直接提交推送" }
+                ]}
+                ariaLabel="提交模式"
+              />
             </div>
           </div>
           <div className="field">
@@ -1127,6 +1139,8 @@ function WorkersView({
   onSubmitCommand: (event: FormEvent<HTMLFormElement>) => void;
   canCommand: boolean;
 }) {
+  const [command, setCommand] = useState<"claude_prompt" | "shell">("claude_prompt");
+
   return (
     <>
       <div className="section-head">
@@ -1195,20 +1209,26 @@ function WorkersView({
               <form className="form" onSubmit={onSubmitCommand}>
                 <div className="field">
                   <label className="field-label">Worker</label>
-                  <select value={selectedWorkerId} onChange={(event) => onSelectWorker(event.target.value)} required>
-                    {onlineWorkers.map((worker) => (
-                      <option key={worker.id} value={worker.id}>
-                        {worker.name}
-                      </option>
-                    ))}
-                  </select>
+                  <Select
+                    value={selectedWorkerId}
+                    onChange={onSelectWorker}
+                    options={onlineWorkers.map((worker) => ({ value: worker.id, label: worker.name }))}
+                    placeholder="选择 Worker"
+                    ariaLabel="Worker"
+                  />
                 </div>
                 <div className="field">
                   <label className="field-label">类型</label>
-                  <select name="command" defaultValue="claude_prompt">
-                    <option value="claude_prompt">Claude Prompt</option>
-                    <option value="shell">Shell</option>
-                  </select>
+                  <Select
+                    name="command"
+                    value={command}
+                    onChange={(value) => setCommand(value as "claude_prompt" | "shell")}
+                    options={[
+                      { value: "claude_prompt", label: "Claude Prompt" },
+                      { value: "shell", label: "Shell" }
+                    ]}
+                    ariaLabel="指令类型"
+                  />
                 </div>
                 <div className="field">
                   <label className="field-label">
@@ -1865,13 +1885,12 @@ function UserForm({
           </div>
           <div className="field">
             <label className="field-label">角色</label>
-            <select value={role} onChange={(event) => setRole(event.target.value as Role)}>
-              {ROLE_OPTIONS.map((value) => (
-                <option key={value} value={value}>
-                  {ROLE_LABEL[value]}
-                </option>
-              ))}
-            </select>
+            <Select
+              value={role}
+              onChange={(value) => setRole(value as Role)}
+              options={ROLE_OPTIONS.map((value) => ({ value, label: ROLE_LABEL[value] }))}
+              ariaLabel="角色"
+            />
           </div>
           {role === "admin" ? (
             <div className="field">
@@ -1909,5 +1928,127 @@ function UserForm({
         </form>
       </div>
     </section>
+  );
+}
+
+/* ============================== Select ==============================
+   自定义单选下拉：用 div 渲染展开面板，圆角 / 阴影 / hover / 选中态全部受控，
+   与 Claude Light 设计系统统一（原生 <select> 的弹出面板无法 CSS 定制）。
+   带 name 时渲染隐藏 input，保持 FormData 取值不变。 */
+
+type SelectOption = { value: string; label: string };
+
+function Select({
+  value,
+  onChange,
+  options,
+  name,
+  className,
+  placeholder,
+  required,
+  disabled,
+  ariaLabel
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: SelectOption[];
+  name?: string;
+  className?: string;
+  placeholder?: string;
+  required?: boolean;
+  disabled?: boolean;
+  ariaLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const selectedIndex = options.findIndex((option) => option.value === value);
+  const selected = selectedIndex >= 0 ? options[selectedIndex] : null;
+
+  // 点击组件外部时收起面板
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(event: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [open]);
+
+  // 打开时把键盘高亮对齐到当前选中项
+  useEffect(() => {
+    if (open) setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0);
+  }, [open, selectedIndex]);
+
+  function commit(index: number) {
+    const option = options[index];
+    if (!option) return;
+    onChange(option.value);
+    setOpen(false);
+  }
+
+  function onKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (disabled) return;
+    if (!open) {
+      if (event.key === "Enter" || event.key === " " || event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        setOpen(true);
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setOpen(false);
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((prev) => Math.min(options.length - 1, prev + 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((prev) => Math.max(0, prev - 1));
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      commit(activeIndex);
+    }
+  }
+
+  return (
+    <div className={`cc-select${open ? " open" : ""}${className ? ` ${className}` : ""}`} ref={rootRef}>
+      {name ? <input type="hidden" name={name} value={value} required={required} /> : null}
+      <button
+        type="button"
+        className="cc-select-trigger"
+        onClick={() => (disabled ? undefined : setOpen((prev) => !prev))}
+        onKeyDown={onKeyDown}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+      >
+        <span className={`cc-select-label${selected ? "" : " placeholder"}`}>
+          {selected ? selected.label : placeholder ?? ""}
+        </span>
+        <ChevronDown size={15} className="cc-select-caret" aria-hidden />
+      </button>
+      {open ? (
+        <div className="cc-select-panel" role="listbox">
+          {options.map((option, index) => (
+            <div
+              key={option.value}
+              role="option"
+              aria-selected={option.value === value}
+              className={`cc-select-option${option.value === value ? " selected" : ""}${
+                index === activeIndex ? " active" : ""
+              }`}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => commit(index)}
+            >
+              <span className="cc-select-option-label">{option.label}</span>
+              {option.value === value ? <Check size={14} className="cc-select-check" aria-hidden /> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
