@@ -1,6 +1,6 @@
 "use client";
 
-import type { DirectCommand, Project, Task, TaskComment, Worker } from "@claude-center/db";
+import type { Permission, Project, Role, Task, TaskComment, UserWithProjects, Worker, DirectCommand } from "@claude-center/db";
 import {
   Activity,
   Boxes,
@@ -14,15 +14,22 @@ import {
   Inbox,
   LayoutGrid,
   ListTodo,
+  LogOut,
   MessageSquare,
   Network,
+  Pencil,
   Plus,
+  Power,
   RadioTower,
   RefreshCw,
+  Save,
   Send,
   Server,
+  ShieldCheck,
   Tag,
-  UserRound
+  Trash2,
+  UserRound,
+  Users
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
@@ -39,9 +46,27 @@ type Overview = {
   };
 };
 
-type ViewKey = "dashboard" | "tasks" | "workers" | "projects";
+type ViewKey = "dashboard" | "tasks" | "workers" | "projects" | "users";
 type DetailTab = "overview" | "timeline" | "logs" | "conversation";
 type Tone = "success" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting" | "draft";
+
+// 当前登录用户（由服务端 page.tsx 注入）。permissions 决定 UI 显隐。
+type CurrentUser = {
+  id: string;
+  username: string;
+  displayName: string;
+  role: Role;
+  permissions: Permission[];
+};
+
+// 角色标签与可选项（客户端本地副本，避免把 @claude-center/db 的运行时代码打进前端包）。
+const ROLE_LABEL: Record<Role, string> = {
+  admin: "管理员",
+  publisher: "发布执行",
+  commenter: "任务对话",
+  viewer: "只读"
+};
+const ROLE_OPTIONS: Role[] = ["viewer", "commenter", "publisher", "admin"];
 
 const emptyOverview: Overview = {
   projects: [],
@@ -122,7 +147,16 @@ function syncAgo(value: string, now: number): string {
   return `${Math.floor(s / 60)} 分钟前`;
 }
 
-export default function Dashboard() {
+export default function Dashboard({ currentUser }: { currentUser: CurrentUser }) {
+  const isAdmin = currentUser.role === "admin";
+  const can = {
+    createTask: currentUser.permissions.includes("task.create"),
+    comment: currentUser.permissions.includes("task.comment"),
+    command: currentUser.permissions.includes("command.create"),
+    createProject: currentUser.permissions.includes("project.create"),
+    manageUsers: currentUser.permissions.includes("user.manage")
+  };
+
   const [overview, setOverview] = useState<Overview>(emptyOverview);
   const [history, setHistory] = useState<Record<"online" | "pending" | "running" | "failed", number[]>>({
     online: [],
@@ -292,18 +326,30 @@ export default function Dashboard() {
     }
   }
 
+  async function handleLogout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      window.location.href = "/login";
+    }
+  }
+
   const navItems: { key: ViewKey; label: string; icon: React.ReactNode; count?: number }[] = [
     { key: "dashboard", label: "总览", icon: <LayoutGrid size={18} /> },
     { key: "tasks", label: "任务调度", icon: <ListTodo size={18} />, count: overview.tasks.length },
     { key: "workers", label: "执行机群", icon: <Server size={18} />, count: overview.workers.length },
-    { key: "projects", label: "代码项目", icon: <FolderGit2 size={18} />, count: overview.projects.length }
+    { key: "projects", label: "代码项目", icon: <FolderGit2 size={18} />, count: overview.projects.length },
+    ...(can.manageUsers
+      ? [{ key: "users" as ViewKey, label: "用户权限", icon: <Users size={18} /> }]
+      : [])
   ];
 
   const pageMeta: Record<ViewKey, { title: string; sub: string }> = {
     dashboard: { title: "总览", sub: "系统整体态势与健康状态" },
     tasks: { title: "任务调度", sub: "任务流转、PR 跟踪与发布" },
     workers: { title: "执行机群", sub: "Worker 在线状态与定向指挥" },
-    projects: { title: "代码项目", sub: "仓库管理与默认分支配置" }
+    projects: { title: "代码项目", sub: "仓库管理与默认分支配置" },
+    users: { title: "用户权限", sub: "用户、角色与项目分配管理" }
   };
 
   return (
@@ -333,6 +379,18 @@ export default function Dashboard() {
         </nav>
 
         <div className="sidebar-foot">
+          <div className="user-card">
+            <span className="user-avatar">
+              <UserRound size={16} />
+            </span>
+            <div className="user-meta">
+              <span className="user-name">{currentUser.displayName || currentUser.username}</span>
+              <span className="user-role">{ROLE_LABEL[currentUser.role]}</span>
+            </div>
+            <button type="button" className="icon-btn" title="登出" onClick={handleLogout}>
+              <LogOut size={15} />
+            </button>
+          </div>
           <div className="heartbeat">
             <span className={`dot${synced ? " pulse" : ""}`} data-tone={synced ? "online" : "offline"} />
             <span>{synced ? "数据库已连接" : "未连接"}</span>
@@ -381,6 +439,8 @@ export default function Dashboard() {
               onSetRightMode={setRightMode}
               onSubmitTask={handleTaskSubmit}
               onPublishTask={handlePublishTask}
+              canCreateTask={can.createTask}
+              canComment={can.comment}
             />
           ) : null}
 
@@ -392,12 +452,20 @@ export default function Dashboard() {
               selectedWorkerId={selectedWorkerId}
               onSelectWorker={setSelectedWorkerId}
               onSubmitCommand={handleCommandSubmit}
+              canCommand={can.command}
             />
           ) : null}
 
           {view === "projects" ? (
-            <ProjectsView overview={overview} busy={busy} onSubmitProject={handleProjectSubmit} />
+            <ProjectsView
+              overview={overview}
+              busy={busy}
+              onSubmitProject={handleProjectSubmit}
+              canManageProjects={can.createProject}
+            />
           ) : null}
+
+          {view === "users" && can.manageUsers ? <UsersView overview={overview} currentUser={currentUser} /> : null}
         </div>
       </main>
     </div>
@@ -611,7 +679,9 @@ function TasksView({
   onSetTab,
   onSetRightMode,
   onSubmitTask,
-  onPublishTask
+  onPublishTask,
+  canCreateTask,
+  canComment
 }: {
   overview: Overview;
   selectedTask: Task | null;
@@ -626,6 +696,8 @@ function TasksView({
   onSetRightMode: (mode: "detail" | "compose") => void;
   onSubmitTask: (event: FormEvent<HTMLFormElement>) => void;
   onPublishTask: (taskId: string) => void;
+  canCreateTask: boolean;
+  canComment: boolean;
 }) {
   return (
     <>
@@ -634,15 +706,17 @@ function TasksView({
           <h2 className="section-title">任务流</h2>
           <span className="section-sub">{overview.tasks.length} 个任务 · 点击行查看详情</span>
         </div>
-        <button
-          type="button"
-          className={rightMode === "compose" ? "btn btn-sm" : "btn btn-primary btn-sm"}
-          onClick={() => onSetRightMode(rightMode === "compose" ? "detail" : "compose")}
-          disabled={overview.projects.length === 0}
-        >
-          <Plus size={16} />
-          {rightMode === "compose" ? "返回详情" : "发布任务"}
-        </button>
+        {canCreateTask ? (
+          <button
+            type="button"
+            className={rightMode === "compose" ? "btn btn-sm" : "btn btn-primary btn-sm"}
+            onClick={() => onSetRightMode(rightMode === "compose" ? "detail" : "compose")}
+            disabled={overview.projects.length === 0}
+          >
+            <Plus size={16} />
+            {rightMode === "compose" ? "返回详情" : "发布任务"}
+          </button>
+        ) : null}
       </div>
 
       <div className="grid-tasks">
@@ -693,7 +767,7 @@ function TasksView({
         </section>
 
         <div className="col">
-          {rightMode === "compose" ? (
+          {rightMode === "compose" && canCreateTask ? (
             <ComposeTaskCard
               overview={overview}
               busy={busy}
@@ -708,6 +782,8 @@ function TasksView({
               busy={busy}
               onSetTab={onSetTab}
               onPublishTask={onPublishTask}
+              canCreateTask={canCreateTask}
+              canComment={canComment}
             />
           )}
         </div>
@@ -794,13 +870,17 @@ function TaskDetail({
   detailTab,
   busy,
   onSetTab,
-  onPublishTask
+  onPublishTask,
+  canCreateTask,
+  canComment
 }: {
   task: Task | null;
   detailTab: DetailTab;
   busy: boolean;
   onSetTab: (tab: DetailTab) => void;
   onPublishTask: (taskId: string) => void;
+  canCreateTask: boolean;
+  canComment: boolean;
 }) {
   if (!task) {
     return (
@@ -854,7 +934,7 @@ function TaskDetail({
               PR
             </a>
           ) : null}
-          {task.status === "draft" ? (
+          {task.status === "draft" && canCreateTask ? (
             <button
               type="button"
               className="btn btn-primary btn-sm"
@@ -945,7 +1025,7 @@ function TaskDetail({
           </div>
         ) : null}
 
-        {detailTab === "conversation" ? <TaskConversation task={task} /> : null}
+        {detailTab === "conversation" ? <TaskConversation task={task} canComment={canComment} /> : null}
 
         {detailTab === "logs" ? <pre className="logs">{logText}</pre> : null}
       </div>
@@ -953,12 +1033,13 @@ function TaskDetail({
   );
 }
 
-function TaskConversation({ task }: { task: Task }) {
+function TaskConversation({ task, canComment }: { task: Task; canComment: boolean }) {
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const waiting = task.status === "waiting";
+  const canReply = waiting && canComment;
 
   useEffect(() => {
     let active = true;
@@ -1033,13 +1114,19 @@ function TaskConversation({ task }: { task: Task }) {
           rows={3}
           value={reply}
           onChange={(event) => setReply(event.target.value)}
-          placeholder={waiting ? "回复 Worker 的提问，提交后将续接执行…" : "仅在任务「等待回复」时可回复"}
-          disabled={!waiting || busy}
+          placeholder={
+            !canComment
+              ? "你没有任务对话权限"
+              : waiting
+                ? "回复 Worker 的提问，提交后将续接执行…"
+                : "仅在任务「等待回复」时可回复"
+          }
+          disabled={!canReply || busy}
         />
         {error ? <div className="error-box">{error}</div> : null}
-        <button className="btn btn-primary" type="submit" disabled={!waiting || busy || !reply.trim()}>
+        <button className="btn btn-primary" type="submit" disabled={!canReply || busy || !reply.trim()}>
           <Send size={16} />
-          {waiting ? "回复并续接" : "等待 Worker 提问"}
+          {!canComment ? "无回复权限" : waiting ? "回复并续接" : "等待 Worker 提问"}
         </button>
       </form>
     </div>
@@ -1054,7 +1141,8 @@ function WorkersView({
   busy,
   selectedWorkerId,
   onSelectWorker,
-  onSubmitCommand
+  onSubmitCommand,
+  canCommand
 }: {
   overview: Overview;
   onlineWorkers: Worker[];
@@ -1062,6 +1150,7 @@ function WorkersView({
   selectedWorkerId: string;
   onSelectWorker: (id: string) => void;
   onSubmitCommand: (event: FormEvent<HTMLFormElement>) => void;
+  canCommand: boolean;
 }) {
   return (
     <>
@@ -1118,6 +1207,7 @@ function WorkersView({
           )}
         </div>
 
+        {canCommand ? (
         <div className="col">
           <section className="card">
             <div className="card-head">
@@ -1203,6 +1293,7 @@ function WorkersView({
             </div>
           </section>
         </div>
+        ) : null}
       </div>
     </>
   );
@@ -1213,11 +1304,13 @@ function WorkersView({
 function ProjectsView({
   overview,
   busy,
-  onSubmitProject
+  onSubmitProject,
+  canManageProjects
 }: {
   overview: Overview;
   busy: boolean;
   onSubmitProject: (event: FormEvent<HTMLFormElement>) => void;
+  canManageProjects: boolean;
 }) {
   return (
     <>
@@ -1232,7 +1325,10 @@ function ProjectsView({
         <section className="card">
           <div className="card-body flush">
             {overview.projects.length === 0 ? (
-              <Empty icon={<FolderGit2 size={28} />} text="暂无项目，请在右侧创建" />
+              <Empty
+                icon={<FolderGit2 size={28} />}
+                text={canManageProjects ? "暂无项目，请在右侧创建" : "暂无可访问的项目"}
+              />
             ) : (
               <div className="table-wrap">
                 <table className="table">
@@ -1272,6 +1368,7 @@ function ProjectsView({
           </div>
         </section>
 
+        {canManageProjects ? (
         <div className="col">
           <section className="card detail">
             <div className="card-head">
@@ -1306,8 +1403,370 @@ function ProjectsView({
             </div>
           </section>
         </div>
+        ) : null}
       </div>
     </>
+  );
+}
+
+/* ============================== Users ============================== */
+
+type EditableUser = UserWithProjects;
+
+function UsersView({ overview, currentUser }: { overview: Overview; currentUser: CurrentUser }) {
+  const [users, setUsers] = useState<EditableUser[]>([]);
+  const [editing, setEditing] = useState<EditableUser | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function loadUsers() {
+    try {
+      const response = await fetch("/api/users", { cache: "no-store" });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? `加载失败：${response.status}`);
+      }
+      const data = (await response.json()) as { users: EditableUser[] };
+      setUsers(data.users);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "加载失败");
+    }
+  }
+
+  useEffect(() => {
+    void loadUsers();
+  }, []);
+
+  const projectName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const project of overview.projects) map.set(project.id, project.name);
+    return map;
+  }, [overview.projects]);
+
+  async function handleDelete(user: EditableUser) {
+    if (!window.confirm(`确认删除用户「${user.username}」？`)) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/users/${user.id}`, { method: "DELETE" });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? `删除失败：${response.status}`);
+      }
+      await loadUsers();
+      setMessage(`已删除 ${user.username}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleToggleDisabled(user: EditableUser) {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/users/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ disabled: !user.disabled })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? `操作失败：${response.status}`);
+      }
+      await loadUsers();
+      setMessage(`${user.username} 已${user.disabled ? "启用" : "停用"}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "操作失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="section-head">
+        <div>
+          <h2 className="section-title">用户权限</h2>
+          <span className="section-sub">
+            {users.length} 个用户{message ? ` · ${message}` : ""}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={creating ? "btn btn-sm" : "btn btn-primary btn-sm"}
+          onClick={() => {
+            setCreating((value) => !value);
+            setEditing(null);
+          }}
+        >
+          <Plus size={16} />
+          {creating ? "返回列表" : "新建用户"}
+        </button>
+      </div>
+
+      <div className="grid-tasks">
+        <section className="card">
+          <div className="card-body flush">
+            {users.length === 0 ? (
+              <Empty icon={<Users size={28} />} text="暂无用户" />
+            ) : (
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>用户</th>
+                      <th>角色</th>
+                      <th>项目</th>
+                      <th className="t-right">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.map((user) => (
+                      <tr
+                        key={user.id}
+                        className={editing?.id === user.id ? "selected" : ""}
+                        onClick={() => {
+                          setEditing(user);
+                          setCreating(false);
+                        }}
+                      >
+                        <td>
+                          <div className="cell-stack">
+                            <span className="t-title">
+                              {user.display_name || user.username}
+                              {user.id === currentUser.id ? <span className="self-tag">本人</span> : null}
+                            </span>
+                            <span className="t-meta mono">{user.username}</span>
+                          </div>
+                        </td>
+                        <td>
+                          <span className="role-badge" data-role={user.role}>
+                            <ShieldCheck size={12} className="ico" />
+                            {ROLE_LABEL[user.role]}
+                          </span>
+                        </td>
+                        <td>
+                          {user.role === "admin" ? (
+                            <span className="t-meta">全部项目</span>
+                          ) : user.project_ids.length === 0 ? (
+                            <span className="t-meta">—</span>
+                          ) : (
+                            <span className="t-meta">
+                              {user.project_ids.map((id) => projectName.get(id) ?? id).join("、")}
+                            </span>
+                          )}
+                        </td>
+                        <td className="t-right">
+                          <div className="row-actions" onClick={(event) => event.stopPropagation()}>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              title={user.disabled ? "启用" : "停用"}
+                              disabled={busy || user.id === currentUser.id}
+                              onClick={() => handleToggleDisabled(user)}
+                            >
+                              <Power size={14} data-tone={user.disabled ? "off" : "on"} />
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              title="编辑"
+                              onClick={() => {
+                                setEditing(user);
+                                setCreating(false);
+                              }}
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-btn danger"
+                              title="删除"
+                              disabled={busy || user.id === currentUser.id}
+                              onClick={() => handleDelete(user)}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <div className="col">
+          {creating ? (
+            <UserForm
+              mode="create"
+              projects={overview.projects}
+              onDone={async (note) => {
+                setCreating(false);
+                setMessage(note);
+                await loadUsers();
+              }}
+            />
+          ) : editing ? (
+            <UserForm
+              mode="edit"
+              key={editing.id}
+              user={editing}
+              projects={overview.projects}
+              onDone={async (note) => {
+                setEditing(null);
+                setMessage(note);
+                await loadUsers();
+              }}
+            />
+          ) : (
+            <section className="card detail">
+              <Empty icon={<UserRound size={28} />} text="选择左侧用户编辑，或点击右上角新建用户" />
+            </section>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function UserForm({
+  mode,
+  user,
+  projects,
+  onDone
+}: {
+  mode: "create" | "edit";
+  user?: EditableUser;
+  projects: Project[];
+  onDone: (note: string) => void | Promise<void>;
+}) {
+  const [role, setRole] = useState<Role>(user?.role ?? "viewer");
+  const [projectIds, setProjectIds] = useState<string[]>(user?.project_ids ?? []);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function toggleProject(id: string) {
+    setProjectIds((current) => (current.includes(id) ? current.filter((value) => value !== id) : [...current, id]));
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const username = String(data.get("username") ?? "").trim();
+    const password = String(data.get("password") ?? "");
+    const displayName = String(data.get("displayName") ?? "").trim();
+    setBusy(true);
+    setError(null);
+    try {
+      if (mode === "create") {
+        const response = await fetch("/api/users", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password, displayName, role, projectIds: role === "admin" ? [] : projectIds })
+        });
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as { error?: string };
+          throw new Error(payload.error ?? `创建失败：${response.status}`);
+        }
+        await onDone(`已创建用户 ${username}`);
+      } else if (user) {
+        const body: Record<string, unknown> = {
+          role,
+          displayName,
+          projectIds: role === "admin" ? [] : projectIds
+        };
+        if (password) body.password = password;
+        const response = await fetch(`/api/users/${user.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as { error?: string };
+          throw new Error(payload.error ?? `保存失败：${response.status}`);
+        }
+        await onDone(`已更新用户 ${user.username}`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "操作失败");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card detail">
+      <div className="card-head">
+        <h2 className="card-title">
+          {mode === "create" ? <Plus size={16} className="ico" /> : <Pencil size={16} className="ico" />}
+          {mode === "create" ? "新建用户" : `编辑 ${user?.username ?? ""}`}
+        </h2>
+      </div>
+      <div className="card-body">
+        <form className="form" onSubmit={handleSubmit}>
+          <div className="field">
+            <label className="field-label">用户名</label>
+            <input name="username" defaultValue={user?.username ?? ""} placeholder="zhang.san" required disabled={mode === "edit"} />
+          </div>
+          <div className="field">
+            <label className="field-label">显示名</label>
+            <input name="displayName" defaultValue={user?.display_name ?? ""} placeholder="张三" />
+          </div>
+          <div className="field">
+            <label className="field-label">
+              密码 {mode === "edit" ? <span className="field-hint">留空表示不修改</span> : null}
+            </label>
+            <input name="password" type="password" placeholder={mode === "create" ? "初始密码" : "重置为新密码"} required={mode === "create"} />
+          </div>
+          <div className="field">
+            <label className="field-label">角色</label>
+            <select value={role} onChange={(event) => setRole(event.target.value as Role)}>
+              {ROLE_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {ROLE_LABEL[value]}
+                </option>
+              ))}
+            </select>
+          </div>
+          {role === "admin" ? (
+            <div className="field">
+              <label className="field-label">项目范围</label>
+              <div className="scope-hint">管理员可访问全部项目，无需分配。</div>
+            </div>
+          ) : (
+            <div className="field">
+              <label className="field-label">
+                可访问项目 <span className="field-hint">勾选分配给该用户的项目</span>
+              </label>
+              {projects.length === 0 ? (
+                <div className="scope-hint">暂无项目，先到「代码项目」创建。</div>
+              ) : (
+                <div className="checkbox-list">
+                  {projects.map((project) => (
+                    <label key={project.id} className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={projectIds.includes(project.id)}
+                        onChange={() => toggleProject(project.id)}
+                      />
+                      <span>{project.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {error ? <div className="error-box">{error}</div> : null}
+          <button className="btn btn-primary" type="submit" disabled={busy}>
+            {mode === "create" ? <Plus size={16} /> : <Save size={16} />}
+            {mode === "create" ? "创建用户" : "保存修改"}
+          </button>
+        </form>
+      </div>
+    </section>
   );
 }
 

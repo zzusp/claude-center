@@ -1,5 +1,6 @@
-import { createTask, getPool } from "@claude-center/db";
+import { createTask, getPool, userHasProject } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
+import { requirePermission } from "../../lib/session";
 
 function defaultWorkBranch(title: string): string {
   const slug = title
@@ -11,6 +12,11 @@ function defaultWorkBranch(title: string): string {
 }
 
 export async function POST(request: NextRequest) {
+  const gate = await requirePermission("task.create");
+  if (gate instanceof NextResponse) {
+    return gate;
+  }
+  const user = gate;
   try {
     const body = (await request.json()) as {
       projectId?: string;
@@ -24,6 +30,11 @@ export async function POST(request: NextRequest) {
 
     if (!body.projectId || !body.title?.trim() || !body.description?.trim()) {
       return NextResponse.json({ error: "Project, title and description are required" }, { status: 400 });
+    }
+
+    // 项目隔离：非 admin 只能在分配给自己的项目里建任务。
+    if (user.role !== "admin" && !(await userHasProject(getPool(), user.id, body.projectId))) {
+      return NextResponse.json({ error: "无权在该项目下创建任务" }, { status: 403 });
     }
 
     const targetFiles = (body.targetFilesText ?? "")

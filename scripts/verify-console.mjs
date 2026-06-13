@@ -63,20 +63,46 @@ function waitForReady() {
 try {
   await waitForReady();
 
-  const page = await fetch(baseUrl);
-  if (!page.ok) {
-    throw new Error(`GET / returned ${page.status}`);
+  // 1) 未登录访问受保护 API 必须 401。
+  const unauth = await fetch(`${baseUrl}/api/overview`);
+  if (unauth.status !== 401) {
+    throw new Error(`未登录的 GET /api/overview 应为 401，实际 ${unauth.status}: ${await unauth.text()}`);
   }
 
-  const overview = await fetch(`${baseUrl}/api/overview`);
+  // 2) 用引导管理员登录，拿会话 cookie（需先跑过 db:migrate 应用 005）。
+  const login = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "admin", password: "admin123" })
+  });
+  if (!login.ok) {
+    throw new Error(`POST /api/auth/login 失败 ${login.status}: ${await login.text()}`);
+  }
+  const setCookie = login.headers.get("set-cookie") ?? "";
+  const token = /cc_session=([^;]+)/.exec(setCookie)?.[1];
+  if (!token) {
+    throw new Error(`登录响应未带 cc_session cookie：${setCookie}`);
+  }
+  const cookie = `cc_session=${token}`;
+
+  // 3) 带 cookie 访问受保护 API 应为 200，并返回各项计数。
+  const overview = await fetch(`${baseUrl}/api/overview`, { headers: { cookie } });
   if (!overview.ok) {
-    throw new Error(`GET /api/overview returned ${overview.status}: ${await overview.text()}`);
+    throw new Error(`已登录的 GET /api/overview 返回 ${overview.status}: ${await overview.text()}`);
+  }
+  const payload = await overview.json();
+
+  // 4) 带 cookie 访问首页（中控台）应为 200。
+  const page = await fetch(baseUrl, { headers: { cookie } });
+  if (!page.ok) {
+    throw new Error(`已登录的 GET / 返回 ${page.status}`);
   }
 
-  const payload = await overview.json();
   console.log(
     JSON.stringify(
       {
+        unauthOverviewStatus: unauth.status,
+        loginStatus: login.status,
         pageStatus: page.status,
         projects: payload.projects.length,
         workers: payload.workers.length,

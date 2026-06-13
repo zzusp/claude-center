@@ -1,7 +1,12 @@
 import { createDirectCommand, getPool, type DirectCommandName } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
+import { requirePermission } from "../../lib/session";
 
 export async function POST(request: NextRequest) {
+  const gate = await requirePermission("command.create");
+  if (gate instanceof NextResponse) {
+    return gate;
+  }
   try {
     const body = (await request.json()) as {
       workerId?: string;

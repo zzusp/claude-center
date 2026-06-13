@@ -1,16 +1,24 @@
-import { getPool, listProjects, listRecentDirectCommands, listRecentTasks, listWorkers } from "@claude-center/db";
+import { getPool, listProjectsForUser, listRecentDirectCommands, listRecentTasksForUser, listWorkers } from "@claude-center/db";
 import { NextResponse } from "next/server";
+import { requireUser } from "../../lib/session";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  const gate = await requireUser();
+  if (gate instanceof NextResponse) {
+    return gate;
+  }
+  const user = gate;
   try {
     const pool = getPool();
+    const isAdmin = user.role === "admin";
+    // projects / tasks 按用户项目范围过滤；定向指挥回执仅 admin 可见。
     const [projects, workers, tasks, commands] = await Promise.all([
-      listProjects(pool),
+      listProjectsForUser(pool, user),
       listWorkers(pool),
-      listRecentTasks(pool, 80),
-      listRecentDirectCommands(pool, 40)
+      listRecentTasksForUser(pool, user, 80),
+      isAdmin ? listRecentDirectCommands(pool, 40) : Promise.resolve([])
     ]);
 
     return NextResponse.json({
