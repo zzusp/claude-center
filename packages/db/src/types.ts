@@ -16,6 +16,31 @@ export type DirectCommandStatus = Exclude<TaskStatus, "merged">;
 export type DirectCommandName = "shell" | "claude_prompt";
 export type TaskSubmitMode = "pr" | "push";
 
+export type Role = "admin" | "publisher" | "commenter" | "viewer";
+
+export type User = {
+  id: string;
+  username: string;
+  role: Role;
+  display_name: string;
+  disabled: boolean;
+  last_login_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+// 列表视图：附带分配的项目 id（admin 不受范围约束，前端按 role 区分）。
+export type UserWithProjects = User & {
+  project_ids: string[];
+};
+
+export type Session = {
+  token: string;
+  user_id: string;
+  created_at: string;
+  expires_at: string;
+};
+
 export type Project = {
   id: string;
   name: string;

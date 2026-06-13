@@ -40,21 +40,41 @@ ClaudeCenter 是一个 AI 编码协作中央控制台：一个 Next.js Web Conso
 
    默认监听 `http://127.0.0.1:3000`。需要调整时设置 `CONSOLE_HOST` 或 `CONSOLE_PORT`。
 
+   首次打开会跳转到 `/login`。用引导管理员登录：**用户名 `admin` / 密码 `admin123`**（由 migration `008_auth_rbac.sql` 写入）。**首次登录后请立即在「用户权限」里重置密码。**
+
 5. 启动 Worker：
 
    ```powershell
    npm run dev:worker
    ```
 
+## 登录鉴权与权限（RBAC）
+
+Console 现在需要登录。鉴权与项目隔离只作用于 Console（Web UI + API），**Worker 直连数据库、不受影响**。方案详见 `docs/spec/auth-rbac.md`。
+
+四个固定角色（权限写死在 `packages/db/src/rbac.ts`）：
+
+| 角色 | 能力 |
+| --- | --- |
+| 只读 `viewer` | 仅查看分配给自己的项目及其任务 |
+| 任务对话 `commenter` | 上 + 在任务「对话」里回复 Worker 提问 |
+| 发布执行 `publisher` | 上 + 创建 / 发布任务 |
+| 管理员 `admin` | 全部：定向指挥、建项目、用户管理；且看全部项目 |
+
+- **项目隔离**：非 admin 用户只能看到 / 操作管理员分配给自己的项目；admin 看全部。
+- **用户管理**：admin 在「用户权限」页创建 / 编辑 / 停用 / 删除用户，分配角色与项目，重置密码。
+- 密码散列与会话 token 全部由 PostgreSQL pgcrypto 完成（`crypt` + `gen_salt('bf')` + `gen_random_bytes`），无额外依赖、无需配置密钥。
+
 ## 本地验证
 
 ```powershell
 npm run typecheck
 npm run build
+npm run db:migrate      # 应用 008，写入引导管理员
 npm run verify:console
 ```
 
-`verify:console` 会临时启动 Console，检查首页和 `/api/overview`，然后自动关闭服务。
+`verify:console` 会临时启动 Console，依次断言：未登录访问 `/api/overview` 返回 401 → 用引导管理员登录拿到会话 cookie → 带 cookie 访问 `/api/overview` 与首页均 200，然后自动关闭服务。运行前需先 `db:migrate`（否则没有 `admin` 账号）。
 
 ## Worker 前置依赖
 

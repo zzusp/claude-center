@@ -1,5 +1,19 @@
 import type pg from "pg";
-import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, TaskEvent, TaskSubmitMode, TaskType, Worker } from "./types.js";
+import type {
+  DirectCommand,
+  DirectCommandName,
+  Project,
+  Role,
+  Task,
+  TaskComment,
+  TaskCommentAuthor,
+  TaskEvent,
+  TaskSubmitMode,
+  TaskType,
+  User,
+  UserWithProjects,
+  Worker
+} from "./types.js";
 
 export type WorkerRegistration = {
   id: string;
@@ -156,6 +170,8 @@ export type TaskSort = "updated" | "created" | "priority";
 export type ListTasksFilters = {
   status?: string[];
   projectId?: string | null;
+  // 项目级隔离：非 admin 传入其可访问项目 id 集合，约束只返回范围内任务（空集合 → 无结果）。
+  projectIds?: string[] | null;
   q?: string | null;
   sort?: TaskSort;
   limit: number;
@@ -184,6 +200,11 @@ export async function listTasks(
   if (filters.projectId) {
     params.push(filters.projectId);
     conditions.push(`tasks.project_id = $${params.length}`);
+  }
+  // 项目范围约束（非 admin）：与上面的单项目筛选用 AND 叠加，无法越过自己的范围。
+  if (filters.projectIds) {
+    params.push(filters.projectIds);
+    conditions.push(`tasks.project_id = ANY($${params.length}::uuid[])`);
   }
   const keyword = filters.q?.trim();
   if (keyword) {
@@ -785,4 +806,231 @@ export async function markDirectCommandFailed(
       WHERE id = $1 AND worker_id = $2`,
     [commandId, workerId, errorMessage, resultPayload]
   );
+}
+
+/* ============================== 用户 / 角色 / 权限 / 会话 ==============================
+ * 密码散列 / 会话 token 全用 pgcrypto（见 migration 008）。所有读取都不返回 password_hash。
+ */
+
+const USER_COLS = "id, username, role, display_name, disabled, last_login_at, created_at, updated_at";
+
+// 登录校验：用 crypt(输入, hash) = hash 比对（pgcrypto bf）。命中返回用户（含 disabled，由调用方判断），否则 null。
+export async function verifyUserCredentials(
+  client: pg.Pool | pg.PoolClient,
+  username: string,
+  password: string
+): Promise<User | null> {
+  const result = await client.query<User>(
+    `SELECT ${USER_COLS}
+       FROM users
+      WHERE username = $1
+        AND password_hash = crypt($2, password_hash)
+      LIMIT 1`,
+    [username, password]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function touchUserLogin(client: pg.Pool | pg.PoolClient, userId: string): Promise<void> {
+  await client.query(`UPDATE users SET last_login_at = now() WHERE id = $1`, [userId]);
+}
+
+// 建会话：token 由 DB 端 gen_random_bytes 生成，返回明文 token 写进 cookie。默认 7 天过期。
+export async function createSession(
+  client: pg.Pool | pg.PoolClient,
+  userId: string,
+  ttlDays = 7
+): Promise<string> {
+  const result = await client.query<{ token: string }>(
+    `INSERT INTO sessions (user_id, expires_at)
+     VALUES ($1, now() + make_interval(days => $2::int))
+     RETURNING token`,
+    [userId, ttlDays]
+  );
+  return result.rows[0]!.token;
+}
+
+// 实时查会话对应的用户（校验未过期且账号未停用）。每次请求都查，所以改角色/项目/停用立即生效。
+export async function getSessionUser(client: pg.Pool | pg.PoolClient, token: string): Promise<User | null> {
+  const result = await client.query<User>(
+    `SELECT u.id, u.username, u.role, u.display_name, u.disabled, u.last_login_at, u.created_at, u.updated_at
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+      WHERE s.token = $1
+        AND s.expires_at > now()
+        AND u.disabled = false
+      LIMIT 1`,
+    [token]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function deleteSession(client: pg.Pool | pg.PoolClient, token: string): Promise<void> {
+  await client.query(`DELETE FROM sessions WHERE token = $1`, [token]);
+}
+
+export async function listUsersWithProjects(client: pg.Pool | pg.PoolClient): Promise<UserWithProjects[]> {
+  const result = await client.query<UserWithProjects>(
+    `SELECT u.id, u.username, u.role, u.display_name, u.disabled, u.last_login_at, u.created_at, u.updated_at,
+            COALESCE(array_agg(upl.project_id) FILTER (WHERE upl.project_id IS NOT NULL), ARRAY[]::uuid[]) AS project_ids
+       FROM users u
+       LEFT JOIN user_project_links upl ON upl.user_id = u.id
+      GROUP BY u.id
+      ORDER BY u.created_at ASC`
+  );
+  return result.rows;
+}
+
+export async function createUser(
+  client: pg.Pool | pg.PoolClient,
+  input: { username: string; password: string; role: Role; displayName: string }
+): Promise<User> {
+  const result = await client.query<User>(
+    `INSERT INTO users (username, password_hash, role, display_name)
+     VALUES ($1, crypt($2, gen_salt('bf')), $3, $4)
+     RETURNING ${USER_COLS}`,
+    [input.username, input.password, input.role, input.displayName]
+  );
+  return result.rows[0]!;
+}
+
+// 局部更新：未传的字段保持不变（COALESCE）。密码单独走 setUserPassword。
+export async function updateUser(
+  client: pg.Pool | pg.PoolClient,
+  id: string,
+  patch: { role?: Role; displayName?: string; disabled?: boolean }
+): Promise<User | null> {
+  const result = await client.query<User>(
+    `UPDATE users
+        SET role = COALESCE($2::text, role),
+            display_name = COALESCE($3::text, display_name),
+            disabled = COALESCE($4::boolean, disabled),
+            updated_at = now()
+      WHERE id = $1
+      RETURNING ${USER_COLS}`,
+    [id, patch.role ?? null, patch.displayName ?? null, patch.disabled ?? null]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function setUserPassword(
+  client: pg.Pool | pg.PoolClient,
+  id: string,
+  password: string
+): Promise<void> {
+  await client.query(
+    `UPDATE users SET password_hash = crypt($2, gen_salt('bf')), updated_at = now() WHERE id = $1`,
+    [id, password]
+  );
+}
+
+// 重置用户的项目分配：先清空再按新集合写入（unnest 批量插）。空集合即取消全部分配。
+export async function setUserProjects(
+  client: pg.Pool | pg.PoolClient,
+  userId: string,
+  projectIds: string[]
+): Promise<void> {
+  await client.query(`DELETE FROM user_project_links WHERE user_id = $1`, [userId]);
+  if (projectIds.length > 0) {
+    await client.query(
+      `INSERT INTO user_project_links (user_id, project_id)
+       SELECT $1, x FROM unnest($2::uuid[]) AS x`,
+      [userId, projectIds]
+    );
+  }
+}
+
+export async function getUserById(client: pg.Pool | pg.PoolClient, id: string): Promise<User | null> {
+  const result = await client.query<User>(`SELECT ${USER_COLS} FROM users WHERE id = $1 LIMIT 1`, [id]);
+  return result.rows[0] ?? null;
+}
+
+export async function deleteUser(client: pg.Pool | pg.PoolClient, id: string): Promise<void> {
+  await client.query(`DELETE FROM users WHERE id = $1`, [id]);
+}
+
+// 防自锁：统计「可用的」管理员数（未停用）。删除/降级最后一个 admin 前用它兜底。
+export async function countActiveAdmins(client: pg.Pool | pg.PoolClient): Promise<number> {
+  const result = await client.query<{ count: string }>(
+    `SELECT count(*)::int AS count FROM users WHERE role = 'admin' AND disabled = false`
+  );
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+/* ============================== 项目级隔离（按用户范围过滤） ============================== */
+
+// admin 看全部项目；其余只看分配给自己的项目。
+export async function listProjectsForUser(
+  client: pg.Pool | pg.PoolClient,
+  user: { id: string; role: Role }
+): Promise<Project[]> {
+  if (user.role === "admin") {
+    return listProjects(client);
+  }
+  const result = await client.query<Project>(
+    `SELECT projects.*
+       FROM projects
+       JOIN user_project_links upl ON upl.project_id = projects.id
+      WHERE upl.user_id = $1
+        AND projects.archived_at IS NULL
+      ORDER BY projects.created_at DESC`,
+    [user.id]
+  );
+  return result.rows;
+}
+
+// admin 看全部任务；其余只看范围内项目的任务。
+export async function listRecentTasksForUser(
+  client: pg.Pool | pg.PoolClient,
+  user: { id: string; role: Role },
+  limit = 50
+): Promise<Task[]> {
+  if (user.role === "admin") {
+    return listRecentTasks(client, limit);
+  }
+  const result = await client.query<Task>(
+    `SELECT tasks.*, projects.name AS project_name
+       FROM tasks
+       JOIN projects ON projects.id = tasks.project_id
+       JOIN user_project_links upl ON upl.project_id = tasks.project_id AND upl.user_id = $2
+      ORDER BY tasks.created_at DESC
+      LIMIT $1`,
+    [limit, user.id]
+  );
+  return result.rows;
+}
+
+export async function userHasProject(
+  client: pg.Pool | pg.PoolClient,
+  userId: string,
+  projectId: string
+): Promise<boolean> {
+  const result = await client.query(
+    `SELECT 1 FROM user_project_links WHERE user_id = $1 AND project_id = $2 LIMIT 1`,
+    [userId, projectId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// 某用户被分配的项目 id 列表（用于把任务列表查询约束在范围内）。
+export async function listUserProjectIds(
+  client: pg.Pool | pg.PoolClient,
+  userId: string
+): Promise<string[]> {
+  const result = await client.query<{ project_id: string }>(
+    `SELECT project_id FROM user_project_links WHERE user_id = $1`,
+    [userId]
+  );
+  return result.rows.map((row) => row.project_id);
+}
+
+export async function getTaskProjectId(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string
+): Promise<string | null> {
+  const result = await client.query<{ project_id: string }>(
+    `SELECT project_id FROM tasks WHERE id = $1 LIMIT 1`,
+    [taskId]
+  );
+  return result.rows[0]?.project_id ?? null;
 }

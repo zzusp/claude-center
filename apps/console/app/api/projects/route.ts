@@ -1,7 +1,12 @@
 import { createProject, getPool } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
+import { requirePermission } from "../../lib/session";
 
 export async function POST(request: NextRequest) {
+  const gate = await requirePermission("project.create");
+  if (gate instanceof NextResponse) {
+    return gate;
+  }
   try {
     const body = (await request.json()) as {
       name?: string;

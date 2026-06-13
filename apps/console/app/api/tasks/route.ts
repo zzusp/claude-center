@@ -1,5 +1,14 @@
-import { addTaskDependencies, createTask, getPool, listTasks, type TaskSort } from "@claude-center/db";
+import {
+  addTaskDependencies,
+  createTask,
+  getPool,
+  listTasks,
+  listUserProjectIds,
+  userHasProject,
+  type TaskSort
+} from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
+import { requirePermission, requireUser } from "../../lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +17,11 @@ const SORT_VALUES: TaskSort[] = ["updated", "created", "priority"];
 const PAGE_SIZES = [20, 50, 100];
 
 export async function GET(request: NextRequest) {
+  const gate = await requireUser();
+  if (gate instanceof NextResponse) {
+    return gate;
+  }
+  const user = gate;
   try {
     const params = request.nextUrl.searchParams;
 
@@ -28,9 +42,13 @@ export async function GET(request: NextRequest) {
     const pageRaw = Number(params.get("page"));
     const page = Number.isFinite(pageRaw) && pageRaw >= 1 ? Math.floor(pageRaw) : 1;
 
+    // 项目级隔离：非 admin 只返回分配给自己项目的任务（projectIds 与单项目筛选 AND 叠加）。
+    const projectIds = user.role === "admin" ? null : await listUserProjectIds(getPool(), user.id);
+
     const { tasks, total } = await listTasks(getPool(), {
       status,
       projectId,
+      projectIds,
       q,
       sort,
       limit: pageSize,
@@ -53,6 +71,11 @@ function defaultWorkBranch(title: string): string {
 }
 
 export async function POST(request: NextRequest) {
+  const gate = await requirePermission("task.create");
+  if (gate instanceof NextResponse) {
+    return gate;
+  }
+  const user = gate;
   try {
     const body = (await request.json()) as {
       projectId?: string;
@@ -70,6 +93,11 @@ export async function POST(request: NextRequest) {
 
     if (!body.projectId || !body.title?.trim() || !body.description?.trim()) {
       return NextResponse.json({ error: "Project, title and description are required" }, { status: 400 });
+    }
+
+    // 项目隔离：非 admin 只能在分配给自己的项目里建任务。
+    if (user.role !== "admin" && !(await userHasProject(getPool(), user.id, body.projectId))) {
+      return NextResponse.json({ error: "无权在该项目下创建任务" }, { status: 403 });
     }
 
     const taskType = body.taskType === "qa" ? "qa" : "work";
