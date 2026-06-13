@@ -1,4 +1,5 @@
 export type TaskStatus =
+  | "draft"
   | "pending"
   | "claimed"
   | "running"
@@ -7,12 +8,11 @@ export type TaskStatus =
   | "merged"
   | "failed"
   | "cancelled";
-// direct_commands 没有 merged 终态,沿用任务状态里除 merged 外的子集。
+export type TaskType = "work" | "qa";
+// direct_commands 没有 merged 终态，沿用任务状态里除 merged 外的子集。
 export type DirectCommandStatus = Exclude<TaskStatus, "merged">;
 export type DirectCommandName = "shell" | "claude_prompt";
-
-// 任务投递模式：pr=开 PR 等合并后清理；direct=直接 commit+push 到 base 分支。
-export type DeliveryMode = "pr" | "direct";
+export type TaskSubmitMode = "pr" | "push";
 
 export type Project = {
   id: string;
@@ -53,15 +53,16 @@ export type Task = {
   id: string;
   project_id: string;
   project_name?: string;
+  task_type: TaskType;
   title: string;
   description: string;
   base_branch: string;
   work_branch: string;
+  target_branch: string;
+  submit_mode: TaskSubmitMode;
   target_files: string[];
   priority: number;
   status: TaskStatus;
-  delivery_mode: DeliveryMode;
-  merge_checked_at: string | null;
   claimed_by: string | null;
   claimed_at: string | null;
   started_at: string | null;
@@ -69,9 +70,20 @@ export type Task = {
   error_message: string | null;
   result: Record<string, unknown>;
   pr_url: string | null;
+  merge_checked_at: string | null;
   claude_session_id: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type TaskEvent = {
+  id: string;
+  task_id: string;
+  worker_id: string | null;
+  event_type: string;
+  message: string;
+  payload: Record<string, unknown>;
+  created_at: string;
 };
 
 export type TaskCommentAuthor = "worker" | "user";

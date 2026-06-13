@@ -113,6 +113,29 @@ function resumePrompt(reply: string): string {
   ].join("\n");
 }
 
+// 问答类任务：纯对话，只读地回答关于该项目的问题，不修改任何文件。整段回复会原样作为
+// 一条评论展示给用户，所以直接写成对用户的回答即可（无哨兵、无 git 收尾）。
+function qaPrompt(task: Task): string {
+  return [
+    `ClaudeCenter Q&A: ${task.title}`,
+    "",
+    "Question:",
+    task.description,
+    "",
+    "Answer the user's question about this repository. You may read any files to ground your answer, but this is a read-only conversation: do NOT modify, create, or delete any files, and do NOT run git. Reply with the answer itself — it will be shown to the user verbatim as a comment."
+  ].join("\n");
+}
+
+function qaResumePrompt(reply: string): string {
+  return [
+    "The user followed up:",
+    "",
+    reply,
+    "",
+    "Continue the conversation. Stay read-only (no file or git changes); reply with the answer itself."
+  ].join("\n");
+}
+
 function prBody(task: Task, claudeOutput: string): string {
   return [
     `ClaudeCenter task: ${task.id}`,
@@ -154,8 +177,21 @@ async function handleClaudeTurn(config: WorkerConfig, task: Task, localPath: str
   await finalizeTask(config, task, localPath, turn.result);
 }
 
-// 收尾：无改动直接成功；有改动则提交后按投递模式分叉——
-// pr 模式推 work 分支 + 建 PR（待 periodic 检测合并后清理）；direct 模式直接推 base，落地即 merged。
+// 问答类一轮：记下续接 session → 把回答落为 worker 评论 → 转入等待，让用户继续追问或
+// 手动「结束对话」。问答不收尾 git，恒定「答完即等待」。
+async function handleQaTurn(config: WorkerConfig, task: Task, turn: ClaudeTurn): Promise<void> {
+  const pool = getPool();
+  if (turn.sessionId) {
+    await setTaskClaudeSession(pool, task.id, config.workerId, turn.sessionId);
+  }
+
+  const answer = turn.result.trim() || "（Claude 未返回内容）";
+  await addTaskComment(pool, { taskId: task.id, author: "worker", workerId: config.workerId, body: answer });
+  await setTaskWaiting(pool, task.id, config.workerId, turn.sessionId);
+  await addTaskEvent(pool, task.id, config.workerId, "waiting", "Q&A answered, waiting for next message", {});
+}
+
+// 收尾：无改动直接成功；有改动则提交，并按 submit_mode 分流（PR 或直接推送目标分支）。
 async function finalizeTask(config: WorkerConfig, task: Task, localPath: string, claudeOutput: string): Promise<void> {
   const pool = getPool();
   const status = await runCommand("git", ["-C", localPath, "status", "--porcelain"], { timeoutMs: 60_000 });
@@ -164,7 +200,7 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
       pool,
       task.id,
       config.workerId,
-      { localPath, noChanges: true, deliveryMode: task.delivery_mode, claudeResult: claudeOutput },
+      { localPath, noChanges: true, claudeResult: claudeOutput },
       null
     );
     return;
@@ -178,47 +214,25 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
   await runCommand("git", ["-C", localPath, "commit", "-m", `ClaudeCenter task: ${task.title}`], {
     timeoutMs: 5 * 60_000
   });
-
-  if (task.delivery_mode === "direct") {
-    await finalizeDirect(config, task, localPath, claudeOutput, status.stdout);
-  } else {
-    await finalizePr(config, task, localPath, claudeOutput, status.stdout);
+  if (task.submit_mode === "push") {
+    // 直接把工作分支的提交推送到目标分支，不开 PR——落地即 merged（无需后续合并轮询/清理）。
+    const push = await runCommand(
+      "git",
+      ["-C", localPath, "push", "origin", `${task.work_branch}:${task.target_branch}`],
+      { timeoutMs: 15 * 60_000 }
+    );
+    await markTaskMerged(pool, task.id, config.workerId, {
+      localPath,
+      submitMode: "push",
+      targetBranch: task.target_branch,
+      gitStatusBeforeCommit: status.stdout,
+      claudeResult: claudeOutput,
+      pushStdout: push.stdout,
+      pushStderr: push.stderr
+    });
+    return;
   }
-}
 
-// direct 模式：把 base 分支上的本地提交直接推到远端 base，落地即 merged（无 PR、无需后续清理）。
-async function finalizeDirect(
-  config: WorkerConfig,
-  task: Task,
-  localPath: string,
-  claudeOutput: string,
-  gitStatus: string
-): Promise<void> {
-  const pool = getPool();
-  const push = await runCommand("git", ["-C", localPath, "push", "origin", `HEAD:${task.base_branch}`], {
-    timeoutMs: 15 * 60_000
-  });
-
-  await markTaskMerged(pool, task.id, config.workerId, {
-    localPath,
-    deliveryMode: "direct",
-    pushedTo: task.base_branch,
-    gitStatusBeforeCommit: gitStatus,
-    claudeResult: claudeOutput,
-    pushStdout: push.stdout,
-    pushStderr: push.stderr
-  });
-}
-
-// pr 模式：推 work 分支并用 gh 建 PR，标 success，等 periodic 检测 PR 合并后清理 → merged。
-async function finalizePr(
-  config: WorkerConfig,
-  task: Task,
-  localPath: string,
-  claudeOutput: string,
-  gitStatus: string
-): Promise<void> {
-  const pool = getPool();
   await runCommand("git", ["-C", localPath, "push", "-u", "origin", task.work_branch], {
     timeoutMs: 15 * 60_000
   });
@@ -229,7 +243,7 @@ async function finalizePr(
       "pr",
       "create",
       "--base",
-      task.base_branch,
+      task.target_branch,
       "--head",
       task.work_branch,
       "--title",
@@ -247,8 +261,8 @@ async function finalizePr(
     config.workerId,
     {
       localPath,
-      deliveryMode: "pr",
-      gitStatusBeforeCommit: gitStatus,
+      submitMode: "pr",
+      gitStatusBeforeCommit: status.stdout,
       claudeResult: claudeOutput,
       prStdout: pr.stdout,
       prStderr: pr.stderr
@@ -257,7 +271,7 @@ async function finalizePr(
   );
 }
 
-// 新任务：建分支后跑第一轮 Claude。
+// 新任务：工作类建分支后跑第一轮 Claude；问答类跳过 git，只读对话。
 export async function executeTask(config: WorkerConfig, task: Task): Promise<void> {
   const pool = getPool();
   await markTaskRunning(pool, task.id, config.workerId);
@@ -268,15 +282,18 @@ export async function executeTask(config: WorkerConfig, task: Task): Promise<voi
       throw new Error(`No local path linked for task ${task.id}`);
     }
 
+    if (task.task_type === "qa") {
+      const turn = await runClaudeJson(config, { prompt: qaPrompt(task), cwd: localPath });
+      await handleQaTurn(config, task, turn);
+      return;
+    }
+
     await runCommand("git", ["-C", localPath, "fetch", "origin"], { timeoutMs: 10 * 60_000 });
     await runCommand("git", ["-C", localPath, "checkout", task.base_branch], { timeoutMs: 5 * 60_000 });
     await runCommand("git", ["-C", localPath, "pull", "--ff-only", "origin", task.base_branch], {
       timeoutMs: 10 * 60_000
     });
-    // direct 模式直接在 base 上工作并推回 base，不建 work 分支；pr 模式从 base 切出 work 分支。
-    if (task.delivery_mode !== "direct") {
-      await runCommand("git", ["-C", localPath, "checkout", "-B", task.work_branch], { timeoutMs: 5 * 60_000 });
-    }
+    await runCommand("git", ["-C", localPath, "checkout", "-B", task.work_branch], { timeoutMs: 5 * 60_000 });
 
     const turn = await runClaudeJson(config, { prompt: taskPrompt(task), cwd: localPath });
     await handleClaudeTurn(config, task, localPath, turn);
@@ -307,6 +324,16 @@ export async function resumeTask(config: WorkerConfig, task: Task): Promise<void
       return;
     }
 
+    if (task.task_type === "qa") {
+      const turn = await runClaudeJson(config, {
+        prompt: qaResumePrompt(reply),
+        cwd: localPath,
+        resumeSessionId: task.claude_session_id
+      });
+      await handleQaTurn(config, task, turn);
+      return;
+    }
+
     const turn = await runClaudeJson(config, {
       prompt: resumePrompt(reply),
       cwd: localPath,
@@ -330,8 +357,8 @@ async function runTolerant(args: string[]): Promise<{ ok: boolean; detail: strin
   }
 }
 
-// periodic 清理（PR 模式）：查 PR 是否已合并。已合并则把本地切回 base 并更新、删本地/远端 work
-// 分支、转 merged；未合并仅打时间戳参与下轮轮转。checkout/pull 出错兜底为打时间戳重试，不丢「已合并」。
+// periodic 清理（仅 PR 模式）：查 PR 是否已合并。已合并则把本地切回签出分支并更新、删本地/远端
+// 工作分支、转 merged；未合并仅打时间戳参与下轮轮转。checkout/pull 出错兜底为打时间戳重试，不丢「已合并」。
 export async function cleanupMergedTask(config: WorkerConfig, task: Task): Promise<void> {
   const pool = getPool();
   try {
@@ -352,13 +379,13 @@ export async function cleanupMergedTask(config: WorkerConfig, task: Task): Promi
       return;
     }
 
-    // 已合并：把本地仓库切回 base 并拉进合并后的改动，再删本地/远端 work 分支。
+    // 已合并：把本地仓库切回签出分支并拉进改动，再删本地/远端工作分支。
     await runCommand("git", ["-C", localPath, "fetch", "origin", "--prune"], { timeoutMs: 10 * 60_000 });
     await runCommand("git", ["-C", localPath, "checkout", task.base_branch], { timeoutMs: 5 * 60_000 });
     await runCommand("git", ["-C", localPath, "pull", "--ff-only", "origin", task.base_branch], {
       timeoutMs: 10 * 60_000
     });
-    // squash/rebase 合并时 base 没有 work 分支的提交，必须 -D 强删；远端可能已被 GitHub 自动删除。
+    // squash/rebase 合并时签出分支没有工作分支的提交，必须 -D 强删；远端可能已被 GitHub 自动删除。
     const localBranchDeleted = await runTolerant(["-C", localPath, "branch", "-D", task.work_branch]);
     const remoteBranchDeleted = await runTolerant(["-C", localPath, "push", "origin", "--delete", task.work_branch]);
 
@@ -369,7 +396,7 @@ export async function cleanupMergedTask(config: WorkerConfig, task: Task): Promi
       remoteBranchDeleted
     });
   } catch (error) {
-    // PR 已合并但本地清理失败（如 base 切换/拉取出错）：打时间戳退到轮转队尾，下轮重试，不丢「已合并」。
+    // PR 已合并但本地清理失败（如签出分支切换/拉取出错）：打时间戳退到轮转队尾，下轮重试，不丢「已合并」。
     await setTaskMergeChecked(pool, task.id, config.workerId);
     await addTaskEvent(
       pool,
