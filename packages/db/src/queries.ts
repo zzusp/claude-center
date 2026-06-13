@@ -1,5 +1,5 @@
 import type pg from "pg";
-import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, Worker } from "./types.js";
+import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, TaskSubmitMode, Worker } from "./types.js";
 
 export type WorkerRegistration = {
   id: string;
@@ -37,6 +37,11 @@ export async function createProject(
   return result.rows[0]!;
 }
 
+export async function getProject(client: pg.Pool | pg.PoolClient, id: string): Promise<Project | null> {
+  const result = await client.query<Project>(`SELECT * FROM projects WHERE id = $1 LIMIT 1`, [id]);
+  return result.rows[0] ?? null;
+}
+
 export async function createTask(
   client: pg.Pool | pg.PoolClient,
   input: {
@@ -45,13 +50,15 @@ export async function createTask(
     description: string;
     baseBranch: string;
     workBranch: string;
+    targetBranch: string;
+    submitMode: TaskSubmitMode;
     targetFiles: string[];
     priority: number;
   }
 ): Promise<Task> {
   const result = await client.query<Task>(
-    `INSERT INTO tasks (project_id, title, description, base_branch, work_branch, target_files, priority)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO tasks (project_id, title, description, base_branch, work_branch, target_branch, submit_mode, target_files, priority)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
     [
       input.projectId,
@@ -59,6 +66,8 @@ export async function createTask(
       input.description,
       input.baseBranch,
       input.workBranch,
+      input.targetBranch,
+      input.submitMode,
       input.targetFiles,
       input.priority
     ]
