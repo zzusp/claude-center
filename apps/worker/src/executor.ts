@@ -8,9 +8,11 @@ import {
   markDirectCommandRunning,
   markDirectCommandSuccess,
   markTaskFailed,
+  markTaskMerged,
   markTaskRunning,
   markTaskSuccess,
   setTaskClaudeSession,
+  setTaskMergeChecked,
   setTaskWaiting,
   type DirectCommand,
   type Task
@@ -152,7 +154,8 @@ async function handleClaudeTurn(config: WorkerConfig, task: Task, localPath: str
   await finalizeTask(config, task, localPath, turn.result);
 }
 
-// 收尾：无改动直接成功；有改动则提交、推送并用 gh 创建 PR。
+// 收尾：无改动直接成功；有改动则提交后按投递模式分叉——
+// pr 模式推 work 分支 + 建 PR（待 periodic 检测合并后清理）；direct 模式直接推 base，落地即 merged。
 async function finalizeTask(config: WorkerConfig, task: Task, localPath: string, claudeOutput: string): Promise<void> {
   const pool = getPool();
   const status = await runCommand("git", ["-C", localPath, "status", "--porcelain"], { timeoutMs: 60_000 });
@@ -161,7 +164,7 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
       pool,
       task.id,
       config.workerId,
-      { localPath, noChanges: true, claudeResult: claudeOutput },
+      { localPath, noChanges: true, deliveryMode: task.delivery_mode, claudeResult: claudeOutput },
       null
     );
     return;
@@ -175,6 +178,47 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
   await runCommand("git", ["-C", localPath, "commit", "-m", `ClaudeCenter task: ${task.title}`], {
     timeoutMs: 5 * 60_000
   });
+
+  if (task.delivery_mode === "direct") {
+    await finalizeDirect(config, task, localPath, claudeOutput, status.stdout);
+  } else {
+    await finalizePr(config, task, localPath, claudeOutput, status.stdout);
+  }
+}
+
+// direct 模式：把 base 分支上的本地提交直接推到远端 base，落地即 merged（无 PR、无需后续清理）。
+async function finalizeDirect(
+  config: WorkerConfig,
+  task: Task,
+  localPath: string,
+  claudeOutput: string,
+  gitStatus: string
+): Promise<void> {
+  const pool = getPool();
+  const push = await runCommand("git", ["-C", localPath, "push", "origin", `HEAD:${task.base_branch}`], {
+    timeoutMs: 15 * 60_000
+  });
+
+  await markTaskMerged(pool, task.id, config.workerId, {
+    localPath,
+    deliveryMode: "direct",
+    pushedTo: task.base_branch,
+    gitStatusBeforeCommit: gitStatus,
+    claudeResult: claudeOutput,
+    pushStdout: push.stdout,
+    pushStderr: push.stderr
+  });
+}
+
+// pr 模式：推 work 分支并用 gh 建 PR，标 success，等 periodic 检测 PR 合并后清理 → merged。
+async function finalizePr(
+  config: WorkerConfig,
+  task: Task,
+  localPath: string,
+  claudeOutput: string,
+  gitStatus: string
+): Promise<void> {
+  const pool = getPool();
   await runCommand("git", ["-C", localPath, "push", "-u", "origin", task.work_branch], {
     timeoutMs: 15 * 60_000
   });
@@ -203,7 +247,8 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
     config.workerId,
     {
       localPath,
-      gitStatusBeforeCommit: status.stdout,
+      deliveryMode: "pr",
+      gitStatusBeforeCommit: gitStatus,
       claudeResult: claudeOutput,
       prStdout: pr.stdout,
       prStderr: pr.stderr
@@ -228,7 +273,10 @@ export async function executeTask(config: WorkerConfig, task: Task): Promise<voi
     await runCommand("git", ["-C", localPath, "pull", "--ff-only", "origin", task.base_branch], {
       timeoutMs: 10 * 60_000
     });
-    await runCommand("git", ["-C", localPath, "checkout", "-B", task.work_branch], { timeoutMs: 5 * 60_000 });
+    // direct 模式直接在 base 上工作并推回 base，不建 work 分支；pr 模式从 base 切出 work 分支。
+    if (task.delivery_mode !== "direct") {
+      await runCommand("git", ["-C", localPath, "checkout", "-B", task.work_branch], { timeoutMs: 5 * 60_000 });
+    }
 
     const turn = await runClaudeJson(config, { prompt: taskPrompt(task), cwd: localPath });
     await handleClaudeTurn(config, task, localPath, turn);
@@ -269,6 +317,68 @@ export async function resumeTask(config: WorkerConfig, task: Task): Promise<void
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
       failedAt: new Date().toISOString()
     });
+  }
+}
+
+// 容错执行：清理里「可能本就不存在」的删分支操作，失败只回报、不抛，避免挡住 merged 迁移。
+async function runTolerant(args: string[]): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const result = await runCommand("git", args, { timeoutMs: 5 * 60_000 });
+    return { ok: true, detail: result.stdout.trim() || result.stderr.trim() };
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// periodic 清理（PR 模式）：查 PR 是否已合并。已合并则把本地切回 base 并更新、删本地/远端 work
+// 分支、转 merged；未合并仅打时间戳参与下轮轮转。checkout/pull 出错兜底为打时间戳重试，不丢「已合并」。
+export async function cleanupMergedTask(config: WorkerConfig, task: Task): Promise<void> {
+  const pool = getPool();
+  try {
+    const localPath = await getTaskLocalPath(pool, task.id, config.workerId);
+    if (!localPath || !task.pr_url) {
+      await setTaskMergeChecked(pool, task.id, config.workerId);
+      return;
+    }
+
+    const view = await runCommand(config.ghCommand, ["pr", "view", task.pr_url, "--json", "state,mergedAt,url"], {
+      cwd: localPath,
+      timeoutMs: 60_000
+    });
+    const pr = JSON.parse(view.stdout) as { state?: string; mergedAt?: string | null };
+
+    if (pr.state !== "MERGED") {
+      await setTaskMergeChecked(pool, task.id, config.workerId);
+      return;
+    }
+
+    // 已合并：把本地仓库切回 base 并拉进合并后的改动，再删本地/远端 work 分支。
+    await runCommand("git", ["-C", localPath, "fetch", "origin", "--prune"], { timeoutMs: 10 * 60_000 });
+    await runCommand("git", ["-C", localPath, "checkout", task.base_branch], { timeoutMs: 5 * 60_000 });
+    await runCommand("git", ["-C", localPath, "pull", "--ff-only", "origin", task.base_branch], {
+      timeoutMs: 10 * 60_000
+    });
+    // squash/rebase 合并时 base 没有 work 分支的提交，必须 -D 强删；远端可能已被 GitHub 自动删除。
+    const localBranchDeleted = await runTolerant(["-C", localPath, "branch", "-D", task.work_branch]);
+    const remoteBranchDeleted = await runTolerant(["-C", localPath, "push", "origin", "--delete", task.work_branch]);
+
+    await markTaskMerged(pool, task.id, config.workerId, {
+      mergedAt: pr.mergedAt ?? null,
+      cleanedUpAt: new Date().toISOString(),
+      localBranchDeleted,
+      remoteBranchDeleted
+    });
+  } catch (error) {
+    // PR 已合并但本地清理失败（如 base 切换/拉取出错）：打时间戳退到轮转队尾，下轮重试，不丢「已合并」。
+    await setTaskMergeChecked(pool, task.id, config.workerId);
+    await addTaskEvent(
+      pool,
+      task.id,
+      config.workerId,
+      "cleanup_retry",
+      error instanceof Error ? error.message : String(error),
+      {}
+    );
   }
 }
 

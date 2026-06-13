@@ -1,6 +1,18 @@
-export type TaskStatus = "pending" | "claimed" | "running" | "waiting" | "success" | "failed" | "cancelled";
-export type DirectCommandStatus = TaskStatus;
+export type TaskStatus =
+  | "pending"
+  | "claimed"
+  | "running"
+  | "waiting"
+  | "success"
+  | "merged"
+  | "failed"
+  | "cancelled";
+// direct_commands 没有 merged 终态,沿用任务状态里除 merged 外的子集。
+export type DirectCommandStatus = Exclude<TaskStatus, "merged">;
 export type DirectCommandName = "shell" | "claude_prompt";
+
+// 任务投递模式：pr=开 PR 等合并后清理；direct=直接 commit+push 到 base 分支。
+export type DeliveryMode = "pr" | "direct";
 
 export type Project = {
   id: string;
@@ -48,6 +60,8 @@ export type Task = {
   target_files: string[];
   priority: number;
   status: TaskStatus;
+  delivery_mode: DeliveryMode;
+  merge_checked_at: string | null;
   claimed_by: string | null;
   claimed_at: string | null;
   started_at: string | null;

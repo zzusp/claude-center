@@ -41,7 +41,7 @@ type Overview = {
 
 type ViewKey = "dashboard" | "tasks" | "workers" | "projects";
 type DetailTab = "overview" | "timeline" | "logs" | "conversation";
-type Tone = "success" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting";
+type Tone = "success" | "merged" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting";
 
 const emptyOverview: Overview = {
   projects: [],
@@ -59,6 +59,7 @@ const STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> 
   running: { glyph: "◐", label: "执行中", tone: "running" },
   waiting: { glyph: "⏸", label: "等待回复", tone: "waiting" },
   success: { glyph: "●", label: "已完成", tone: "success" },
+  merged: { glyph: "✔", label: "已合并", tone: "merged" },
   failed: { glyph: "✕", label: "失败", tone: "failed" },
   cancelled: { glyph: "—", label: "已取消", tone: "cancelled" },
   online: { glyph: "●", label: "在线", tone: "success" },
@@ -67,6 +68,7 @@ const STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> 
 
 const TONE_COLOR: Record<Tone, string> = {
   success: "var(--success)",
+  merged: "var(--merged)",
   running: "var(--running)",
   pending: "var(--pending)",
   failed: "var(--failed)",
@@ -227,7 +229,8 @@ export default function Dashboard() {
         baseBranch: data.get("baseBranch"),
         workBranch: data.get("workBranch"),
         targetFilesText: data.get("targetFilesText"),
-        priority: Number(data.get("priority") || 0)
+        priority: Number(data.get("priority") || 0),
+        deliveryMode: data.get("deliveryMode")
       });
       form.reset();
       await loadOverview();
@@ -392,7 +395,7 @@ function DashboardView({
   const recentTasks = overview.tasks.slice(0, 7);
   const failedTasks = overview.tasks.filter((task) => task.status === "failed").slice(0, 4);
 
-  const donutSegments = (["running", "waiting", "pending", "claimed", "success", "failed", "cancelled"] as const)
+  const donutSegments = (["running", "waiting", "pending", "claimed", "success", "merged", "failed", "cancelled"] as const)
     .map((status) => ({
       status,
       label: metaOf(status).label,
@@ -733,9 +736,20 @@ function ComposeTaskCard({
             </label>
             <textarea name="targetFilesText" rows={3} placeholder={"src/app.tsx\nsrc/lib/auth.ts"} />
           </div>
-          <div className="field">
-            <label className="field-label">优先级</label>
-            <input name="priority" type="number" defaultValue={0} />
+          <div className="form-row">
+            <div className="field">
+              <label className="field-label">
+                投递模式 <span className="field-hint">direct 直推 base 不开 PR</span>
+              </label>
+              <select name="deliveryMode" defaultValue="pr">
+                <option value="pr">PR（开 PR 等合并后清理）</option>
+                <option value="direct">直推（commit 直接推到基准分支）</option>
+              </select>
+            </div>
+            <div className="field">
+              <label className="field-label">优先级</label>
+              <input name="priority" type="number" defaultValue={0} />
+            </div>
           </div>
           <button className="btn btn-primary" disabled={busy || overview.projects.length === 0} type="submit">
             <Send size={16} />
@@ -778,7 +792,13 @@ function TaskDetail({
     },
     {
       label:
-        task.status === "failed" ? "执行失败" : task.status === "cancelled" ? "已取消" : "执行完成",
+        task.status === "failed"
+          ? "执行失败"
+          : task.status === "cancelled"
+            ? "已取消"
+            : task.status === "merged"
+              ? "已合并落地"
+              : "执行完成",
       time: task.finished_at,
       state: task.finished_at ? "done" : "idle"
     }
@@ -835,8 +855,9 @@ function TaskDetail({
           <div className="kv">
             <KvRow k="项目" v={task.project_name ?? task.project_id} />
             <KvRow k="描述" v={task.description} />
+            <KvRow k="投递模式" v={task.delivery_mode === "direct" ? "直推基准分支" : "PR"} />
             <KvRow k="基准分支" v={task.base_branch} mono />
-            <KvRow k="工作分支" v={task.work_branch} mono />
+            <KvRow k="工作分支" v={task.delivery_mode === "direct" ? "—（直推）" : task.work_branch} mono />
             <KvRow k="优先级" v={String(task.priority)} />
             <KvRow
               k="目标文件"

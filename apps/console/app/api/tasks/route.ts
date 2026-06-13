@@ -1,4 +1,4 @@
-import { createTask, getPool } from "@claude-center/db";
+import { createTask, getPool, type DeliveryMode } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 
 function defaultWorkBranch(title: string): string {
@@ -20,6 +20,7 @@ export async function POST(request: NextRequest) {
       workBranch?: string;
       targetFilesText?: string;
       priority?: number;
+      deliveryMode?: string;
     };
 
     if (!body.projectId || !body.title?.trim() || !body.description?.trim()) {
@@ -31,6 +32,8 @@ export async function POST(request: NextRequest) {
       .map((line) => line.trim())
       .filter(Boolean);
 
+    const deliveryMode: DeliveryMode = body.deliveryMode === "direct" ? "direct" : "pr";
+
     const task = await createTask(getPool(), {
       projectId: body.projectId,
       title: body.title.trim(),
@@ -38,7 +41,8 @@ export async function POST(request: NextRequest) {
       baseBranch: body.baseBranch?.trim() || "main",
       workBranch: body.workBranch?.trim() || defaultWorkBranch(body.title),
       targetFiles,
-      priority: Number.isFinite(body.priority) ? Number(body.priority) : 0
+      priority: Number.isFinite(body.priority) ? Number(body.priority) : 0,
+      deliveryMode
     });
 
     return NextResponse.json({ task }, { status: 201 });

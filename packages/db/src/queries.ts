@@ -1,5 +1,14 @@
 import type pg from "pg";
-import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, Worker } from "./types.js";
+import type {
+  DeliveryMode,
+  DirectCommand,
+  DirectCommandName,
+  Project,
+  Task,
+  TaskComment,
+  TaskCommentAuthor,
+  Worker
+} from "./types.js";
 
 export type WorkerRegistration = {
   id: string;
@@ -47,11 +56,12 @@ export async function createTask(
     workBranch: string;
     targetFiles: string[];
     priority: number;
+    deliveryMode: DeliveryMode;
   }
 ): Promise<Task> {
   const result = await client.query<Task>(
-    `INSERT INTO tasks (project_id, title, description, base_branch, work_branch, target_files, priority)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO tasks (project_id, title, description, base_branch, work_branch, target_files, priority, delivery_mode)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
     [
       input.projectId,
@@ -60,7 +70,8 @@ export async function createTask(
       input.baseBranch,
       input.workBranch,
       input.targetFiles,
-      input.priority
+      input.priority,
+      input.deliveryMode
     ]
   );
   return result.rows[0]!;
@@ -256,6 +267,60 @@ export async function markTaskFailed(
     [taskId, workerId, errorMessage, resultPayload]
   );
   await addTaskEvent(client, taskId, workerId, "failed", errorMessage, resultPayload);
+}
+
+// PR 已合并并完成本地清理 / 直推已落地：进入终态 merged。resultPayload 合并进既有 result，
+// 不丢之前 success 阶段写入的内容。
+export async function markTaskMerged(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  workerId: string,
+  resultPayload: Record<string, unknown>
+): Promise<void> {
+  await client.query(
+    `UPDATE tasks
+        SET status = 'merged',
+            finished_at = COALESCE(finished_at, now()),
+            merge_checked_at = now(),
+            result = result || $3::jsonb,
+            updated_at = now()
+      WHERE id = $1 AND claimed_by = $2`,
+    [taskId, workerId, resultPayload]
+  );
+  await addTaskEvent(client, taskId, workerId, "merged", "Task merged and cleaned up", resultPayload);
+}
+
+// 清理候选（PR 模式）：本 worker 的、已建 PR 的 success 任务，按 merge_checked_at 轮转取最久未查
+// 的一个（NULL 优先）。只读不翻状态——清理是否发生由 cleanupMergedTask 依据 PR 合并状态决定。
+export async function claimNextCleanupCandidate(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `SELECT *
+       FROM tasks
+      WHERE status = 'success'
+        AND claimed_by = $1
+        AND pr_url IS NOT NULL
+      ORDER BY merge_checked_at ASC NULLS FIRST
+      LIMIT 1`,
+    [workerId]
+  );
+  return result.rows[0] ?? null;
+}
+
+// PR 尚未合并：仅打检查时间戳，让该任务退到轮转队尾，下次优先查更久未查的。
+export async function setTaskMergeChecked(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  workerId: string
+): Promise<void> {
+  await client.query(
+    `UPDATE tasks
+        SET merge_checked_at = now()
+      WHERE id = $1 AND claimed_by = $2`,
+    [taskId, workerId]
+  );
 }
 
 // 续接：认领本 Worker 自己的、已收到新用户回复的等待中任务（原子翻转为 running）。
