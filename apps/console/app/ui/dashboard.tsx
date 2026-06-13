@@ -113,6 +113,13 @@ function fmtAgo(value: string | null): string {
   return `${Math.round(h / 24)} 天前`;
 }
 
+function syncAgo(value: string, now: number): string {
+  const s = Math.max(0, Math.round((now - new Date(value).getTime()) / 1000));
+  if (s < 2) return "刚刚";
+  if (s < 60) return `${s} 秒前`;
+  return `${Math.floor(s / 60)} 分钟前`;
+}
+
 export default function Dashboard() {
   const [overview, setOverview] = useState<Overview>(emptyOverview);
   const [history, setHistory] = useState<Record<"online" | "pending" | "running" | "failed", number[]>>({
@@ -318,10 +325,7 @@ export default function Dashboard() {
             <p className="page-sub">{pageMeta[view].sub}</p>
           </div>
           <div className="topbar-actions">
-            <span className="sync">
-              <RadioTower size={15} />
-              <span className="sync-text">{message}</span>
-            </span>
+            <SyncStatus synced={synced} message={message} lastSyncAt={lastSyncAt} />
           </div>
         </header>
 
@@ -1255,6 +1259,36 @@ function ProjectsView({
 }
 
 /* ============================== Shared bits ============================== */
+
+function SyncStatus({
+  synced,
+  message,
+  lastSyncAt
+}: {
+  synced: boolean;
+  message: string;
+  lastSyncAt: string | null;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const ago = synced && lastSyncAt ? syncAgo(lastSyncAt, now) : null;
+
+  return (
+    <span className="sync" data-live={synced ? "on" : "off"}>
+      <span className={`dot${synced ? " pulse" : ""}`} data-tone={synced ? "online" : "offline"} />
+      <span className="sync-text">{message}</span>
+      {ago ? (
+        <span className="sync-ago" key={lastSyncAt}>
+          · {ago}
+        </span>
+      ) : null}
+    </span>
+  );
+}
 
 function StatCard({
   icon,

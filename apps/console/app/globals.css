@@ -282,6 +282,24 @@ a:hover {
   text-overflow: ellipsis;
 }
 
+.sync .sync-ago {
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  animation: cc-flash 0.45s ease-out;
+}
+
+@keyframes cc-flash {
+  from {
+    opacity: 0;
+    transform: translateY(-1px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .view {
   padding: 24px 32px 48px;
   display: flex;
@@ -570,7 +588,8 @@ a:hover {
 
 @media (prefers-reduced-motion: reduce) {
   .dot.pulse,
-  .dot.pulse::after {
+  .dot.pulse::after,
+  .sync .sync-ago {
     animation: none;
   }
 }
