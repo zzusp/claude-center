@@ -409,6 +409,12 @@ function DashboardView({
           icon={<Cpu size={16} />}
           label="在线 Worker"
           value={overview.summary.onlineWorkers}
+          total={overview.workers.length}
+          footLabel={`${
+            overview.workers.length > 0
+              ? Math.round((overview.summary.onlineWorkers / overview.workers.length) * 100)
+              : 0
+          }% 在线率`}
           series={history.online}
           tone="success"
         />
@@ -1260,28 +1266,36 @@ function StatCard({
   icon,
   label,
   value,
+  total,
+  footLabel,
   series,
   tone
 }: {
   icon: React.ReactNode;
   label: string;
   value: number;
+  total?: number;
+  footLabel?: string;
   series: number[];
   tone: Tone;
 }) {
   const prev = series.length >= 2 ? series[series.length - 2] ?? value : value;
   const delta = value - prev;
+  const trend = delta === 0 ? "较昨日 持平" : `较昨日 ${delta > 0 ? "+" : "-"}${Math.abs(delta)}`;
   return (
     <article className="stat-card">
       <div className="stat-head">
-        <span className="ico">{icon}</span>
+        <span className="ico" style={{ color: TONE_COLOR[tone] }}>
+          {icon}
+        </span>
         {label}
       </div>
-      <div className="stat-value">{value}</div>
+      <div className="stat-value">
+        {value}
+        {typeof total === "number" ? <span className="unit">/ {total}</span> : null}
+      </div>
       <div className="stat-foot">
-        <span className="stat-trend">
-          {delta === 0 ? "持平" : delta > 0 ? `↑ ${delta}` : `↓ ${Math.abs(delta)}`}
-        </span>
+        <span className="stat-trend">{footLabel ?? trend}</span>
         <Sparkline data={series} tone={tone} />
       </div>
     </article>
