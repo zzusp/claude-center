@@ -154,6 +154,7 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
   const router = useRouter();
   const [view, setView] = useState<ViewKey>("dashboard");
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [projectDrawerOpen, setProjectDrawerOpen] = useState(false);
 
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [selectedWorkerId, setSelectedWorkerId] = useState("");
@@ -228,6 +229,7 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
       });
       form.reset();
       await loadOverview();
+      setProjectDrawerOpen(false);
       setMessage("项目已创建");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "项目创建失败");
@@ -410,8 +412,7 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
           {view === "projects" ? (
             <ProjectsView
               overview={overview}
-              busy={busy}
-              onSubmitProject={handleProjectSubmit}
+              onOpenCompose={() => setProjectDrawerOpen(true)}
               canManageProjects={can.createProject}
             />
           ) : null}
@@ -429,6 +430,13 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
         onSelectProject={setSelectedProjectId}
         onSubmitTask={handleTaskSubmit}
         canCreateTask={can.createTask}
+      />
+
+      <ProjectDrawer
+        open={projectDrawerOpen}
+        busy={busy}
+        onClose={() => setProjectDrawerOpen(false)}
+        onSubmit={handleProjectSubmit}
       />
     </div>
   );
@@ -1055,6 +1063,45 @@ function ComposeTaskForm({
   );
 }
 
+// 通用右侧抽屉外壳：backdrop + 滑入面板 + 头部标题/关闭 + 滚动内容区，Esc 关闭。
+// 任务发布、新建项目、用户编辑等表单统一套用，保证三处列表的「点击 → 右侧抽屉」交互一致。
+function Drawer({
+  open,
+  title,
+  onClose,
+  children
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  // Esc 关闭
+  useEffect(() => {
+    if (!open) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  return (
+    <>
+      <div className={`drawer-backdrop${open ? " open" : ""}`} onClick={onClose} />
+      <aside className={`drawer${open ? " open" : ""}`} aria-hidden={!open}>
+        <div className="drawer-head">
+          <h2 className="detail-title">{title}</h2>
+          <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="drawer-scroll drawer-pad">{children}</div>
+      </aside>
+    </>
+  );
+}
+
 function TaskDrawer({
   open,
   busy,
@@ -1074,49 +1121,58 @@ function TaskDrawer({
   onSubmitTask: (event: FormEvent<HTMLFormElement>) => void;
   canCreateTask: boolean;
 }) {
-  // Esc 关闭
-  useEffect(() => {
-    if (!open) return;
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
   // 仅用于「发布任务」表单；任务详情已迁至独立路由页 /tasks/[id]。
   return (
-    <>
-      <div className={`drawer-backdrop${open ? " open" : ""}`} onClick={onClose} />
-      <aside className={`drawer${open ? " open" : ""}`} aria-hidden={!open}>
-        {canCreateTask ? (
-          <>
-            <div className="drawer-head">
-              <h2 className="detail-title">发布任务</h2>
-              <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="drawer-scroll drawer-pad">
-              <ComposeTaskForm
-                overview={overview}
-                busy={busy}
-                selectedProjectId={selectedProjectId}
-                onSelectProject={onSelectProject}
-                onSubmit={onSubmitTask}
-              />
-            </div>
-          </>
-        ) : (
-          <div className="drawer-head">
-            <span />
-            <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭">
-              <X size={18} />
-            </button>
-          </div>
-        )}
-      </aside>
-    </>
+    <Drawer open={open} title={canCreateTask ? "发布任务" : ""} onClose={onClose}>
+      {canCreateTask ? (
+        <ComposeTaskForm
+          overview={overview}
+          busy={busy}
+          selectedProjectId={selectedProjectId}
+          onSelectProject={onSelectProject}
+          onSubmit={onSubmitTask}
+        />
+      ) : null}
+    </Drawer>
+  );
+}
+
+function ProjectDrawer({
+  open,
+  busy,
+  onClose,
+  onSubmit
+}: {
+  open: boolean;
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <Drawer open={open} title="新建项目" onClose={onClose}>
+      <form className="form" onSubmit={onSubmit}>
+        <div className="field">
+          <label className="field-label">项目名</label>
+          <input name="name" placeholder="claude-center" required />
+        </div>
+        <div className="field">
+          <label className="field-label">Git 仓库地址</label>
+          <input name="repoUrl" placeholder="https://github.com/acme/repo.git" required />
+        </div>
+        <div className="field">
+          <label className="field-label">默认分支</label>
+          <input name="defaultBranch" placeholder="main" defaultValue="main" />
+        </div>
+        <div className="field">
+          <label className="field-label">描述</label>
+          <textarea name="description" rows={3} placeholder="项目说明" />
+        </div>
+        <button className="btn btn-primary" disabled={busy} type="submit">
+          <Plus size={16} />
+          创建项目
+        </button>
+      </form>
+    </Drawer>
   );
 }
 
@@ -1298,13 +1354,11 @@ function WorkersView({
 
 function ProjectsView({
   overview,
-  busy,
-  onSubmitProject,
+  onOpenCompose,
   canManageProjects
 }: {
   overview: Overview;
-  busy: boolean;
-  onSubmitProject: (event: FormEvent<HTMLFormElement>) => void;
+  onOpenCompose: () => void;
   canManageProjects: boolean;
 }) {
   return (
@@ -1314,92 +1368,59 @@ function ProjectsView({
           <h2 className="section-title">代码项目</h2>
           <span className="section-sub">{overview.projects.length} 个项目</span>
         </div>
-      </div>
-
-      <div className="grid-tasks">
-        <section className="card">
-          <div className="card-body flush">
-            {overview.projects.length === 0 ? (
-              <Empty
-                icon={<FolderGit2 size={28} />}
-                text={canManageProjects ? "暂无项目，请在右侧创建" : "暂无可访问的项目"}
-              />
-            ) : (
-              <div className="table-wrap">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>项目</th>
-                      <th>仓库</th>
-                      <th>默认分支</th>
-                      <th className="t-right">创建于</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {overview.projects.map((project) => (
-                      <tr key={project.id} style={{ cursor: "default" }}>
-                        <td>
-                          <div className="cell-stack">
-                            <span className="t-title">{project.name}</span>
-                            {project.description ? (
-                              <span className="t-meta">{project.description}</span>
-                            ) : null}
-                          </div>
-                        </td>
-                        <td className="mono">{project.repo_url}</td>
-                        <td>
-                          <span className="tag">
-                            <GitBranch size={13} className="ico" />
-                            {project.default_branch}
-                          </span>
-                        </td>
-                        <td className="t-right t-num">{fmtTime(project.created_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </section>
-
         {canManageProjects ? (
-        <div className="col">
-          <section className="card detail">
-            <div className="card-head">
-              <h2 className="card-title">
-                <Plus size={16} className="ico" />
-                新建项目
-              </h2>
-            </div>
-            <div className="card-body">
-              <form className="form" onSubmit={onSubmitProject}>
-                <div className="field">
-                  <label className="field-label">项目名</label>
-                  <input name="name" placeholder="claude-center" required />
-                </div>
-                <div className="field">
-                  <label className="field-label">Git 仓库地址</label>
-                  <input name="repoUrl" placeholder="https://github.com/acme/repo.git" required />
-                </div>
-                <div className="field">
-                  <label className="field-label">默认分支</label>
-                  <input name="defaultBranch" placeholder="main" defaultValue="main" />
-                </div>
-                <div className="field">
-                  <label className="field-label">描述</label>
-                  <textarea name="description" rows={3} placeholder="项目说明" />
-                </div>
-                <button className="btn btn-primary" disabled={busy} type="submit">
-                  <Plus size={16} />
-                  创建项目
-                </button>
-              </form>
-            </div>
-          </section>
-        </div>
+          <button type="button" className="btn btn-primary btn-sm" onClick={onOpenCompose}>
+            <Plus size={16} />
+            新建项目
+          </button>
         ) : null}
       </div>
+
+      <section className="card">
+        <div className="card-body flush">
+          {overview.projects.length === 0 ? (
+            <Empty
+              icon={<FolderGit2 size={28} />}
+              text={canManageProjects ? "暂无项目，点击右上角新建项目" : "暂无可访问的项目"}
+            />
+          ) : (
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>项目</th>
+                    <th>仓库</th>
+                    <th>默认分支</th>
+                    <th className="t-right">创建于</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {overview.projects.map((project) => (
+                    <tr key={project.id} style={{ cursor: "default" }}>
+                      <td>
+                        <div className="cell-stack">
+                          <span className="t-title">{project.name}</span>
+                          {project.description ? (
+                            <span className="t-meta">{project.description}</span>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td className="mono">{project.repo_url}</td>
+                      <td>
+                        <span className="tag">
+                          <GitBranch size={13} className="ico" />
+                          {project.default_branch}
+                        </span>
+                      </td>
+                      <td className="t-right t-num">{fmtTime(project.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
     </>
   );
 }
@@ -1656,141 +1677,142 @@ function UsersView({ overview, currentUser }: { overview: Overview; currentUser:
         </div>
         <button
           type="button"
-          className={creating ? "btn btn-sm" : "btn btn-primary btn-sm"}
+          className="btn btn-primary btn-sm"
           onClick={() => {
-            setCreating((value) => !value);
+            setCreating(true);
             setEditing(null);
           }}
         >
           <Plus size={16} />
-          {creating ? "返回列表" : "新建用户"}
+          新建用户
         </button>
       </div>
 
-      <div className="grid-tasks">
-        <section className="card">
-          <div className="card-body flush">
-            {users.length === 0 ? (
-              <Empty icon={<Users size={28} />} text="暂无用户" />
-            ) : (
-              <div className="table-wrap">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>用户</th>
-                      <th>角色</th>
-                      <th>项目</th>
-                      <th className="t-right">操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.map((user) => (
-                      <tr
-                        key={user.id}
-                        className={editing?.id === user.id ? "selected" : ""}
-                        onClick={() => {
-                          setEditing(user);
-                          setCreating(false);
-                        }}
-                      >
-                        <td>
-                          <div className="cell-stack">
-                            <span className="t-title">
-                              {user.display_name || user.username}
-                              {user.id === currentUser.id ? <span className="self-tag">本人</span> : null}
-                            </span>
-                            <span className="t-meta mono">{user.username}</span>
-                          </div>
-                        </td>
-                        <td>
-                          <span className="role-badge" data-role={user.role}>
-                            <ShieldCheck size={12} className="ico" />
-                            {ROLE_LABEL[user.role]}
-                          </span>
-                        </td>
-                        <td>
-                          {user.role === "admin" ? (
-                            <span className="t-meta">全部项目</span>
-                          ) : user.project_ids.length === 0 ? (
-                            <span className="t-meta">—</span>
-                          ) : (
-                            <span className="t-meta">
-                              {user.project_ids.map((id) => projectName.get(id) ?? id).join("、")}
-                            </span>
-                          )}
-                        </td>
-                        <td className="t-right">
-                          <div className="row-actions" onClick={(event) => event.stopPropagation()}>
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              title={user.disabled ? "启用" : "停用"}
-                              disabled={busy || user.id === currentUser.id}
-                              onClick={() => handleToggleDisabled(user)}
-                            >
-                              <Power size={14} data-tone={user.disabled ? "off" : "on"} />
-                            </button>
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              title="编辑"
-                              onClick={() => {
-                                setEditing(user);
-                                setCreating(false);
-                              }}
-                            >
-                              <Pencil size={14} />
-                            </button>
-                            <button
-                              type="button"
-                              className="icon-btn danger"
-                              title="删除"
-                              disabled={busy || user.id === currentUser.id}
-                              onClick={() => handleDelete(user)}
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <div className="col">
-          {creating ? (
-            <UserForm
-              mode="create"
-              projects={overview.projects}
-              onDone={async (note) => {
-                setCreating(false);
-                setMessage(note);
-                await loadUsers();
-              }}
-            />
-          ) : editing ? (
-            <UserForm
-              mode="edit"
-              key={editing.id}
-              user={editing}
-              projects={overview.projects}
-              onDone={async (note) => {
-                setEditing(null);
-                setMessage(note);
-                await loadUsers();
-              }}
-            />
+      <section className="card">
+        <div className="card-body flush">
+          {users.length === 0 ? (
+            <Empty icon={<Users size={28} />} text="暂无用户" />
           ) : (
-            <section className="card detail">
-              <Empty icon={<UserRound size={28} />} text="选择左侧用户编辑，或点击右上角新建用户" />
-            </section>
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>用户</th>
+                    <th>角色</th>
+                    <th>项目</th>
+                    <th className="t-right">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((user) => (
+                    <tr
+                      key={user.id}
+                      className={editing?.id === user.id ? "selected" : ""}
+                      onClick={() => {
+                        setEditing(user);
+                        setCreating(false);
+                      }}
+                    >
+                      <td>
+                        <div className="cell-stack">
+                          <span className="t-title">
+                            {user.display_name || user.username}
+                            {user.id === currentUser.id ? <span className="self-tag">本人</span> : null}
+                          </span>
+                          <span className="t-meta mono">{user.username}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span className="role-badge" data-role={user.role}>
+                          <ShieldCheck size={12} className="ico" />
+                          {ROLE_LABEL[user.role]}
+                        </span>
+                      </td>
+                      <td>
+                        {user.role === "admin" ? (
+                          <span className="t-meta">全部项目</span>
+                        ) : user.project_ids.length === 0 ? (
+                          <span className="t-meta">—</span>
+                        ) : (
+                          <span className="t-meta">
+                            {user.project_ids.map((id) => projectName.get(id) ?? id).join("、")}
+                          </span>
+                        )}
+                      </td>
+                      <td className="t-right">
+                        <div className="row-actions" onClick={(event) => event.stopPropagation()}>
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            title={user.disabled ? "启用" : "停用"}
+                            disabled={busy || user.id === currentUser.id}
+                            onClick={() => handleToggleDisabled(user)}
+                          >
+                            <Power size={14} data-tone={user.disabled ? "off" : "on"} />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            title="编辑"
+                            onClick={() => {
+                              setEditing(user);
+                              setCreating(false);
+                            }}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-btn danger"
+                            title="删除"
+                            disabled={busy || user.id === currentUser.id}
+                            onClick={() => handleDelete(user)}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
-      </div>
+      </section>
+
+      <Drawer
+        open={creating || editing !== null}
+        title={creating ? "新建用户" : editing ? `编辑 ${editing.username}` : ""}
+        onClose={() => {
+          setCreating(false);
+          setEditing(null);
+        }}
+      >
+        {creating ? (
+          <UserForm
+            mode="create"
+            projects={overview.projects}
+            onDone={async (note) => {
+              setCreating(false);
+              setMessage(note);
+              await loadUsers();
+            }}
+          />
+        ) : editing ? (
+          <UserForm
+            mode="edit"
+            key={editing.id}
+            user={editing}
+            projects={overview.projects}
+            onDone={async (note) => {
+              setEditing(null);
+              setMessage(note);
+              await loadUsers();
+            }}
+          />
+        ) : null}
+      </Drawer>
     </>
   );
 }
@@ -1860,74 +1882,64 @@ function UserForm({
   }
 
   return (
-    <section className="card detail">
-      <div className="card-head">
-        <h2 className="card-title">
-          {mode === "create" ? <Plus size={16} className="ico" /> : <Pencil size={16} className="ico" />}
-          {mode === "create" ? "新建用户" : `编辑 ${user?.username ?? ""}`}
-        </h2>
+    <form className="form" onSubmit={handleSubmit}>
+      <div className="field">
+        <label className="field-label">用户名</label>
+        <input name="username" defaultValue={user?.username ?? ""} placeholder="zhang.san" required disabled={mode === "edit"} />
       </div>
-      <div className="card-body">
-        <form className="form" onSubmit={handleSubmit}>
-          <div className="field">
-            <label className="field-label">用户名</label>
-            <input name="username" defaultValue={user?.username ?? ""} placeholder="zhang.san" required disabled={mode === "edit"} />
-          </div>
-          <div className="field">
-            <label className="field-label">显示名</label>
-            <input name="displayName" defaultValue={user?.display_name ?? ""} placeholder="张三" />
-          </div>
-          <div className="field">
-            <label className="field-label">
-              密码 {mode === "edit" ? <span className="field-hint">留空表示不修改</span> : null}
-            </label>
-            <input name="password" type="password" placeholder={mode === "create" ? "初始密码" : "重置为新密码"} required={mode === "create"} />
-          </div>
-          <div className="field">
-            <label className="field-label">角色</label>
-            <Select
-              value={role}
-              onChange={(value) => setRole(value as Role)}
-              options={ROLE_OPTIONS.map((value) => ({ value, label: ROLE_LABEL[value] }))}
-              ariaLabel="角色"
-            />
-          </div>
-          {role === "admin" ? (
-            <div className="field">
-              <label className="field-label">项目范围</label>
-              <div className="scope-hint">管理员可访问全部项目，无需分配。</div>
-            </div>
+      <div className="field">
+        <label className="field-label">显示名</label>
+        <input name="displayName" defaultValue={user?.display_name ?? ""} placeholder="张三" />
+      </div>
+      <div className="field">
+        <label className="field-label">
+          密码 {mode === "edit" ? <span className="field-hint">留空表示不修改</span> : null}
+        </label>
+        <input name="password" type="password" placeholder={mode === "create" ? "初始密码" : "重置为新密码"} required={mode === "create"} />
+      </div>
+      <div className="field">
+        <label className="field-label">角色</label>
+        <Select
+          value={role}
+          onChange={(value) => setRole(value as Role)}
+          options={ROLE_OPTIONS.map((value) => ({ value, label: ROLE_LABEL[value] }))}
+          ariaLabel="角色"
+        />
+      </div>
+      {role === "admin" ? (
+        <div className="field">
+          <label className="field-label">项目范围</label>
+          <div className="scope-hint">管理员可访问全部项目，无需分配。</div>
+        </div>
+      ) : (
+        <div className="field">
+          <label className="field-label">
+            可访问项目 <span className="field-hint">勾选分配给该用户的项目</span>
+          </label>
+          {projects.length === 0 ? (
+            <div className="scope-hint">暂无项目，先到「代码项目」创建。</div>
           ) : (
-            <div className="field">
-              <label className="field-label">
-                可访问项目 <span className="field-hint">勾选分配给该用户的项目</span>
-              </label>
-              {projects.length === 0 ? (
-                <div className="scope-hint">暂无项目，先到「代码项目」创建。</div>
-              ) : (
-                <div className="checkbox-list">
-                  {projects.map((project) => (
-                    <label key={project.id} className="checkbox-row">
-                      <input
-                        type="checkbox"
-                        checked={projectIds.includes(project.id)}
-                        onChange={() => toggleProject(project.id)}
-                      />
-                      <span>{project.name}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
+            <div className="checkbox-list">
+              {projects.map((project) => (
+                <label key={project.id} className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={projectIds.includes(project.id)}
+                    onChange={() => toggleProject(project.id)}
+                  />
+                  <span>{project.name}</span>
+                </label>
+              ))}
             </div>
           )}
-          {error ? <div className="error-box">{error}</div> : null}
-          <button className="btn btn-primary" type="submit" disabled={busy}>
-            {mode === "create" ? <Plus size={16} /> : <Save size={16} />}
-            {mode === "create" ? "创建用户" : "保存修改"}
-          </button>
-        </form>
-      </div>
-    </section>
+        </div>
+      )}
+      {error ? <div className="error-box">{error}</div> : null}
+      <button className="btn btn-primary" type="submit" disabled={busy}>
+        {mode === "create" ? <Plus size={16} /> : <Save size={16} />}
+        {mode === "create" ? "创建用户" : "保存修改"}
+      </button>
+    </form>
   );
 }
 
