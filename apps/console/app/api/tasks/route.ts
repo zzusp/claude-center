@@ -18,6 +18,8 @@ export async function POST(request: NextRequest) {
       description?: string;
       baseBranch?: string;
       workBranch?: string;
+      targetBranch?: string;
+      submitMode?: string;
       targetFilesText?: string;
       priority?: number;
     };
@@ -31,12 +33,17 @@ export async function POST(request: NextRequest) {
       .map((line) => line.trim())
       .filter(Boolean);
 
+    const baseBranch = body.baseBranch?.trim() || "main";
+    const submitMode = body.submitMode === "push" ? "push" : "pr";
+
     const task = await createTask(getPool(), {
       projectId: body.projectId,
       title: body.title.trim(),
       description: body.description.trim(),
-      baseBranch: body.baseBranch?.trim() || "main",
+      baseBranch,
       workBranch: body.workBranch?.trim() || defaultWorkBranch(body.title),
+      targetBranch: body.targetBranch?.trim() || baseBranch,
+      submitMode,
       targetFiles,
       priority: Number.isFinite(body.priority) ? Number(body.priority) : 0
     });

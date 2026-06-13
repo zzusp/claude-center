@@ -226,6 +226,8 @@ export default function Dashboard() {
         description: data.get("description"),
         baseBranch: data.get("baseBranch"),
         workBranch: data.get("workBranch"),
+        targetBranch: data.get("targetBranch"),
+        submitMode: data.get("submitMode"),
         targetFilesText: data.get("targetFilesText"),
         priority: Number(data.get("priority") || 0)
       });
@@ -687,6 +689,46 @@ function ComposeTaskCard({
   onSelectProject: (id: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const [branches, setBranches] = useState<string[]>([]);
+  const [branchState, setBranchState] = useState<"idle" | "loading" | "error">("idle");
+
+  useEffect(() => {
+    if (!selectedProjectId) {
+      setBranches([]);
+      setBranchState("idle");
+      return;
+    }
+    let active = true;
+    setBranchState("loading");
+    fetch(`/api/projects/${selectedProjectId}/branches`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error();
+        const data = (await response.json()) as { branches: string[] };
+        if (active) {
+          setBranches(data.branches);
+          setBranchState("idle");
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setBranches([]);
+          setBranchState("error");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedProjectId]);
+
+  const branchHint =
+    branchState === "loading"
+      ? "拉取分支中…"
+      : branchState === "error"
+        ? "拉取失败，可手填"
+        : branches.length > 0
+          ? `${branches.length} 个远程分支`
+          : "可手动输入";
+
   return (
     <section className="card detail">
       <div className="card-head">
@@ -717,14 +759,36 @@ function ComposeTaskCard({
           </div>
           <div className="form-row">
             <div className="field">
-              <label className="field-label">基准分支</label>
-              <input name="baseBranch" defaultValue="main" />
+              <label className="field-label">
+                签出分支 <span className="field-hint">{branchHint}</span>
+              </label>
+              <input name="baseBranch" list="cc-branch-list" defaultValue="main" placeholder="main" />
             </div>
+            <div className="field">
+              <label className="field-label">
+                PR 目标分支 <span className="field-hint">留空同签出分支</span>
+              </label>
+              <input name="targetBranch" list="cc-branch-list" placeholder="main" />
+            </div>
+          </div>
+          <datalist id="cc-branch-list">
+            {branches.map((branch) => (
+              <option key={branch} value={branch} />
+            ))}
+          </datalist>
+          <div className="form-row">
             <div className="field">
               <label className="field-label">
                 工作分支 <span className="field-hint">留空自动生成</span>
               </label>
               <input name="workBranch" placeholder="cc/..." />
+            </div>
+            <div className="field">
+              <label className="field-label">提交模式</label>
+              <select name="submitMode" defaultValue="pr">
+                <option value="pr">创建 PR</option>
+                <option value="push">直接提交推送</option>
+              </select>
             </div>
           </div>
           <div className="field">
@@ -802,6 +866,9 @@ function TaskDetail({
             <GitBranch size={13} className="ico" />
             {task.base_branch} → {task.work_branch}
           </span>
+          <span className="tag">
+            {task.submit_mode === "push" ? `直推 ${task.target_branch}` : `PR → ${task.target_branch}`}
+          </span>
           {task.pr_url ? (
             <a className="tag" href={task.pr_url} target="_blank" rel="noreferrer">
               <ExternalLink size={13} className="ico" />
@@ -835,8 +902,10 @@ function TaskDetail({
           <div className="kv">
             <KvRow k="项目" v={task.project_name ?? task.project_id} />
             <KvRow k="描述" v={task.description} />
-            <KvRow k="基准分支" v={task.base_branch} mono />
+            <KvRow k="签出分支" v={task.base_branch} mono />
             <KvRow k="工作分支" v={task.work_branch} mono />
+            <KvRow k="目标分支" v={task.target_branch} mono />
+            <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
             <KvRow k="优先级" v={String(task.priority)} />
             <KvRow
               k="目标文件"
