@@ -12,6 +12,8 @@ export type TaskStatus =
   | "failed"
   | "cancelled";
 export type TaskType = "work" | "qa";
+// 合并状态：Console 定时检查 work_branch 是否已并入 target_branch 的结果。unknown 未检查。
+export type MergeStatus = "unknown" | "unmerged" | "merged";
 // direct_commands 没有 merged 终态，也没有 scheduled 定时态，沿用任务状态里的子集。
 export type DirectCommandStatus = Exclude<TaskStatus, "merged" | "scheduled">;
 export type DirectCommandName = "shell" | "claude_prompt";
@@ -97,6 +99,9 @@ export type Task = {
   result: Record<string, unknown>;
   pr_url: string | null;
   merge_checked_at: string | null;
+  // Console 定时检查 work_branch→target_branch 的合并状态；merge_status_checked_at 为其轮转游标。
+  merge_status: MergeStatus;
+  merge_status_checked_at: string | null;
   claude_session_id: string | null;
   // 定时发布时间：scheduled 任务到此刻自动转 pending；非定时任务为 null。
   scheduled_at: string | null;

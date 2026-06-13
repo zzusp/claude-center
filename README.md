@@ -209,6 +209,23 @@ Console 看板用不同徽章区分「已完成（PR 已建待合并）」`succe
 - 验收入口 `POST /api/tasks/[id]/review`（`accept` / `reject`，各在事务内完成）；打回意见落为 user 评论供 Worker 续接读取。
 - 打回重跑（`rerunRejectedTask`）先 `checkout work_branch` 再续接（不同于等待续接的不重建分支），`finalizeTask` 在 PR 已存在时跳过 `gh pr create`、复用原 PR。详见 `docs/spec/task-acceptance-dependencies.md`。
 
+## Console 定时合并检查 + 自动验收
+
+在 Worker 侧 `merged` 清理之外，**Console 后台定时器**也会独立检查「待验收任务的开发分支是否已并入目标分支」，
+合并即**自动验收**——这样即便 Worker 离线，已合并的任务也能自动收口。
+
+- **新增「合并状态」字段** `tasks.merge_status`：`unknown` 未检查 / `unmerged` 未合并 / `merged` 已合并。
+  任务流列表新增「合并状态」筛选器与「合并」展示列。
+- **检测方式**（`apps/console/app/lib/merge-check.ts`）：gh 优先 + git 祖先回退——有 `pr_url` 用
+  `gh pr view --json state` 判 `MERGED`（覆盖 squash/rebase）；gh 不可用（Console 未登录 gh）或无 PR 时，
+  回退到远程 git 祖先判定（临时 bare 仓 fetch 两分支 + `merge-base --is-ancestor`）。
+- **调度器**（`apps/console/instrumentation.ts`）：在定时发布提升之外新增独立的合并检查循环，每轮取一个
+  `success` 待验收工作任务（按 `merge_status_checked_at` 轮转），检测到合并即把任务转 `accepted`、`merge_status='merged'`。
+  默认每 60s 一次，可经 `CLAUDE_CENTER_MERGE_CHECK_INTERVAL_MS` 覆盖；刻意慢于 Worker 轮询，让在线 Worker 优先
+  完成 `merged` + 分支清理，Console 仅兜底离线场景（两侧都以 `status='success'` 为门，谁先翻态另一侧自动落空）。
+- 依赖数据库迁移 `011_task_merge_status.sql`（新增 `merge_status` / `merge_status_checked_at` 列与轮转索引）。
+  升级后先跑 `npm run db:migrate`。详见 `docs/spec/task-merge-status-check.md`。
+
 ## 定时任务（到点自动进入待处理队列）
 
 新建任务时可在发布表单填一个**定时发布**时间（留空则照旧建为 `draft` 草稿、需人工发布）。填了时间的任务落初始态 `scheduled`（定时待发），到点后由 Console 后台调度器自动转为 `pending`，进入可认领队列供在线 Worker 领取——不用人工到点手动点「发布」。

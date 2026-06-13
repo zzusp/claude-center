@@ -13,6 +13,7 @@ import { requirePermission, requireUser } from "../../lib/session";
 export const dynamic = "force-dynamic";
 
 const TASK_STATUSES = ["draft", "scheduled", "pending", "claimed", "running", "waiting", "success", "failed", "cancelled"];
+const MERGE_STATUSES = ["unknown", "unmerged", "merged"];
 const PAGE_SIZES = [20, 50, 100];
 
 export async function GET(request: NextRequest) {
@@ -28,6 +29,11 @@ export async function GET(request: NextRequest) {
       .split(",")
       .map((value) => value.trim())
       .filter((value) => TASK_STATUSES.includes(value));
+
+    const mergeStatus = (params.get("mergeStatus") ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => MERGE_STATUSES.includes(value));
 
     const projectId = params.get("projectId")?.trim() || null;
     const q = params.get("q")?.trim() || null;
@@ -46,6 +52,7 @@ export async function GET(request: NextRequest) {
 
     const { tasks, total } = await listTasks(getPool(), {
       status,
+      mergeStatus,
       projectId,
       projectIds,
       q,
