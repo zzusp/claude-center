@@ -75,6 +75,20 @@ export async function createTask(
   return result.rows[0]!;
 }
 
+// 发布草稿任务：draft → pending，进入可认领队列。WHERE status='draft' 保证只有草稿
+// 可发布，对已认领/运行中/已完成任务无副作用；未命中返回 null（任务不存在或非草稿）。
+export async function publishTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET status = 'pending',
+            updated_at = now()
+      WHERE id = $1 AND status = 'draft'
+      RETURNING *`,
+    [taskId]
+  );
+  return result.rows[0] ?? null;
+}
+
 export async function listRecentTasks(client: pg.Pool | pg.PoolClient, limit = 50): Promise<Task[]> {
   const result = await client.query<Task>(
     `SELECT tasks.*, projects.name AS project_name

@@ -41,7 +41,7 @@ type Overview = {
 
 type ViewKey = "dashboard" | "tasks" | "workers" | "projects";
 type DetailTab = "overview" | "timeline" | "logs" | "conversation";
-type Tone = "success" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting";
+type Tone = "success" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting" | "draft";
 
 const emptyOverview: Overview = {
   projects: [],
@@ -54,6 +54,7 @@ const emptyOverview: Overview = {
 const SPARK_CAP = 24;
 
 const STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> = {
+  draft: { glyph: "✎", label: "草稿", tone: "draft" },
   pending: { glyph: "○", label: "待处理", tone: "pending" },
   claimed: { glyph: "◻", label: "已认领", tone: "queued" },
   running: { glyph: "◐", label: "执行中", tone: "running" },
@@ -72,7 +73,8 @@ const TONE_COLOR: Record<Tone, string> = {
   failed: "var(--failed)",
   cancelled: "var(--cancelled)",
   queued: "var(--queued)",
-  waiting: "var(--waiting)"
+  waiting: "var(--waiting)",
+  draft: "var(--draft)"
 };
 
 function metaOf(status: string) {
@@ -111,6 +113,13 @@ function fmtAgo(value: string | null): string {
   const h = Math.round(m / 60);
   if (h < 24) return `${h} 小时前`;
   return `${Math.round(h / 24)} 天前`;
+}
+
+function syncAgo(value: string, now: number): string {
+  const s = Math.max(0, Math.round((now - new Date(value).getTime()) / 1000));
+  if (s < 2) return "刚刚";
+  if (s < 60) return `${s} 秒前`;
+  return `${Math.floor(s / 60)} 分钟前`;
 }
 
 export default function Dashboard() {
@@ -234,9 +243,30 @@ export default function Dashboard() {
       form.reset();
       await loadOverview();
       setRightMode("detail");
-      setMessage("任务已入队");
+      setMessage("任务已创建为草稿，发布后 Worker 才会认领");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "任务创建失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handlePublishTask(taskId: string) {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "publish" })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? `发布失败：${response.status}`);
+      }
+      await loadOverview();
+      setMessage("任务已发布，进入可认领队列");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "任务发布失败");
     } finally {
       setBusy(false);
     }
@@ -320,10 +350,7 @@ export default function Dashboard() {
             <p className="page-sub">{pageMeta[view].sub}</p>
           </div>
           <div className="topbar-actions">
-            <span className="sync">
-              <RadioTower size={15} />
-              <span className="sync-text">{message}</span>
-            </span>
+            <SyncStatus synced={synced} message={message} lastSyncAt={lastSyncAt} />
           </div>
         </header>
 
@@ -355,6 +382,7 @@ export default function Dashboard() {
               onSetTab={setDetailTab}
               onSetRightMode={setRightMode}
               onSubmitTask={handleTaskSubmit}
+              onPublishTask={handlePublishTask}
             />
           ) : null}
 
@@ -394,7 +422,7 @@ function DashboardView({
   const recentTasks = overview.tasks.slice(0, 7);
   const failedTasks = overview.tasks.filter((task) => task.status === "failed").slice(0, 4);
 
-  const donutSegments = (["running", "waiting", "pending", "claimed", "success", "failed", "cancelled"] as const)
+  const donutSegments = (["running", "waiting", "pending", "draft", "claimed", "success", "failed", "cancelled"] as const)
     .map((status) => ({
       status,
       label: metaOf(status).label,
@@ -411,6 +439,12 @@ function DashboardView({
           icon={<Cpu size={16} />}
           label="在线 Worker"
           value={overview.summary.onlineWorkers}
+          total={overview.workers.length}
+          footLabel={`${
+            overview.workers.length > 0
+              ? Math.round((overview.summary.onlineWorkers / overview.workers.length) * 100)
+              : 0
+          }% 在线率`}
           series={history.online}
           tone="success"
         />
@@ -578,7 +612,8 @@ function TasksView({
   onSelectTask,
   onSetTab,
   onSetRightMode,
-  onSubmitTask
+  onSubmitTask,
+  onPublishTask
 }: {
   overview: Overview;
   selectedTask: Task | null;
@@ -592,6 +627,7 @@ function TasksView({
   onSetTab: (tab: DetailTab) => void;
   onSetRightMode: (mode: "detail" | "compose") => void;
   onSubmitTask: (event: FormEvent<HTMLFormElement>) => void;
+  onPublishTask: (taskId: string) => void;
 }) {
   return (
     <>
@@ -668,7 +704,13 @@ function TasksView({
               onSubmit={onSubmitTask}
             />
           ) : (
-            <TaskDetail task={selectedTask} detailTab={detailTab} onSetTab={onSetTab} />
+            <TaskDetail
+              task={selectedTask}
+              detailTab={detailTab}
+              busy={busy}
+              onSetTab={onSetTab}
+              onPublishTask={onPublishTask}
+            />
           )}
         </div>
       </div>
@@ -814,11 +856,15 @@ function ComposeTaskCard({
 function TaskDetail({
   task,
   detailTab,
-  onSetTab
+  busy,
+  onSetTab,
+  onPublishTask
 }: {
   task: Task | null;
   detailTab: DetailTab;
+  busy: boolean;
   onSetTab: (tab: DetailTab) => void;
+  onPublishTask: (taskId: string) => void;
 }) {
   if (!task) {
     return (
@@ -874,6 +920,17 @@ function TaskDetail({
               <ExternalLink size={13} className="ico" />
               PR
             </a>
+          ) : null}
+          {task.status === "draft" ? (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={busy}
+              onClick={() => onPublishTask(task.id)}
+            >
+              <Send size={14} />
+              发布
+            </button>
           ) : null}
         </div>
       </div>
@@ -1325,32 +1382,70 @@ function ProjectsView({
 
 /* ============================== Shared bits ============================== */
 
+function SyncStatus({
+  synced,
+  message,
+  lastSyncAt
+}: {
+  synced: boolean;
+  message: string;
+  lastSyncAt: string | null;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const ago = synced && lastSyncAt ? syncAgo(lastSyncAt, now) : null;
+
+  return (
+    <span className="sync" data-live={synced ? "on" : "off"}>
+      <span className={`dot${synced ? " pulse" : ""}`} data-tone={synced ? "online" : "offline"} />
+      <span className="sync-text">{message}</span>
+      {ago ? (
+        <span className="sync-ago" key={lastSyncAt}>
+          · {ago}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 function StatCard({
   icon,
   label,
   value,
+  total,
+  footLabel,
   series,
   tone
 }: {
   icon: React.ReactNode;
   label: string;
   value: number;
+  total?: number;
+  footLabel?: string;
   series: number[];
   tone: Tone;
 }) {
   const prev = series.length >= 2 ? series[series.length - 2] ?? value : value;
   const delta = value - prev;
+  const trend = delta === 0 ? "较昨日 持平" : `较昨日 ${delta > 0 ? "+" : "-"}${Math.abs(delta)}`;
   return (
     <article className="stat-card">
       <div className="stat-head">
-        <span className="ico">{icon}</span>
+        <span className="ico" style={{ color: TONE_COLOR[tone] }}>
+          {icon}
+        </span>
         {label}
       </div>
-      <div className="stat-value">{value}</div>
+      <div className="stat-value">
+        {value}
+        {typeof total === "number" ? <span className="unit">/ {total}</span> : null}
+      </div>
       <div className="stat-foot">
-        <span className="stat-trend">
-          {delta === 0 ? "持平" : delta > 0 ? `↑ ${delta}` : `↓ ${Math.abs(delta)}`}
-        </span>
+        <span className="stat-trend">{footLabel ?? trend}</span>
         <Sparkline data={series} tone={tone} />
       </div>
     </article>

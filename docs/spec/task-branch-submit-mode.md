@@ -16,7 +16,7 @@
 
 ## 方案
 
-### 数据模型（迁移 `003_task_target_branch.sql`）
+### 数据模型（迁移 `004_task_target_branch.sql`）
 
 - `base_branch` 语义收敛为「签出分支」（工作起点），列名不变。
 - 新增 `target_branch text NOT NULL DEFAULT 'main'`：PR 模式下是 PR base，push 模式下是直接推送目标。存量行回填为各自的 `base_branch`，保持旧行为。
