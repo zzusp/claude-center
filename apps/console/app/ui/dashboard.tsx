@@ -46,7 +46,7 @@ type Overview = {
 type ViewKey = "dashboard" | "tasks" | "workers" | "projects";
 type DetailTab = "overview" | "timeline" | "logs" | "conversation";
 type TaskSort = "updated" | "created" | "priority";
-type Tone = "success" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting" | "draft";
+type Tone = "success" | "merged" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting" | "draft";
 
 const emptyOverview: Overview = {
   projects: [],
@@ -65,6 +65,7 @@ const STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> 
   running: { glyph: "◐", label: "执行中", tone: "running" },
   waiting: { glyph: "⏸", label: "等待回复", tone: "waiting" },
   success: { glyph: "●", label: "已完成", tone: "success" },
+  merged: { glyph: "✔", label: "已合并", tone: "merged" },
   failed: { glyph: "✕", label: "失败", tone: "failed" },
   cancelled: { glyph: "—", label: "已取消", tone: "cancelled" },
   online: { glyph: "●", label: "在线", tone: "success" },
@@ -73,6 +74,7 @@ const STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> 
 
 const TONE_COLOR: Record<Tone, string> = {
   success: "var(--success)",
+  merged: "var(--merged)",
   running: "var(--running)",
   pending: "var(--pending)",
   failed: "var(--failed)",
@@ -441,7 +443,7 @@ function DashboardView({
   const recentTasks = overview.tasks.slice(0, 7);
   const failedTasks = overview.tasks.filter((task) => task.status === "failed").slice(0, 4);
 
-  const donutSegments = (["running", "waiting", "pending", "draft", "claimed", "success", "failed", "cancelled"] as const)
+  const donutSegments = (["running", "waiting", "pending", "draft", "claimed", "success", "merged", "failed", "cancelled"] as const)
     .map((status) => ({
       status,
       label: metaOf(status).label,
@@ -629,6 +631,7 @@ const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: "running", label: "执行中" },
   { value: "waiting", label: "等待回复" },
   { value: "success", label: "已完成" },
+  { value: "merged", label: "已合并" },
   { value: "failed", label: "失败" },
   { value: "cancelled", label: "已取消" }
 ];
@@ -996,6 +999,7 @@ function ComposeTaskForm({
 const EVENT_LABEL: Record<string, string> = {
   running: "开始执行",
   success: "执行完成",
+  merged: "已合并",
   failed: "执行失败",
   waiting: "等待回复"
 };
@@ -1132,7 +1136,14 @@ function TaskDetailBody({
       state: task.started_at ? (task.status === "running" ? "active" : "done") : "idle"
     },
     {
-      label: task.status === "failed" ? "执行失败" : task.status === "cancelled" ? "已取消" : "执行完成",
+      label:
+        task.status === "failed"
+          ? "执行失败"
+          : task.status === "cancelled"
+            ? "已取消"
+            : task.status === "merged"
+              ? "已合并落地"
+              : "执行完成",
       time: task.finished_at,
       state: task.finished_at ? "done" : "idle"
     }

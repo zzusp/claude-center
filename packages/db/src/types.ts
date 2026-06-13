@@ -1,6 +1,16 @@
-export type TaskStatus = "draft" | "pending" | "claimed" | "running" | "waiting" | "success" | "failed" | "cancelled";
+export type TaskStatus =
+  | "draft"
+  | "pending"
+  | "claimed"
+  | "running"
+  | "waiting"
+  | "success"
+  | "merged"
+  | "failed"
+  | "cancelled";
 export type TaskType = "work" | "qa";
-export type DirectCommandStatus = TaskStatus;
+// direct_commands 没有 merged 终态，沿用任务状态里除 merged 外的子集。
+export type DirectCommandStatus = Exclude<TaskStatus, "merged">;
 export type DirectCommandName = "shell" | "claude_prompt";
 export type TaskSubmitMode = "pr" | "push";
 
@@ -60,6 +70,7 @@ export type Task = {
   error_message: string | null;
   result: Record<string, unknown>;
   pr_url: string | null;
+  merge_checked_at: string | null;
   claude_session_id: string | null;
   created_at: string;
   updated_at: string;

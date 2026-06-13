@@ -19,6 +19,7 @@
 
   /* Status */
   --success: #16a34a;
+  --merged: #059669;
   --running: #2563eb;
   --pending: #f59e0b;
   --failed: #dc2626;
@@ -490,6 +491,10 @@ a:hover {
   color: var(--success);
   background: rgba(22, 163, 74, 0.1);
 }
+.badge[data-tone="merged"] {
+  color: var(--merged);
+  background: rgba(5, 150, 105, 0.12);
+}
 .badge[data-tone="running"] {
   color: var(--running);
   background: rgba(37, 99, 235, 0.1);
@@ -532,6 +537,9 @@ a:hover {
 .dot[data-tone="success"],
 .dot[data-tone="online"] {
   color: var(--success);
+}
+.dot[data-tone="merged"] {
+  color: var(--merged);
 }
 .dot[data-tone="running"] {
   color: var(--running);

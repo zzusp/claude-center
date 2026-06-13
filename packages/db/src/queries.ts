@@ -356,6 +356,60 @@ export async function markTaskFailed(
   await addTaskEvent(client, taskId, workerId, "failed", errorMessage, resultPayload);
 }
 
+// PR 已合并并完成本地清理 / 直推（submit_mode='push'）已落地：进入终态 merged。resultPayload
+// 合并进既有 result，不丢之前 success 阶段写入的内容；finished_at 只在首次设置（直推无 success 中间态）。
+export async function markTaskMerged(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  workerId: string,
+  resultPayload: Record<string, unknown>
+): Promise<void> {
+  await client.query(
+    `UPDATE tasks
+        SET status = 'merged',
+            finished_at = COALESCE(finished_at, now()),
+            merge_checked_at = now(),
+            result = result || $3::jsonb,
+            updated_at = now()
+      WHERE id = $1 AND claimed_by = $2`,
+    [taskId, workerId, resultPayload]
+  );
+  await addTaskEvent(client, taskId, workerId, "merged", "Task merged and cleaned up", resultPayload);
+}
+
+// 清理候选（PR 模式）：本 worker 的、已建 PR 的 success 任务，按 merge_checked_at 轮转取最久未查
+// 的一个（NULL 优先）。只读不翻状态——是否清理由 cleanupMergedTask 依据 PR 合并状态决定。
+export async function claimNextCleanupCandidate(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `SELECT *
+       FROM tasks
+      WHERE status = 'success'
+        AND claimed_by = $1
+        AND pr_url IS NOT NULL
+      ORDER BY merge_checked_at ASC NULLS FIRST
+      LIMIT 1`,
+    [workerId]
+  );
+  return result.rows[0] ?? null;
+}
+
+// PR 尚未合并：仅打检查时间戳，让该任务退到轮转队尾，下次优先查更久未查的。
+export async function setTaskMergeChecked(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  workerId: string
+): Promise<void> {
+  await client.query(
+    `UPDATE tasks
+        SET merge_checked_at = now()
+      WHERE id = $1 AND claimed_by = $2`,
+    [taskId, workerId]
+  );
+}
+
 // 用户在对话区点「结束对话」：把问答类任务收口为 success。仅作用于 task_type='qa'，
 // 避免误关工作类任务（工作类的收尾由 Worker 按 git 改动驱动）。
 export async function completeQaTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
