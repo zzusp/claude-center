@@ -1,5 +1,5 @@
 import type pg from "pg";
-import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, TaskSubmitMode, Worker } from "./types.js";
+import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, TaskEvent, TaskSubmitMode, Worker } from "./types.js";
 
 export type WorkerRegistration = {
   id: string;
@@ -97,6 +97,77 @@ export async function listRecentTasks(client: pg.Pool | pg.PoolClient, limit = 5
       ORDER BY tasks.created_at DESC
       LIMIT $1`,
     [limit]
+  );
+  return result.rows;
+}
+
+export type TaskSort = "updated" | "created" | "priority";
+
+export type ListTasksFilters = {
+  status?: string[];
+  projectId?: string | null;
+  q?: string | null;
+  sort?: TaskSort;
+  limit: number;
+  offset: number;
+};
+
+// 排序白名单：避免把外部输入直接拼进 ORDER BY。
+const TASK_SORT_SQL: Record<TaskSort, string> = {
+  updated: "tasks.updated_at DESC",
+  created: "tasks.created_at DESC",
+  priority: "tasks.priority DESC, tasks.created_at DESC"
+};
+
+// 任务流分页/筛选查询：状态(多选) + 项目 + 关键词(标题/分支)；count(*) OVER() 单次拿总数。
+export async function listTasks(
+  client: pg.Pool | pg.PoolClient,
+  filters: ListTasksFilters
+): Promise<{ tasks: Task[]; total: number }> {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filters.status && filters.status.length > 0) {
+    params.push(filters.status);
+    conditions.push(`tasks.status = ANY($${params.length}::text[])`);
+  }
+  if (filters.projectId) {
+    params.push(filters.projectId);
+    conditions.push(`tasks.project_id = $${params.length}`);
+  }
+  const keyword = filters.q?.trim();
+  if (keyword) {
+    params.push(`%${keyword}%`);
+    conditions.push(`(tasks.title ILIKE $${params.length} OR tasks.work_branch ILIKE $${params.length})`);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const orderBy = TASK_SORT_SQL[filters.sort ?? "updated"];
+
+  params.push(filters.limit);
+  const limitIdx = params.length;
+  params.push(filters.offset);
+  const offsetIdx = params.length;
+
+  const result = await client.query<Task & { total_count: string }>(
+    `SELECT tasks.*, projects.name AS project_name, count(*) OVER() AS total_count
+       FROM tasks
+       JOIN projects ON projects.id = tasks.project_id
+       ${where}
+      ORDER BY ${orderBy}
+      LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    params
+  );
+
+  const total = result.rows[0] ? Number(result.rows[0].total_count) : 0;
+  const tasks = result.rows.map(({ total_count: _total, ...task }) => task as Task);
+  return { tasks, total };
+}
+
+export async function listTaskEvents(client: pg.Pool | pg.PoolClient, taskId: string): Promise<TaskEvent[]> {
+  const result = await client.query<TaskEvent>(
+    `SELECT * FROM task_events WHERE task_id = $1 ORDER BY created_at ASC`,
+    [taskId]
   );
   return result.rows;
 }

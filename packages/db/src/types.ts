@@ -63,6 +63,16 @@ export type Task = {
   updated_at: string;
 };
 
+export type TaskEvent = {
+  id: string;
+  task_id: string;
+  worker_id: string | null;
+  event_type: string;
+  message: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
 export type TaskCommentAuthor = "worker" | "user";
 
 export type TaskComment = {
