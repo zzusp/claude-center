@@ -67,7 +67,7 @@ export function fmtTime(value: string | null): string {
   }).format(new Date(value));
 }
 
-// 完整日期时间：YYYY-MM-dd HH:mm:ss（本地时区）。任务流列表「更新」列用，手动拼接保证分隔符固定。
+// 完整日期时间：YYYY-MM-dd HH:mm:ss（本地时区）。所有列表的时间字段统一用，手动拼接保证分隔符固定。
 export function fmtDateTime(value: string | null): string {
   if (!value) return "—";
   const d = new Date(value);

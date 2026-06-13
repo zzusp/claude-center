@@ -61,7 +61,6 @@ import {
   StatusDot,
   TaskTypeBadge,
   fmtDateTime,
-  fmtTime,
   metaOf,
   postJson,
   type Tone
@@ -553,7 +552,7 @@ function DashboardView({
                             </div>
                           </td>
                           <td className="mono">{task.task_type === "qa" ? "对话" : task.work_branch}</td>
-                          <td className="t-right t-num">{fmtTime(task.updated_at)}</td>
+                          <td className="t-right t-num">{fmtDateTime(task.updated_at)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1335,7 +1334,7 @@ function ProjectsView({
                           {project.default_branch}
                         </span>
                       </td>
-                      <td className="t-right t-num">{fmtTime(project.created_at)}</td>
+                      <td className="t-right t-num">{fmtDateTime(project.created_at)}</td>
                     </tr>
                   ))}
                 </tbody>
