@@ -1,5 +1,6 @@
 import {
   claimNextDirectCommand,
+  claimNextRejectedTask,
   claimNextResumableTask,
   claimNextTask,
   getPool,
@@ -8,7 +9,7 @@ import {
   upsertWorkerProjectLink
 } from "@claude-center/db";
 import { readWorkerConfig, type WorkerConfig } from "./config.js";
-import { executeDirectCommand, executeTask, resumeTask } from "./executor.js";
+import { executeDirectCommand, executeTask, rerunRejectedTask, resumeTask } from "./executor.js";
 
 export class ClaudeCenterWorker {
   private readonly config: WorkerConfig;
@@ -84,6 +85,13 @@ export class ClaudeCenterWorker {
       const resumable = await claimNextResumableTask(getPool(), this.config.workerId);
       if (resumable) {
         await resumeTask(this.config, resumable);
+        return;
+      }
+
+      // 再处理被人工打回的任务，带着打回意见重跑，优先于领取全新任务。
+      const rejected = await claimNextRejectedTask(getPool(), this.config.workerId);
+      if (rejected) {
+        await rerunRejectedTask(this.config, rejected);
         return;
       }
 

@@ -111,6 +111,16 @@ function resumePrompt(reply: string): string {
   ].join("\n");
 }
 
+function rejectionPrompt(feedback: string): string {
+  return [
+    "Your previous implementation was reviewed by the user and sent back for revision. Reviewer feedback:",
+    "",
+    feedback,
+    "",
+    `Revise the implementation on the current branch to address this feedback. Your changes will update the existing PR. If you need a decision before proceeding, use the same ${NEEDS_INPUT_SENTINEL} convention; otherwise finish the revision.`
+  ].join("\n");
+}
+
 function prBody(task: Task, claudeOutput: string): string {
   return [
     `ClaudeCenter task: ${task.id}`,
@@ -178,6 +188,19 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
   await runCommand("git", ["-C", localPath, "push", "-u", "origin", task.work_branch], {
     timeoutMs: 15 * 60_000
   });
+
+  // 打回重跑时 PR 已存在：push 已自动更新该 PR，跳过 `gh pr create`（否则非零退出会把
+  // 任务误标 failed）。首轮 pr_url 为 null，正常建 PR。
+  if (task.pr_url) {
+    await markTaskSuccess(
+      pool,
+      task.id,
+      config.workerId,
+      { localPath, gitStatusBeforeCommit: status.stdout, claudeResult: claudeOutput, prReused: true },
+      task.pr_url
+    );
+    return;
+  }
 
   const pr = await runCommand(
     config.ghCommand,
@@ -261,6 +284,42 @@ export async function resumeTask(config: WorkerConfig, task: Task): Promise<void
 
     const turn = await runClaudeJson(config, {
       prompt: resumePrompt(reply),
+      cwd: localPath,
+      resumeSessionId: task.claude_session_id
+    });
+    await handleClaudeTurn(config, task, localPath, turn);
+  } catch (error) {
+    await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
+      failedAt: new Date().toISOString()
+    });
+  }
+}
+
+// 打回重跑：用户验收不通过并填了打回意见。改动已 commit/push 且工作树可能已被同项目其他
+// 任务切走分支，故先 checkout work_branch 恢复（不同于 resumeTask 不 checkout），再续接同
+// 一 Claude 会话带着打回意见修订。finalizeTask 会因 pr_url 已存在跳过建 PR、复用原 PR。
+export async function rerunRejectedTask(config: WorkerConfig, task: Task): Promise<void> {
+  const pool = getPool();
+
+  try {
+    const localPath = await getTaskLocalPath(pool, task.id, config.workerId);
+    if (!localPath) {
+      throw new Error(`No local path linked for task ${task.id}`);
+    }
+    if (!task.claude_session_id) {
+      throw new Error(`Task ${task.id} has no claude_session_id to rerun`);
+    }
+
+    const feedback = await getPendingReply(pool, task.id);
+    if (!feedback) {
+      throw new Error(`Task ${task.id} was rejected without feedback`);
+    }
+
+    await runCommand("git", ["-C", localPath, "fetch", "origin"], { timeoutMs: 10 * 60_000 });
+    await runCommand("git", ["-C", localPath, "checkout", task.work_branch], { timeoutMs: 5 * 60_000 });
+
+    const turn = await runClaudeJson(config, {
+      prompt: rejectionPrompt(feedback),
       cwd: localPath,
       resumeSessionId: task.claude_session_id
     });

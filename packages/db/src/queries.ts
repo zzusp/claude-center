@@ -68,14 +68,62 @@ export async function createTask(
 
 export async function listRecentTasks(client: pg.Pool | pg.PoolClient, limit = 50): Promise<Task[]> {
   const result = await client.query<Task>(
-    `SELECT tasks.*, projects.name AS project_name
+    `SELECT tasks.*,
+            projects.name AS project_name,
+            COALESCE(dep.depends_on, ARRAY[]::uuid[]) AS depends_on,
+            COALESCE(dep.blocked, false) AS blocked
        FROM tasks
        JOIN projects ON projects.id = tasks.project_id
+       LEFT JOIN LATERAL (
+         SELECT array_agg(d.depends_on_task_id) AS depends_on,
+                bool_or(pre.status <> 'accepted') AS blocked
+           FROM task_dependencies d
+           JOIN tasks pre ON pre.id = d.depends_on_task_id
+          WHERE d.task_id = tasks.id
+       ) dep ON true
       ORDER BY tasks.created_at DESC
       LIMIT $1`,
     [limit]
   );
   return result.rows;
+}
+
+// 为任务添加前置依赖（仅同项目）。在调用方事务内执行；校验前置存在且与本任务同项目。
+export async function addTaskDependencies(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  dependsOnIds: string[]
+): Promise<void> {
+  if (dependsOnIds.length === 0) {
+    return;
+  }
+  const unique = [...new Set(dependsOnIds)];
+  if (unique.includes(taskId)) {
+    throw new Error("任务不能依赖自身");
+  }
+
+  const check = await client.query<{ id: string; project_id: string }>(
+    `SELECT id, project_id FROM tasks WHERE id = ANY($1::uuid[])`,
+    [unique]
+  );
+  if (check.rows.length !== unique.length) {
+    throw new Error("部分前置任务不存在");
+  }
+  const taskProject = await client.query<{ project_id: string }>(
+    `SELECT project_id FROM tasks WHERE id = $1`,
+    [taskId]
+  );
+  const projectId = taskProject.rows[0]?.project_id;
+  if (check.rows.some((row) => row.project_id !== projectId)) {
+    throw new Error("前置任务必须与本任务属于同一项目");
+  }
+
+  await client.query(
+    `INSERT INTO task_dependencies (task_id, depends_on_task_id)
+     SELECT $1, unnest($2::uuid[])
+     ON CONFLICT DO NOTHING`,
+    [taskId, unique]
+  );
 }
 
 export async function listWorkers(client: pg.Pool | pg.PoolClient): Promise<Worker[]> {
@@ -170,6 +218,14 @@ export async function claimNextTask(client: pg.Pool | pg.PoolClient, workerId: s
                AND waiting.claimed_by = $1
                AND waiting.status = 'waiting'
           )
+          -- 前置依赖门控：任一前置任务未达 accepted（人工验收通过）则不可领取。
+          AND NOT EXISTS (
+            SELECT 1
+              FROM task_dependencies dep
+              JOIN tasks pre ON pre.id = dep.depends_on_task_id
+             WHERE dep.task_id = tasks.id
+               AND pre.status <> 'accepted'
+          )
         ORDER BY tasks.priority DESC, tasks.created_at ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
@@ -258,6 +314,50 @@ export async function markTaskFailed(
   await addTaskEvent(client, taskId, workerId, "failed", errorMessage, resultPayload);
 }
 
+// 人工验收通过：仅 success 可验收，翻为终态 accepted。返回 null 表示任务不在待验收态。
+// 在调用方事务内执行。
+export async function acceptTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET status = 'accepted', updated_at = now()
+      WHERE id = $1 AND status = 'success'
+      RETURNING *`,
+    [taskId]
+  );
+  const task = result.rows[0];
+  if (!task) {
+    return null;
+  }
+  await addTaskEvent(client, taskId, null, "accepted", "Task accepted by user", {});
+  return task;
+}
+
+// 人工验收打回：仅 success 可打回。先落打回意见为 user 评论（供 Worker 续接读取），再翻
+// 为 rejected。必须与翻转同事务，避免 Worker 在「已 rejected 但评论未落」窗口领走空跑。
+export async function rejectTask(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  feedback: string
+): Promise<Task | null> {
+  const guard = await client.query<{ id: string }>(
+    `SELECT id FROM tasks WHERE id = $1 AND status = 'success' FOR UPDATE`,
+    [taskId]
+  );
+  if (!guard.rows[0]) {
+    return null;
+  }
+  await addTaskComment(client, { taskId, author: "user", workerId: null, body: feedback });
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET status = 'rejected', finished_at = NULL, updated_at = now()
+      WHERE id = $1
+      RETURNING *`,
+    [taskId]
+  );
+  await addTaskEvent(client, taskId, null, "rejected", "Task sent back by user", { feedback });
+  return result.rows[0]!;
+}
+
 // 续接：认领本 Worker 自己的、已收到新用户回复的等待中任务（原子翻转为 running）。
 // 「新回复」= 存在比最后一条 worker 评论更晚的 user 评论。
 export async function claimNextResumableTask(
@@ -281,6 +381,33 @@ export async function claimNextResumableTask(
                    WHERE wc.task_id = tasks.id AND wc.author = 'worker'),
                  'epoch'::timestamptz)
           )
+        ORDER BY tasks.updated_at ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+     )
+     UPDATE tasks
+        SET status = 'running',
+            updated_at = now()
+       FROM candidate
+      WHERE tasks.id = candidate.id
+      RETURNING tasks.*`,
+    [workerId]
+  );
+  return result.rows[0] ?? null;
+}
+
+// 打回重跑：认领本 Worker 自己的、被人工打回的任务（原子翻转为 running）。打回时已落
+// 打回意见评论，claimed_by 在首轮已锁定同机，保证同工作树 + 同机 Claude 会话磁盘。
+export async function claimNextRejectedTask(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `WITH candidate AS (
+       SELECT tasks.id
+         FROM tasks
+        WHERE tasks.status = 'rejected'
+          AND tasks.claimed_by = $1
         ORDER BY tasks.updated_at ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1

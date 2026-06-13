@@ -5,6 +5,7 @@ import {
   Activity,
   Boxes,
   Bot,
+  Check,
   CircleAlert,
   Clock,
   Cpu,
@@ -19,6 +20,7 @@ import {
   Plus,
   RadioTower,
   RefreshCw,
+  RotateCcw,
   Send,
   Server,
   Tag,
@@ -41,7 +43,7 @@ type Overview = {
 
 type ViewKey = "dashboard" | "tasks" | "workers" | "projects";
 type DetailTab = "overview" | "timeline" | "logs" | "conversation";
-type Tone = "success" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting";
+type Tone = "success" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting" | "review" | "rejected";
 
 const emptyOverview: Overview = {
   projects: [],
@@ -58,7 +60,9 @@ const STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> 
   claimed: { glyph: "◻", label: "已认领", tone: "queued" },
   running: { glyph: "◐", label: "执行中", tone: "running" },
   waiting: { glyph: "⏸", label: "等待回复", tone: "waiting" },
-  success: { glyph: "●", label: "已完成", tone: "success" },
+  success: { glyph: "◓", label: "待验收", tone: "review" },
+  accepted: { glyph: "✓", label: "已验收", tone: "success" },
+  rejected: { glyph: "↺", label: "已打回", tone: "rejected" },
   failed: { glyph: "✕", label: "失败", tone: "failed" },
   cancelled: { glyph: "—", label: "已取消", tone: "cancelled" },
   online: { glyph: "●", label: "在线", tone: "success" },
@@ -72,7 +76,9 @@ const TONE_COLOR: Record<Tone, string> = {
   failed: "var(--failed)",
   cancelled: "var(--cancelled)",
   queued: "var(--queued)",
-  waiting: "var(--waiting)"
+  waiting: "var(--waiting)",
+  review: "var(--review)",
+  rejected: "var(--rejected)"
 };
 
 function metaOf(status: string) {
@@ -227,7 +233,8 @@ export default function Dashboard() {
         baseBranch: data.get("baseBranch"),
         workBranch: data.get("workBranch"),
         targetFilesText: data.get("targetFilesText"),
-        priority: Number(data.get("priority") || 0)
+        priority: Number(data.get("priority") || 0),
+        dependsOn: data.getAll("dependsOn").map(String)
       });
       form.reset();
       await loadOverview();
@@ -353,6 +360,7 @@ export default function Dashboard() {
               onSetTab={setDetailTab}
               onSetRightMode={setRightMode}
               onSubmitTask={handleTaskSubmit}
+              onReviewed={loadOverview}
             />
           ) : null}
 
@@ -392,7 +400,9 @@ function DashboardView({
   const recentTasks = overview.tasks.slice(0, 7);
   const failedTasks = overview.tasks.filter((task) => task.status === "failed").slice(0, 4);
 
-  const donutSegments = (["running", "waiting", "pending", "claimed", "success", "failed", "cancelled"] as const)
+  const donutSegments = (
+    ["running", "waiting", "pending", "claimed", "success", "accepted", "rejected", "failed", "cancelled"] as const
+  )
     .map((status) => ({
       status,
       label: metaOf(status).label,
@@ -576,7 +586,8 @@ function TasksView({
   onSelectTask,
   onSetTab,
   onSetRightMode,
-  onSubmitTask
+  onSubmitTask,
+  onReviewed
 }: {
   overview: Overview;
   selectedTask: Task | null;
@@ -590,6 +601,7 @@ function TasksView({
   onSetTab: (tab: DetailTab) => void;
   onSetRightMode: (mode: "detail" | "compose") => void;
   onSubmitTask: (event: FormEvent<HTMLFormElement>) => void;
+  onReviewed: () => void | Promise<void>;
 }) {
   return (
     <>
@@ -666,7 +678,13 @@ function TasksView({
               onSubmit={onSubmitTask}
             />
           ) : (
-            <TaskDetail task={selectedTask} detailTab={detailTab} onSetTab={onSetTab} />
+            <TaskDetail
+              task={selectedTask}
+              allTasks={overview.tasks}
+              detailTab={detailTab}
+              onSetTab={onSetTab}
+              onReviewed={onReviewed}
+            />
           )}
         </div>
       </div>
@@ -687,6 +705,10 @@ function ComposeTaskCard({
   onSelectProject: (id: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  // 前置任务候选：同项目、未取消（取消的任务无法被验收，选它会导致后置永久阻塞）。
+  const dependencyCandidates = overview.tasks.filter(
+    (task) => task.project_id === selectedProjectId && task.status !== "cancelled"
+  );
   return (
     <section className="card detail">
       <div className="card-head">
@@ -737,6 +759,22 @@ function ComposeTaskCard({
             <label className="field-label">优先级</label>
             <input name="priority" type="number" defaultValue={0} />
           </div>
+          <div className="field">
+            <label className="field-label">
+              前置任务 <span className="field-hint">同项目，可多选；全部「已验收」后才会被领取</span>
+            </label>
+            {dependencyCandidates.length === 0 ? (
+              <span className="field-hint">该项目暂无可作为前置的任务</span>
+            ) : (
+              <select name="dependsOn" multiple size={Math.min(6, Math.max(3, dependencyCandidates.length))}>
+                {dependencyCandidates.map((task) => (
+                  <option key={task.id} value={task.id}>
+                    [{metaOf(task.status).label}] {task.title}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
           <button className="btn btn-primary" disabled={busy || overview.projects.length === 0} type="submit">
             <Send size={16} />
             入队
@@ -749,12 +787,16 @@ function ComposeTaskCard({
 
 function TaskDetail({
   task,
+  allTasks,
   detailTab,
-  onSetTab
+  onSetTab,
+  onReviewed
 }: {
   task: Task | null;
+  allTasks: Task[];
   detailTab: DetailTab;
   onSetTab: (tab: DetailTab) => void;
+  onReviewed: () => void | Promise<void>;
 }) {
   if (!task) {
     return (
@@ -781,8 +823,20 @@ function TaskDetail({
         task.status === "failed" ? "执行失败" : task.status === "cancelled" ? "已取消" : "执行完成",
       time: task.finished_at,
       state: task.finished_at ? "done" : "idle"
+    },
+    {
+      label:
+        task.status === "accepted" ? "已验收" : task.status === "rejected" ? "已打回" : "人工验收",
+      time: null,
+      state: task.status === "accepted" ? "done" : task.status === "success" ? "active" : "idle"
     }
   ];
+
+  // 前置任务（由 overview 的 depends_on 解析标题；找不到的退化为短 id）。
+  const predecessors = (task.depends_on ?? []).map(
+    (id) => allTasks.find((candidate) => candidate.id === id) ?? null
+  );
+  const isBlocked = task.status === "pending" && (task.blocked ?? false);
 
   const logText =
     [
@@ -798,6 +852,7 @@ function TaskDetail({
         <h2 className="detail-title">{task.title}</h2>
         <div className="detail-tags">
           <StatusBadge status={task.status} />
+          {isBlocked ? <span className="badge" data-tone="pending">⛔ 前置未验收·阻塞中</span> : null}
           <span className="tag">
             <GitBranch size={13} className="ico" />
             {task.base_branch} → {task.work_branch}
@@ -833,11 +888,32 @@ function TaskDetail({
       <div className="tab-body">
         {detailTab === "overview" ? (
           <div className="kv">
+            {task.status === "success" ? <TaskReviewActions task={task} onReviewed={onReviewed} /> : null}
             <KvRow k="项目" v={task.project_name ?? task.project_id} />
             <KvRow k="描述" v={task.description} />
             <KvRow k="基准分支" v={task.base_branch} mono />
             <KvRow k="工作分支" v={task.work_branch} mono />
             <KvRow k="优先级" v={String(task.priority)} />
+            {predecessors.length > 0 ? (
+              <KvRow
+                k="前置任务"
+                v={
+                  <div className="pill-row">
+                    {predecessors.map((pre, index) =>
+                      pre ? (
+                        <span className="pill" key={pre.id}>
+                          [{metaOf(pre.status).label}] {pre.title}
+                        </span>
+                      ) : (
+                        <span className="pill" key={index}>
+                          已删除任务
+                        </span>
+                      )
+                    )}
+                  </div>
+                }
+              />
+            ) : null}
             <KvRow
               k="目标文件"
               v={
@@ -893,6 +969,78 @@ function TaskDetail({
         {detailTab === "logs" ? <pre className="logs">{logText}</pre> : null}
       </div>
     </section>
+  );
+}
+
+function TaskReviewActions({ task, onReviewed }: { task: Task; onReviewed: () => void | Promise<void> }) {
+  const [rejecting, setRejecting] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function review(action: "accept" | "reject") {
+    if (action === "reject" && !feedback.trim()) {
+      setError("打回必须填写意见");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await postJson(`/api/tasks/${task.id}/review`, {
+        action,
+        feedback: action === "reject" ? feedback.trim() : undefined
+      });
+      setRejecting(false);
+      setFeedback("");
+      await onReviewed();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "操作失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="review-actions">
+      <div className="review-hint">该任务已执行完成，待人工验收。</div>
+      {rejecting ? (
+        <>
+          <textarea
+            rows={3}
+            value={feedback}
+            onChange={(event) => setFeedback(event.target.value)}
+            placeholder="填写打回意见，Worker 将带着该意见续接重跑…"
+            disabled={busy}
+          />
+          <div className="review-btns">
+            <button className="btn btn-sm" type="button" onClick={() => setRejecting(false)} disabled={busy}>
+              取消
+            </button>
+            <button
+              className="btn btn-primary btn-sm"
+              type="button"
+              onClick={() => review("reject")}
+              disabled={busy || !feedback.trim()}
+            >
+              <RotateCcw size={15} />
+              确认打回
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="review-btns">
+          <button className="btn btn-primary btn-sm" type="button" onClick={() => review("accept")} disabled={busy}>
+            <Check size={15} />
+            验收通过
+          </button>
+          <button className="btn btn-sm" type="button" onClick={() => setRejecting(true)} disabled={busy}>
+            <RotateCcw size={15} />
+            打回重跑
+          </button>
+        </div>
+      )}
+      {error ? <div className="error-box">{error}</div> : null}
+    </div>
   );
 }
 

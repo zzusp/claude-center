@@ -1,4 +1,13 @@
-export type TaskStatus = "pending" | "claimed" | "running" | "waiting" | "success" | "failed" | "cancelled";
+export type TaskStatus =
+  | "pending"
+  | "claimed"
+  | "running"
+  | "waiting"
+  | "success"
+  | "accepted"
+  | "rejected"
+  | "failed"
+  | "cancelled";
 export type DirectCommandStatus = TaskStatus;
 export type DirectCommandName = "shell" | "claude_prompt";
 
@@ -56,6 +65,10 @@ export type Task = {
   result: Record<string, unknown>;
   pr_url: string | null;
   claude_session_id: string | null;
+  // 前置任务 id（listRecentTasks 聚合填充；其余查询不返回，故可选）。
+  depends_on?: string[];
+  // 存在「状态非 accepted 的前置」时为 true，用于 UI 提示阻塞（同上，可选）。
+  blocked?: boolean;
   created_at: string;
   updated_at: string;
 };
