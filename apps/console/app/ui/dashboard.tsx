@@ -206,7 +206,8 @@ export default function Dashboard() {
     setOpenedTaskId(task.id);
     setOpenedTaskSeed(task);
     setDrawerMode("detail");
-    setDetailTab("overview");
+    // 问答类默认进「对话」tab（对话即主要交互），工作类进「概览」。
+    setDetailTab(task.task_type === "qa" ? "conversation" : "overview");
     setDrawerOpen(true);
     setView("tasks");
   }
@@ -246,6 +247,7 @@ export default function Dashboard() {
     try {
       await postJson("/api/tasks", {
         projectId: selectedProjectId,
+        taskType: data.get("taskType"),
         title: data.get("title"),
         description: data.get("description"),
         baseBranch: data.get("baseBranch"),
@@ -524,7 +526,7 @@ function DashboardView({
                               <span className="t-meta">{task.project_name ?? task.project_id}</span>
                             </div>
                           </td>
-                          <td className="mono">{task.work_branch}</td>
+                          <td className="mono">{task.task_type === "qa" ? "对话" : task.work_branch}</td>
                           <td className="t-right t-num">{fmtTime(task.updated_at)}</td>
                         </tr>
                       ))}
@@ -789,11 +791,12 @@ function TasksView({
                         <div className="cell-stack">
                           <span className="t-title">{task.title}</span>
                           <span className="t-meta">
-                            {task.project_name ?? task.project_id} · {task.base_branch} → {task.work_branch}
+                            {task.project_name ?? task.project_id} ·{" "}
+                            {task.task_type === "qa" ? "问答对话" : `${task.base_branch} → ${task.work_branch}`}
                           </span>
                         </div>
                       </td>
-                      <td className="mono">{task.work_branch}</td>
+                      <td className="mono">{task.task_type === "qa" ? "对话" : task.work_branch}</td>
                       <td className="t-right t-num">{task.priority}</td>
                       <td className="t-right t-num">{fmtTime(task.updated_at)}</td>
                     </tr>
@@ -858,6 +861,8 @@ function ComposeTaskForm({
 }) {
   const [branches, setBranches] = useState<string[]>([]);
   const [branchState, setBranchState] = useState<"idle" | "loading" | "error">("idle");
+  const [taskType, setTaskType] = useState<"work" | "qa">("work");
+  const isQa = taskType === "qa";
 
   useEffect(() => {
     if (!selectedProjectId) {
@@ -899,6 +904,17 @@ function ComposeTaskForm({
   return (
     <form className="form" onSubmit={onSubmit}>
       <div className="field">
+        <label className="field-label">类型</label>
+        <select
+          name="taskType"
+          value={taskType}
+          onChange={(event) => setTaskType(event.target.value as "work" | "qa")}
+        >
+          <option value="work">工作类 · 改代码并开 PR</option>
+          <option value="qa">问答类 · 纯对话不碰 git</option>
+        </select>
+      </div>
+      <div className="field">
         <label className="field-label">项目</label>
         <select value={selectedProjectId} onChange={(event) => onSelectProject(event.target.value)} required>
           {overview.projects.map((project) => (
@@ -910,59 +926,68 @@ function ComposeTaskForm({
       </div>
       <div className="field">
         <label className="field-label">标题</label>
-        <input name="title" placeholder="修复登录按钮状态" required />
+        <input name="title" placeholder={isQa ? "心跳间隔是多少？" : "修复登录按钮状态"} required />
       </div>
       <div className="field">
-        <label className="field-label">目标</label>
-        <textarea name="description" rows={4} placeholder="写清期望行为、约束和验收方式" required />
+        <label className="field-label">{isQa ? "问题" : "目标"}</label>
+        <textarea
+          name="description"
+          rows={4}
+          placeholder={isQa ? "向 Claude 提出关于该项目的问题" : "写清期望行为、约束和验收方式"}
+          required
+        />
       </div>
-      <div className="form-row">
-        <div className="field">
-          <label className="field-label">
-            签出分支 <span className="field-hint">{branchHint}</span>
-          </label>
-          <input name="baseBranch" list="cc-branch-list" defaultValue="main" placeholder="main" />
-        </div>
-        <div className="field">
-          <label className="field-label">
-            PR 目标分支 <span className="field-hint">留空同签出分支</span>
-          </label>
-          <input name="targetBranch" list="cc-branch-list" placeholder="main" />
-        </div>
-      </div>
-      <datalist id="cc-branch-list">
-        {branches.map((branch) => (
-          <option key={branch} value={branch} />
-        ))}
-      </datalist>
-      <div className="form-row">
-        <div className="field">
-          <label className="field-label">
-            工作分支 <span className="field-hint">留空自动生成</span>
-          </label>
-          <input name="workBranch" placeholder="cc/..." />
-        </div>
-        <div className="field">
-          <label className="field-label">提交模式</label>
-          <select name="submitMode" defaultValue="pr">
-            <option value="pr">创建 PR</option>
-            <option value="push">直接提交推送</option>
-          </select>
-        </div>
-      </div>
-      <div className="field">
-        <label className="field-label">
-          目标文件 <span className="field-hint">每行一个路径，可留空</span>
-        </label>
-        <textarea name="targetFilesText" rows={3} placeholder={"src/app.tsx\nsrc/lib/auth.ts"} />
-      </div>
+      {isQa ? null : (
+        <>
+          <div className="form-row">
+            <div className="field">
+              <label className="field-label">
+                签出分支 <span className="field-hint">{branchHint}</span>
+              </label>
+              <input name="baseBranch" list="cc-branch-list" defaultValue="main" placeholder="main" />
+            </div>
+            <div className="field">
+              <label className="field-label">
+                PR 目标分支 <span className="field-hint">留空同签出分支</span>
+              </label>
+              <input name="targetBranch" list="cc-branch-list" placeholder="main" />
+            </div>
+          </div>
+          <datalist id="cc-branch-list">
+            {branches.map((branch) => (
+              <option key={branch} value={branch} />
+            ))}
+          </datalist>
+          <div className="form-row">
+            <div className="field">
+              <label className="field-label">
+                工作分支 <span className="field-hint">留空自动生成</span>
+              </label>
+              <input name="workBranch" placeholder="cc/..." />
+            </div>
+            <div className="field">
+              <label className="field-label">提交模式</label>
+              <select name="submitMode" defaultValue="pr">
+                <option value="pr">创建 PR</option>
+                <option value="push">直接提交推送</option>
+              </select>
+            </div>
+          </div>
+          <div className="field">
+            <label className="field-label">
+              目标文件 <span className="field-hint">每行一个路径，可留空</span>
+            </label>
+            <textarea name="targetFilesText" rows={3} placeholder={"src/app.tsx\nsrc/lib/auth.ts"} />
+          </div>
+        </>
+      )}
       <div className="field">
         <label className="field-label">优先级</label>
         <input name="priority" type="number" defaultValue={0} />
       </div>
       <button className="btn btn-primary" disabled={busy || overview.projects.length === 0} type="submit">
         <Send size={16} />
-        入队
+        {isQa ? "发起问答" : "入队"}
       </button>
     </form>
   );
@@ -1121,6 +1146,8 @@ function TaskDetailBody({
       .filter(Boolean)
       .join("\n\n") || "暂无日志输出";
 
+  const isQa = task.task_type === "qa";
+
   return (
     <>
       <div className="drawer-head">
@@ -1128,14 +1155,19 @@ function TaskDetailBody({
           <h2 className="detail-title">{task.title}</h2>
           <div className="detail-tags">
             <StatusBadge status={task.status} />
-            <span className="tag">
-              <GitBranch size={13} className="ico" />
-              {task.base_branch} → {task.work_branch}
-            </span>
-            <span className="tag">
-              {task.submit_mode === "push" ? `直推 ${task.target_branch}` : `PR → ${task.target_branch}`}
-            </span>
-            {task.pr_url ? (
+            <TaskTypeBadge type={task.task_type} />
+            {isQa ? null : (
+              <>
+                <span className="tag">
+                  <GitBranch size={13} className="ico" />
+                  {task.base_branch} → {task.work_branch}
+                </span>
+                <span className="tag">
+                  {task.submit_mode === "push" ? `直推 ${task.target_branch}` : `PR → ${task.target_branch}`}
+                </span>
+              </>
+            )}
+            {!isQa && task.pr_url ? (
               <a className="tag" href={task.pr_url} target="_blank" rel="noreferrer">
                 <ExternalLink size={13} className="ico" />
                 PR
@@ -1183,29 +1215,36 @@ function TaskDetailBody({
           {detailTab === "overview" ? (
             <div className="kv">
               <KvRow k="项目" v={task.project_name ?? task.project_id} />
-              <KvRow k="描述" v={task.description} />
-              <KvRow k="签出分支" v={task.base_branch} mono />
-              <KvRow k="工作分支" v={task.work_branch} mono />
-              <KvRow k="目标分支" v={task.target_branch} mono />
-              <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
+              <KvRow k="类型" v={isQa ? "问答类 · 纯对话" : "工作类 · 改代码开 PR"} />
+              <KvRow k={isQa ? "问题" : "描述"} v={task.description} />
+              {isQa ? null : (
+                <>
+                  <KvRow k="签出分支" v={task.base_branch} mono />
+                  <KvRow k="工作分支" v={task.work_branch} mono />
+                  <KvRow k="目标分支" v={task.target_branch} mono />
+                  <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
+                </>
+              )}
               <KvRow k="优先级" v={String(task.priority)} />
-              <KvRow
-                k="目标文件"
-                v={
-                  task.target_files.length > 0 ? (
-                    <div className="pill-row">
-                      {task.target_files.map((file) => (
-                        <span className="pill" key={file}>
-                          {file}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    "—"
-                  )
-                }
-              />
-              {task.pr_url ? (
+              {isQa ? null : (
+                <KvRow
+                  k="目标文件"
+                  v={
+                    task.target_files.length > 0 ? (
+                      <div className="pill-row">
+                        {task.target_files.map((file) => (
+                          <span className="pill" key={file}>
+                            {file}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      "—"
+                    )
+                  }
+                />
+              )}
+              {!isQa && task.pr_url ? (
                 <KvRow
                   k="PR"
                   v={
@@ -1267,8 +1306,32 @@ function TaskConversation({ task, enabled }: { task: Task; enabled: boolean }) {
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState(false);
+  const [closing, setClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const waiting = task.status === "waiting";
+  const isQa = task.task_type === "qa";
+  const closed = ["success", "failed", "cancelled"].includes(task.status);
+
+  async function closeConversation() {
+    setClosing(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/tasks/${task.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "complete" })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? `结束失败：${response.status}`);
+      }
+      // 状态翻转交给 3s 总览轮询刷新；这里不本地改 task。
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "结束失败");
+    } finally {
+      setClosing(false);
+    }
+  }
 
   useEffect(() => {
     if (!enabled) return;
@@ -1319,7 +1382,10 @@ function TaskConversation({ task, enabled }: { task: Task; enabled: boolean }) {
   return (
     <div className="chat">
       {comments.length === 0 ? (
-        <Empty icon={<MessageSquare size={28} />} text="暂无对话。Worker 需要确认时会在此提问。" />
+        <Empty
+          icon={<MessageSquare size={28} />}
+          text={isQa ? "等待 Claude 回答…答案会显示在这里。" : "暂无对话。Worker 需要确认时会在此提问。"}
+        />
       ) : (
         <div className="chat-stream">
           {comments.map((comment) => (
@@ -1344,14 +1410,31 @@ function TaskConversation({ task, enabled }: { task: Task; enabled: boolean }) {
           rows={3}
           value={reply}
           onChange={(event) => setReply(event.target.value)}
-          placeholder={waiting ? "回复 Worker 的提问，提交后将续接执行…" : "仅在任务「等待回复」时可回复"}
+          placeholder={
+            waiting
+              ? isQa
+                ? "继续追问，提交后 Claude 会续接同一会话回答…"
+                : "回复 Worker 的提问，提交后将续接执行…"
+              : isQa
+                ? closed
+                  ? "对话已结束"
+                  : "等待 Claude 回答中…"
+                : "仅在任务「等待回复」时可回复"
+          }
           disabled={!waiting || busy}
         />
         {error ? <div className="error-box">{error}</div> : null}
-        <button className="btn btn-primary" type="submit" disabled={!waiting || busy || !reply.trim()}>
-          <Send size={16} />
-          {waiting ? "回复并续接" : "等待 Worker 提问"}
-        </button>
+        <div className="chat-actions">
+          <button className="btn btn-primary" type="submit" disabled={!waiting || busy || !reply.trim()}>
+            <Send size={16} />
+            {waiting ? (isQa ? "发送追问" : "回复并续接") : isQa ? "等待回答" : "等待 Worker 提问"}
+          </button>
+          {isQa && !closed ? (
+            <button type="button" className="btn btn-sm" onClick={closeConversation} disabled={closing}>
+              结束对话
+            </button>
+          ) : null}
+        </div>
       </form>
     </div>
   );
@@ -1795,6 +1878,16 @@ function StatusBadge({ status }: { status: string }) {
     <span className="badge" data-tone={meta.tone}>
       <span className="glyph">{meta.glyph}</span>
       {meta.label}
+    </span>
+  );
+}
+
+function TaskTypeBadge({ type }: { type: string }) {
+  const isQa = type === "qa";
+  return (
+    <span className="badge" data-tone={isQa ? "waiting" : "queued"}>
+      {isQa ? <MessageSquare size={12} /> : <GitBranch size={12} />}
+      {isQa ? "问答" : "工作"}
     </span>
   );
 }

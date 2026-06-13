@@ -1,5 +1,5 @@
 import type pg from "pg";
-import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, TaskEvent, TaskSubmitMode, Worker } from "./types.js";
+import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, TaskEvent, TaskSubmitMode, TaskType, Worker } from "./types.js";
 
 export type WorkerRegistration = {
   id: string;
@@ -46,6 +46,7 @@ export async function createTask(
   client: pg.Pool | pg.PoolClient,
   input: {
     projectId: string;
+    taskType: TaskType;
     title: string;
     description: string;
     baseBranch: string;
@@ -57,11 +58,12 @@ export async function createTask(
   }
 ): Promise<Task> {
   const result = await client.query<Task>(
-    `INSERT INTO tasks (project_id, title, description, base_branch, work_branch, target_branch, submit_mode, target_files, priority)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO tasks (project_id, task_type, title, description, base_branch, work_branch, target_branch, submit_mode, target_files, priority)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING *`,
     [
       input.projectId,
+      input.taskType,
       input.title,
       input.description,
       input.baseBranch,
@@ -255,14 +257,16 @@ export async function claimNextTask(client: pg.Pool | pg.PoolClient, workerId: s
         WHERE tasks.status = 'pending'
           AND worker_project_links.worker_id = $1
           AND worker_project_links.enabled = true
-          -- 同 worker 在该项目已有等待用户回复的任务时，不领新任务：新任务会在同一
-          -- 本地工作树执行 git checkout，清掉等待中任务未提交的改动。
+          -- 同 worker 在该项目已有「等待用户回复的工作类任务」时，不领新任务：该任务
+          -- 工作树有未提交改动，新任务会在同一本地工作树 git checkout 清掉它。问答类
+          -- 等待任务是只读对话、不持有改动，不锁工作树，故不阻止领新任务。
           AND NOT EXISTS (
             SELECT 1
               FROM tasks waiting
              WHERE waiting.project_id = tasks.project_id
                AND waiting.claimed_by = $1
                AND waiting.status = 'waiting'
+               AND waiting.task_type = 'work'
           )
         ORDER BY tasks.priority DESC, tasks.created_at ASC
         FOR UPDATE SKIP LOCKED
@@ -350,6 +354,25 @@ export async function markTaskFailed(
     [taskId, workerId, errorMessage, resultPayload]
   );
   await addTaskEvent(client, taskId, workerId, "failed", errorMessage, resultPayload);
+}
+
+// 用户在对话区点「结束对话」：把问答类任务收口为 success。仅作用于 task_type='qa'，
+// 避免误关工作类任务（工作类的收尾由 Worker 按 git 改动驱动）。
+export async function completeQaTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET status = 'success',
+            finished_at = now(),
+            result = result || '{"closedByUser": true}'::jsonb,
+            error_message = NULL,
+            updated_at = now()
+      WHERE id = $1
+        AND task_type = 'qa'
+        AND status IN ('pending', 'claimed', 'running', 'waiting', 'failed')
+      RETURNING *`,
+    [taskId]
+  );
+  return result.rows[0] ?? null;
 }
 
 // 续接：认领本 Worker 自己的、已收到新用户回复的等待中任务（原子翻转为 running）。

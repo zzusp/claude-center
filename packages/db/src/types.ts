@@ -1,4 +1,5 @@
 export type TaskStatus = "draft" | "pending" | "claimed" | "running" | "waiting" | "success" | "failed" | "cancelled";
+export type TaskType = "work" | "qa";
 export type DirectCommandStatus = TaskStatus;
 export type DirectCommandName = "shell" | "claude_prompt";
 export type TaskSubmitMode = "pr" | "push";
@@ -42,6 +43,7 @@ export type Task = {
   id: string;
   project_id: string;
   project_name?: string;
+  task_type: TaskType;
   title: string;
   description: string;
   base_branch: string;
