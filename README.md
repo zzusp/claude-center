@@ -40,7 +40,7 @@ ClaudeCenter 是一个 AI 编码协作中央控制台：一个 Next.js Web Conso
 
    默认监听 `http://127.0.0.1:3000`。需要调整时设置 `CONSOLE_HOST` 或 `CONSOLE_PORT`。
 
-   首次打开会跳转到 `/login`。用引导管理员登录：**用户名 `admin` / 密码 `admin123`**（由 migration `005_auth_rbac.sql` 写入）。**首次登录后请立即在「用户权限」里重置密码。**
+   首次打开会跳转到 `/login`。用引导管理员登录：**用户名 `admin` / 密码 `admin123`**（由 migration `006_auth_rbac.sql` 写入）。**首次登录后请立即在「用户权限」里重置密码。**
 
 5. 启动 Worker：
 
@@ -70,7 +70,7 @@ Console 现在需要登录。鉴权与项目隔离只作用于 Console（Web UI 
 ```powershell
 npm run typecheck
 npm run build
-npm run db:migrate      # 应用 005，写入引导管理员
+npm run db:migrate      # 应用 006，写入引导管理员
 npm run verify:console
 ```
 

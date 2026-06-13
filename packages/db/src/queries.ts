@@ -514,7 +514,7 @@ export async function markDirectCommandFailed(
 }
 
 /* ============================== 用户 / 角色 / 权限 / 会话 ==============================
- * 密码散列 / 会话 token 全用 pgcrypto（见 migration 005）。所有读取都不返回 password_hash。
+ * 密码散列 / 会话 token 全用 pgcrypto（见 migration 006）。所有读取都不返回 password_hash。
  */
 
 const USER_COLS = "id, username, role, display_name, disabled, last_login_at, created_at, updated_at";
