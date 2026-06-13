@@ -1,4 +1,4 @@
-import { createTask, getPool, listTasks, type TaskSort } from "@claude-center/db";
+import { addTaskDependencies, createTask, getPool, listTasks, type TaskSort } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -65,6 +65,7 @@ export async function POST(request: NextRequest) {
       submitMode?: string;
       targetFilesText?: string;
       priority?: number;
+      dependsOn?: string[];
     };
 
     if (!body.projectId || !body.title?.trim() || !body.description?.trim()) {
@@ -85,20 +86,33 @@ export async function POST(request: NextRequest) {
     const baseBranch = body.baseBranch?.trim() || "main";
     const submitMode = body.submitMode === "push" ? "push" : "pr";
 
-    const task = await createTask(getPool(), {
-      projectId: body.projectId,
-      taskType,
-      title: body.title.trim(),
-      description: body.description.trim(),
-      baseBranch: taskType === "qa" ? "" : baseBranch,
-      workBranch: taskType === "qa" ? "" : body.workBranch?.trim() || defaultWorkBranch(body.title),
-      targetBranch: taskType === "qa" ? "" : body.targetBranch?.trim() || baseBranch,
-      submitMode: taskType === "qa" ? "pr" : submitMode,
-      targetFiles,
-      priority: Number.isFinite(body.priority) ? Number(body.priority) : 0
-    });
+    const dependsOn = Array.isArray(body.dependsOn) ? body.dependsOn.filter((id) => typeof id === "string") : [];
 
-    return NextResponse.json({ task }, { status: 201 });
+    // 任务与其前置依赖须原子入库：依赖校验失败（跨项目 / 不存在）应整体回滚。
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      const task = await createTask(client, {
+        projectId: body.projectId,
+        taskType,
+        title: body.title.trim(),
+        description: body.description.trim(),
+        baseBranch: taskType === "qa" ? "" : baseBranch,
+        workBranch: taskType === "qa" ? "" : body.workBranch?.trim() || defaultWorkBranch(body.title),
+        targetBranch: taskType === "qa" ? "" : body.targetBranch?.trim() || baseBranch,
+        submitMode: taskType === "qa" ? "pr" : submitMode,
+        targetFiles,
+        priority: Number.isFinite(body.priority) ? Number(body.priority) : 0
+      });
+      await addTaskDependencies(client, task.id, dependsOn);
+      await client.query("COMMIT");
+      return NextResponse.json({ task }, { status: 201 });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
   }

@@ -6,6 +6,8 @@ export type TaskStatus =
   | "waiting"
   | "success"
   | "merged"
+  | "accepted"
+  | "rejected"
   | "failed"
   | "cancelled";
 export type TaskType = "work" | "qa";
@@ -72,6 +74,10 @@ export type Task = {
   pr_url: string | null;
   merge_checked_at: string | null;
   claude_session_id: string | null;
+  // 前置任务 id（listRecentTasks 聚合填充；其余查询不返回，故可选）。
+  depends_on?: string[];
+  // 存在「状态非 accepted 的前置」时为 true，用于 UI 提示阻塞（同上，可选）。
+  blocked?: boolean;
   created_at: string;
   updated_at: string;
 };
