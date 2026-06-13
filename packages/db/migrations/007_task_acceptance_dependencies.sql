@@ -2,13 +2,13 @@
 -- 方案见 docs/spec/task-acceptance-dependencies.md
 
 -- tasks.status 增加 'accepted'（验收通过·终态）与 'rejected'（打回·待重跑）。
--- 沿用本项目约定：每次重建约束都列出「当前全部合法状态」。本迁移编号 004，排在并行分支
--- 的 003_task_cleanup（新增 'merged'）之后应用，故约束需带上 'merged' 以免覆盖回退该状态。
+-- 沿用本项目约定：每次重建约束都列出「当前全部合法状态」。本迁移编号 007，是当前最高编号，
+-- 故约束需带上此前各迁移引入的全部状态：'draft'(003) + 'merged'(006)，否则会覆盖回退它们。
 -- 约束名沿用 Postgres 自动命名 tasks_status_check，先删后建。
 ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_status_check;
 ALTER TABLE tasks ADD CONSTRAINT tasks_status_check
   CHECK (status IN (
-    'pending', 'claimed', 'running', 'waiting', 'success',
+    'draft', 'pending', 'claimed', 'running', 'waiting', 'success',
     'merged', 'accepted', 'rejected', 'failed', 'cancelled'
   ));
 
