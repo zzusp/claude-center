@@ -1,0 +1,104 @@
+import { GitBranch, MessageSquare } from "lucide-react";
+import type { ReactNode } from "react";
+
+// 跨 dashboard / 任务详情页复用的展示原子与格式化工具。无状态、可在任意 client 组件中使用。
+
+export type Tone =
+  | "success"
+  | "merged"
+  | "running"
+  | "pending"
+  | "failed"
+  | "cancelled"
+  | "queued"
+  | "waiting"
+  | "draft"
+  | "scheduled"
+  | "review"
+  | "rejected";
+
+export const STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> = {
+  draft: { glyph: "✎", label: "草稿", tone: "draft" },
+  scheduled: { glyph: "⏰", label: "定时待发", tone: "scheduled" },
+  pending: { glyph: "○", label: "待处理", tone: "pending" },
+  claimed: { glyph: "◻", label: "已认领", tone: "queued" },
+  running: { glyph: "◐", label: "执行中", tone: "running" },
+  waiting: { glyph: "⏸", label: "等待回复", tone: "waiting" },
+  success: { glyph: "◓", label: "待验收", tone: "review" },
+  merged: { glyph: "✔", label: "已合并", tone: "merged" },
+  accepted: { glyph: "✓", label: "已验收", tone: "success" },
+  rejected: { glyph: "↺", label: "已打回", tone: "rejected" },
+  failed: { glyph: "✕", label: "失败", tone: "failed" },
+  cancelled: { glyph: "—", label: "已取消", tone: "cancelled" },
+  online: { glyph: "●", label: "在线", tone: "success" },
+  offline: { glyph: "—", label: "离线", tone: "cancelled" }
+};
+
+export function metaOf(status: string) {
+  return STATUS_META[status] ?? { glyph: "·", label: status, tone: "cancelled" as Tone };
+}
+
+export async function postJson(path: string, body: unknown): Promise<void> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(payload.error ?? `请求失败：${response.status}`);
+  }
+}
+
+export function fmtTime(value: string | null): string {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+export function StatusBadge({ status }: { status: string }) {
+  const meta = metaOf(status);
+  return (
+    <span className="badge" data-tone={meta.tone}>
+      <span className="glyph">{meta.glyph}</span>
+      {meta.label}
+    </span>
+  );
+}
+
+export function TaskTypeBadge({ type }: { type: string }) {
+  const isQa = type === "qa";
+  return (
+    <span className="badge" data-tone={isQa ? "waiting" : "queued"}>
+      {isQa ? <MessageSquare size={12} /> : <GitBranch size={12} />}
+      {isQa ? "问答" : "工作"}
+    </span>
+  );
+}
+
+export function StatusDot({ status, pulse }: { status: string; pulse?: boolean }) {
+  const meta = metaOf(status);
+  return <span className={`dot${pulse ? " pulse" : ""}`} data-tone={status === "online" ? "online" : meta.tone} />;
+}
+
+export function KvRow({ k, v, mono }: { k: string; v: ReactNode; mono?: boolean }) {
+  return (
+    <div className="kv-row">
+      <span className="kv-k">{k}</span>
+      <span className={`kv-v${mono ? " mono" : ""}`}>{v}</span>
+    </div>
+  );
+}
+
+export function Empty({ icon, text }: { icon: ReactNode; text: string }) {
+  return (
+    <div className="empty">
+      <span className="ico">{icon}</span>
+      {text}
+    </div>
+  );
+}

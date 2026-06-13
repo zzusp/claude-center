@@ -153,6 +153,51 @@ export async function listRecentTasks(client: pg.Pool | pg.PoolClient, limit = 5
   return result.rows;
 }
 
+export type TaskPredecessor = { id: string; title: string; status: string };
+
+// 单任务详情：复用 listRecentTasks 的 SELECT（带 project_name / depends_on / blocked），
+// 加 WHERE id=$1，并解析前置任务标题/状态供详情页展示。任务不存在返回 null。
+export async function getTaskWithDeps(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string
+): Promise<{ task: Task; predecessors: TaskPredecessor[] } | null> {
+  const result = await client.query<Task>(
+    `SELECT tasks.*,
+            projects.name AS project_name,
+            COALESCE(dep.depends_on, ARRAY[]::uuid[]) AS depends_on,
+            COALESCE(dep.blocked, false) AS blocked
+       FROM tasks
+       JOIN projects ON projects.id = tasks.project_id
+       LEFT JOIN LATERAL (
+         SELECT array_agg(d.depends_on_task_id) AS depends_on,
+                bool_or(pre.status NOT IN ('accepted', 'merged')) AS blocked
+           FROM task_dependencies d
+           JOIN tasks pre ON pre.id = d.depends_on_task_id
+          WHERE d.task_id = tasks.id
+       ) dep ON true
+      WHERE tasks.id = $1
+      LIMIT 1`,
+    [taskId]
+  );
+  const task = result.rows[0];
+  if (!task) {
+    return null;
+  }
+
+  const ids = task.depends_on ?? [];
+  let predecessors: TaskPredecessor[] = [];
+  if (ids.length > 0) {
+    const pre = await client.query<TaskPredecessor>(
+      `SELECT id, title, status FROM tasks WHERE id = ANY($1::uuid[])`,
+      [ids]
+    );
+    const byId = new Map(pre.rows.map((row) => [row.id, row]));
+    // 保持 depends_on 原顺序；已删除的前置任务在结果中缺失，由调用方按 depends_on 长度差识别。
+    predecessors = ids.map((id) => byId.get(id)).filter((row): row is TaskPredecessor => Boolean(row));
+  }
+  return { task, predecessors };
+}
+
 // 为任务添加前置依赖（仅同项目）。在调用方事务内执行；校验前置存在且与本任务同项目。
 export async function addTaskDependencies(
   client: pg.Pool | pg.PoolClient,

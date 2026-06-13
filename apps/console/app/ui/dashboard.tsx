@@ -47,7 +47,9 @@ import {
   Users,
   X
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Empty, StatusBadge, StatusDot, fmtTime, metaOf, postJson, type Tone } from "./shared";
 
 type Overview = {
   projects: Project[];
@@ -63,21 +65,7 @@ type Overview = {
 };
 
 type ViewKey = "dashboard" | "tasks" | "workers" | "projects" | "users";
-type DetailTab = "overview" | "timeline" | "logs" | "conversation";
 type TaskSort = "updated" | "created" | "priority";
-type Tone =
-  | "success"
-  | "merged"
-  | "running"
-  | "pending"
-  | "failed"
-  | "cancelled"
-  | "queued"
-  | "waiting"
-  | "draft"
-  | "scheduled"
-  | "review"
-  | "rejected";
 
 // 当前登录用户（由服务端 page.tsx 注入）。permissions 决定 UI 显隐。
 type CurrentUser = {
@@ -107,23 +95,6 @@ const emptyOverview: Overview = {
 
 const SPARK_CAP = 24;
 
-const STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> = {
-  draft: { glyph: "✎", label: "草稿", tone: "draft" },
-  scheduled: { glyph: "⏰", label: "定时待发", tone: "scheduled" },
-  pending: { glyph: "○", label: "待处理", tone: "pending" },
-  claimed: { glyph: "◻", label: "已认领", tone: "queued" },
-  running: { glyph: "◐", label: "执行中", tone: "running" },
-  waiting: { glyph: "⏸", label: "等待回复", tone: "waiting" },
-  success: { glyph: "◓", label: "待验收", tone: "review" },
-  merged: { glyph: "✔", label: "已合并", tone: "merged" },
-  accepted: { glyph: "✓", label: "已验收", tone: "success" },
-  rejected: { glyph: "↺", label: "已打回", tone: "rejected" },
-  failed: { glyph: "✕", label: "失败", tone: "failed" },
-  cancelled: { glyph: "—", label: "已取消", tone: "cancelled" },
-  online: { glyph: "●", label: "在线", tone: "success" },
-  offline: { glyph: "—", label: "离线", tone: "cancelled" }
-};
-
 const TONE_COLOR: Record<Tone, string> = {
   success: "var(--success)",
   merged: "var(--merged)",
@@ -138,32 +109,6 @@ const TONE_COLOR: Record<Tone, string> = {
   review: "var(--review)",
   rejected: "var(--rejected)"
 };
-
-function metaOf(status: string) {
-  return STATUS_META[status] ?? { glyph: "·", label: status, tone: "cancelled" as Tone };
-}
-
-async function postJson(path: string, body: unknown): Promise<void> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(payload.error ?? `请求失败：${response.status}`);
-  }
-}
-
-function fmtTime(value: string | null): string {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(new Date(value));
-}
 
 function fmtAgo(value: string | null): string {
   if (!value) return "—";
@@ -205,12 +150,9 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
   const [synced, setSynced] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
 
+  const router = useRouter();
   const [view, setView] = useState<ViewKey>("dashboard");
-  const [detailTab, setDetailTab] = useState<DetailTab>("overview");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerMode, setDrawerMode] = useState<"detail" | "compose">("detail");
-  const [openedTaskId, setOpenedTaskId] = useState<string | null>(null);
-  const [openedTaskSeed, setOpenedTaskSeed] = useState<Task | null>(null);
 
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [selectedWorkerId, setSelectedWorkerId] = useState("");
@@ -256,12 +198,6 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
     [overview.workers]
   );
 
-  // 抽屉里的任务：优先用总览轮询到的最新对象，回退到点击时捕获的快照（可能不在最近 80 条里）
-  const openedTask = useMemo(
-    () => overview.tasks.find((task) => task.id === openedTaskId) ?? openedTaskSeed,
-    [overview.tasks, openedTaskId, openedTaskSeed]
-  );
-
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const task of overview.tasks) counts[task.status] = (counts[task.status] ?? 0) + 1;
@@ -269,17 +205,11 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
   }, [overview.tasks]);
 
   function openTask(task: Task) {
-    setOpenedTaskId(task.id);
-    setOpenedTaskSeed(task);
-    setDrawerMode("detail");
-    // 问答类默认进「对话」tab（对话即主要交互），工作类进「概览」。
-    setDetailTab(task.task_type === "qa" ? "conversation" : "overview");
-    setDrawerOpen(true);
-    setView("tasks");
+    // 任务详情改为独立路由页展示（可分享 / 刷新保留）。
+    router.push(`/tasks/${task.id}`);
   }
 
   function openCompose() {
-    setDrawerMode("compose");
     setDrawerOpen(true);
   }
 
@@ -336,27 +266,6 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "任务创建失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handlePublishTask(taskId: string) {
-    setBusy(true);
-    try {
-      const response = await fetch(`/api/tasks/${taskId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "publish" })
-      });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error ?? `发布失败：${response.status}`);
-      }
-      await loadOverview();
-      setMessage("任务已发布，进入可认领队列");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "任务发布失败");
     } finally {
       setBusy(false);
     }
@@ -479,7 +388,6 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
           {view === "tasks" ? (
             <TasksView
               overview={overview}
-              openedTaskId={drawerOpen && drawerMode === "detail" ? openedTaskId : null}
               onOpenTask={openTask}
               onOpenCompose={openCompose}
               canCreateTask={can.createTask}
@@ -513,20 +421,13 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
 
       <TaskDrawer
         open={drawerOpen}
-        mode={drawerMode}
-        task={openedTask}
-        detailTab={detailTab}
         busy={busy}
         overview={overview}
         selectedProjectId={selectedProjectId}
         onClose={() => setDrawerOpen(false)}
-        onSetTab={setDetailTab}
         onSelectProject={setSelectedProjectId}
         onSubmitTask={handleTaskSubmit}
-        onPublishTask={handlePublishTask}
-        onReviewed={loadOverview}
         canCreateTask={can.createTask}
-        canComment={can.comment}
       />
     </div>
   );
@@ -767,13 +668,11 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 function TasksView({
   overview,
-  openedTaskId,
   onOpenTask,
   onOpenCompose,
   canCreateTask
 }: {
   overview: Overview;
-  openedTaskId: string | null;
   onOpenTask: (task: Task) => void;
   onOpenCompose: () => void;
   canCreateTask: boolean;
@@ -907,11 +806,7 @@ function TasksView({
                 </thead>
                 <tbody>
                   {data.tasks.map((task) => (
-                    <tr
-                      key={task.id}
-                      className={openedTaskId === task.id ? "selected" : ""}
-                      onClick={() => onOpenTask(task)}
-                    >
+                    <tr key={task.id} onClick={() => onOpenTask(task)}>
                       <td>
                         <StatusBadge status={task.status} />
                       </td>
@@ -1148,47 +1043,24 @@ function ComposeTaskForm({
   );
 }
 
-const EVENT_LABEL: Record<string, string> = {
-  running: "开始执行",
-  success: "执行完成",
-  merged: "已合并",
-  failed: "执行失败",
-  waiting: "等待回复",
-  scheduled_published: "定时到点·进入待处理"
-};
-
 function TaskDrawer({
   open,
-  mode,
-  task,
-  detailTab,
   busy,
   overview,
   selectedProjectId,
   onClose,
-  onSetTab,
   onSelectProject,
   onSubmitTask,
-  onPublishTask,
-  onReviewed,
-  canCreateTask,
-  canComment
+  canCreateTask
 }: {
   open: boolean;
-  mode: "detail" | "compose";
-  task: Task | null;
-  detailTab: DetailTab;
   busy: boolean;
   overview: Overview;
   selectedProjectId: string;
   onClose: () => void;
-  onSetTab: (tab: DetailTab) => void;
   onSelectProject: (id: string) => void;
   onSubmitTask: (event: FormEvent<HTMLFormElement>) => void;
-  onPublishTask: (taskId: string) => void;
-  onReviewed: () => void | Promise<void>;
   canCreateTask: boolean;
-  canComment: boolean;
 }) {
   // Esc 关闭
   useEffect(() => {
@@ -1200,11 +1072,12 @@ function TaskDrawer({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // 仅用于「发布任务」表单；任务详情已迁至独立路由页 /tasks/[id]。
   return (
     <>
       <div className={`drawer-backdrop${open ? " open" : ""}`} onClick={onClose} />
       <aside className={`drawer${open ? " open" : ""}`} aria-hidden={!open}>
-        {mode === "compose" && canCreateTask ? (
+        {canCreateTask ? (
           <>
             <div className="drawer-head">
               <h2 className="detail-title">发布任务</h2>
@@ -1222,20 +1095,6 @@ function TaskDrawer({
               />
             </div>
           </>
-        ) : mode === "detail" && task ? (
-          <TaskDetailBody
-            task={task}
-            allTasks={overview.tasks}
-            detailTab={detailTab}
-            open={open}
-            busy={busy}
-            onSetTab={onSetTab}
-            onClose={onClose}
-            onPublishTask={onPublishTask}
-            onReviewed={onReviewed}
-            canCreateTask={canCreateTask}
-            canComment={canComment}
-          />
         ) : (
           <div className="drawer-head">
             <span />
@@ -1246,512 +1105,6 @@ function TaskDrawer({
         )}
       </aside>
     </>
-  );
-}
-
-function TaskDetailBody({
-  task,
-  allTasks,
-  detailTab,
-  open,
-  busy,
-  onSetTab,
-  onClose,
-  onPublishTask,
-  onReviewed,
-  canCreateTask,
-  canComment
-}: {
-  task: Task;
-  allTasks: Task[];
-  detailTab: DetailTab;
-  open: boolean;
-  busy: boolean;
-  onSetTab: (tab: DetailTab) => void;
-  onClose: () => void;
-  onPublishTask: (taskId: string) => void;
-  onReviewed: () => void | Promise<void>;
-  canCreateTask: boolean;
-  canComment: boolean;
-}) {
-  const [events, setEvents] = useState<TaskEvent[]>([]);
-
-  // 抽屉打开时轮询真实 task_events，喂给时间线
-  useEffect(() => {
-    if (!open) return;
-    let active = true;
-    async function load() {
-      try {
-        const response = await fetch(`/api/tasks/${task.id}/events`, { cache: "no-store" });
-        if (!response.ok) return;
-        const data = (await response.json()) as { events: TaskEvent[] };
-        if (active) setEvents(data.events);
-      } catch {
-        /* 轮询失败静默，下次重试 */
-      }
-    }
-    void load();
-    const timer = window.setInterval(load, 3000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [task.id, open]);
-
-  const lifecycle: { label: string; time: string | null; state: "done" | "active" | "idle" }[] = [
-    { label: "已创建", time: task.created_at, state: "done" },
-    { label: "已认领", time: task.claimed_at, state: task.claimed_at ? "done" : "idle" },
-    {
-      label: "开始执行",
-      time: task.started_at,
-      state: task.started_at ? (task.status === "running" ? "active" : "done") : "idle"
-    },
-    {
-      label:
-        task.status === "failed"
-          ? "执行失败"
-          : task.status === "cancelled"
-            ? "已取消"
-            : task.status === "merged"
-              ? "已合并落地"
-              : "执行完成",
-      time: task.finished_at,
-      state: task.finished_at ? "done" : "idle"
-    },
-    {
-      label:
-        task.status === "accepted" ? "已验收" : task.status === "rejected" ? "已打回" : "人工验收",
-      time: null,
-      state: task.status === "accepted" ? "done" : task.status === "success" ? "active" : "idle"
-    }
-  ];
-
-  // 前置任务（由 overview 的 depends_on 解析标题；找不到的退化为短 id）。
-  const predecessors = (task.depends_on ?? []).map(
-    (id) => allTasks.find((candidate) => candidate.id === id) ?? null
-  );
-  const isBlocked = task.status === "pending" && (task.blocked ?? false);
-
-  const logText =
-    [
-      task.error_message ? `[error] ${task.error_message}` : "",
-      task.result && Object.keys(task.result).length > 0 ? JSON.stringify(task.result, null, 2) : ""
-    ]
-      .filter(Boolean)
-      .join("\n\n") || "暂无日志输出";
-
-  const isQa = task.task_type === "qa";
-
-  return (
-    <>
-      <div className="drawer-head">
-        <div className="drawer-head-main">
-          <h2 className="detail-title">{task.title}</h2>
-          <div className="detail-tags">
-            <StatusBadge status={task.status} />
-            {isBlocked ? <span className="badge" data-tone="pending">⛔ 前置未完成·阻塞中</span> : null}
-            <TaskTypeBadge type={task.task_type} />
-            {isQa ? null : (
-              <>
-                <span className="tag">
-                  <GitBranch size={13} className="ico" />
-                  {task.base_branch} → {task.work_branch}
-                </span>
-                <span className="tag">
-                  {task.submit_mode === "push" ? `直推 ${task.target_branch}` : `PR → ${task.target_branch}`}
-                </span>
-              </>
-            )}
-            {!isQa && task.pr_url ? (
-              <a className="tag" href={task.pr_url} target="_blank" rel="noreferrer">
-                <ExternalLink size={13} className="ico" />
-                PR
-              </a>
-            ) : null}
-            {(task.status === "draft" || task.status === "scheduled") && canCreateTask ? (
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={busy}
-                onClick={() => onPublishTask(task.id)}
-              >
-                <Send size={14} />
-                {task.status === "scheduled" ? "立即发布" : "发布"}
-              </button>
-            ) : null}
-          </div>
-        </div>
-        <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭">
-          <X size={18} />
-        </button>
-      </div>
-
-      <div className="tabs">
-        {(["overview", "conversation", "timeline", "logs"] as DetailTab[]).map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            className={`tab${detailTab === tab ? " active" : ""}`}
-            onClick={() => onSetTab(tab)}
-          >
-            {tab === "overview"
-              ? "概览"
-              : tab === "conversation"
-                ? "对话"
-                : tab === "timeline"
-                  ? "时间线"
-                  : "日志"}
-          </button>
-        ))}
-      </div>
-
-      <div className="drawer-scroll">
-        <div className="tab-body">
-          {detailTab === "overview" ? (
-            <div className="kv">
-              {task.status === "success" && canCreateTask ? (
-                <TaskReviewActions task={task} onReviewed={onReviewed} />
-              ) : null}
-              <KvRow k="项目" v={task.project_name ?? task.project_id} />
-              <KvRow k="类型" v={isQa ? "问答类 · 纯对话" : "工作类 · 改代码开 PR"} />
-              <KvRow k={isQa ? "问题" : "描述"} v={task.description} />
-              {isQa ? null : (
-                <>
-                  <KvRow k="签出分支" v={task.base_branch} mono />
-                  <KvRow k="工作分支" v={task.work_branch} mono />
-                  <KvRow k="目标分支" v={task.target_branch} mono />
-                  <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
-                </>
-              )}
-              <KvRow k="优先级" v={String(task.priority)} />
-              {predecessors.length > 0 ? (
-                <KvRow
-                  k="前置任务"
-                  v={
-                    <div className="pill-row">
-                      {predecessors.map((pre, index) =>
-                        pre ? (
-                          <span className="pill" key={pre.id}>
-                            [{metaOf(pre.status).label}] {pre.title}
-                          </span>
-                        ) : (
-                          <span className="pill" key={index}>
-                            已删除任务
-                          </span>
-                        )
-                      )}
-                    </div>
-                  }
-                />
-              ) : null}
-              {isQa ? null : (
-                <KvRow
-                  k="目标文件"
-                  v={
-                    task.target_files.length > 0 ? (
-                      <div className="pill-row">
-                        {task.target_files.map((file) => (
-                          <span className="pill" key={file}>
-                            {file}
-                          </span>
-                        ))}
-                      </div>
-                    ) : (
-                      "—"
-                    )
-                  }
-                />
-              )}
-              {!isQa && task.pr_url ? (
-                <KvRow
-                  k="PR"
-                  v={
-                    <a href={task.pr_url} target="_blank" rel="noreferrer">
-                      {task.pr_url}
-                    </a>
-                  }
-                />
-              ) : null}
-              {task.scheduled_at ? (
-                <KvRow
-                  k="定时发布"
-                  v={
-                    task.status === "scheduled"
-                      ? `${fmtTime(task.scheduled_at)}（到点自动进入待处理）`
-                      : fmtTime(task.scheduled_at)
-                  }
-                />
-              ) : null}
-              <KvRow k="创建于" v={fmtTime(task.created_at)} />
-              <KvRow k="更新于" v={fmtTime(task.updated_at)} />
-              {task.error_message ? <div className="error-box">{task.error_message}</div> : null}
-            </div>
-          ) : null}
-
-          {detailTab === "timeline" ? (
-            <div className="timeline">
-              {lifecycle.map((item, index) => (
-                <div className="tl-item" key={`lc-${index}`}>
-                  <span
-                    className={`tl-node${item.state === "done" ? " done" : item.state === "active" ? " active" : ""}`}
-                  />
-                  <div>
-                    <div className="tl-label">{item.label}</div>
-                    <div className="tl-time">{item.time ? fmtTime(item.time) : "—"}</div>
-                  </div>
-                </div>
-              ))}
-              {events.length > 0 ? (
-                <>
-                  <div className="tl-sep">执行事件</div>
-                  {events.map((event) => (
-                    <div className="tl-item" key={event.id}>
-                      <span className="tl-node done" />
-                      <div>
-                        <div className="tl-label">
-                          {EVENT_LABEL[event.event_type] ?? event.event_type}
-                          {event.message ? <span className="tl-msg"> · {event.message}</span> : null}
-                        </div>
-                        <div className="tl-time">{fmtTime(event.created_at)}</div>
-                      </div>
-                    </div>
-                  ))}
-                </>
-              ) : null}
-            </div>
-          ) : null}
-
-          {detailTab === "conversation" ? (
-            <TaskConversation task={task} enabled={open} canComment={canComment} canCreateTask={canCreateTask} />
-          ) : null}
-
-          {detailTab === "logs" ? <pre className="logs">{logText}</pre> : null}
-        </div>
-      </div>
-    </>
-  );
-}
-
-function TaskReviewActions({ task, onReviewed }: { task: Task; onReviewed: () => void | Promise<void> }) {
-  const [rejecting, setRejecting] = useState(false);
-  const [feedback, setFeedback] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function review(action: "accept" | "reject") {
-    if (action === "reject" && !feedback.trim()) {
-      setError("打回必须填写意见");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await postJson(`/api/tasks/${task.id}/review`, {
-        action,
-        feedback: action === "reject" ? feedback.trim() : undefined
-      });
-      setRejecting(false);
-      setFeedback("");
-      await onReviewed();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "操作失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="review-actions">
-      <div className="review-hint">该任务已执行完成，待人工验收。</div>
-      {rejecting ? (
-        <>
-          <textarea
-            rows={3}
-            value={feedback}
-            onChange={(event) => setFeedback(event.target.value)}
-            placeholder="填写打回意见，Worker 将带着该意见续接重跑…"
-            disabled={busy}
-          />
-          <div className="review-btns">
-            <button className="btn btn-sm" type="button" onClick={() => setRejecting(false)} disabled={busy}>
-              取消
-            </button>
-            <button
-              className="btn btn-primary btn-sm"
-              type="button"
-              onClick={() => review("reject")}
-              disabled={busy || !feedback.trim()}
-            >
-              <RotateCcw size={15} />
-              确认打回
-            </button>
-          </div>
-        </>
-      ) : (
-        <div className="review-btns">
-          <button className="btn btn-primary btn-sm" type="button" onClick={() => review("accept")} disabled={busy}>
-            <Check size={15} />
-            验收通过
-          </button>
-          <button className="btn btn-sm" type="button" onClick={() => setRejecting(true)} disabled={busy}>
-            <RotateCcw size={15} />
-            打回重跑
-          </button>
-        </div>
-      )}
-      {error ? <div className="error-box">{error}</div> : null}
-    </div>
-  );
-}
-
-function TaskConversation({
-  task,
-  enabled,
-  canComment,
-  canCreateTask
-}: {
-  task: Task;
-  enabled: boolean;
-  canComment: boolean;
-  canCreateTask: boolean;
-}) {
-  const [comments, setComments] = useState<TaskComment[]>([]);
-  const [reply, setReply] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [closing, setClosing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const waiting = task.status === "waiting";
-  const isQa = task.task_type === "qa";
-  const closed = ["success", "failed", "cancelled"].includes(task.status);
-  const canReply = waiting && canComment;
-
-  async function closeConversation() {
-    setClosing(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/tasks/${task.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "complete" })
-      });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error ?? `结束失败：${response.status}`);
-      }
-      // 状态翻转交给 3s 总览轮询刷新；这里不本地改 task。
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "结束失败");
-    } finally {
-      setClosing(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!enabled) return;
-    let active = true;
-    async function load() {
-      try {
-        const response = await fetch(`/api/tasks/${task.id}/comments`, { cache: "no-store" });
-        if (!response.ok) return;
-        const data = (await response.json()) as { comments: TaskComment[] };
-        if (active) setComments(data.comments);
-      } catch {
-        /* 轮询失败静默，下次重试 */
-      }
-    }
-    void load();
-    const timer = window.setInterval(load, 3000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [task.id, enabled]);
-
-  async function submitReply(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!reply.trim()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/tasks/${task.id}/comments`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: reply.trim() })
-      });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error ?? `回复失败：${response.status}`);
-      }
-      const data = (await response.json()) as { comment: TaskComment };
-      setComments((prev) => [...prev, data.comment]);
-      setReply("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "回复失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="chat">
-      {comments.length === 0 ? (
-        <Empty
-          icon={<MessageSquare size={28} />}
-          text={isQa ? "等待 Claude 回答…答案会显示在这里。" : "暂无对话。Worker 需要确认时会在此提问。"}
-        />
-      ) : (
-        <div className="chat-stream">
-          {comments.map((comment) => (
-            <div className={`chat-msg ${comment.author}`} key={comment.id}>
-              <span className="chat-avatar" data-author={comment.author}>
-                {comment.author === "worker" ? <Bot size={14} /> : <UserRound size={14} />}
-              </span>
-              <div className="chat-bubble">
-                <div className="chat-meta">
-                  <span className="chat-author">{comment.author === "worker" ? "Worker / Claude" : "你"}</span>
-                  <span className="chat-time">{fmtTime(comment.created_at)}</span>
-                </div>
-                <div className="chat-body">{comment.body}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <form className="chat-input" onSubmit={submitReply}>
-        <textarea
-          rows={3}
-          value={reply}
-          onChange={(event) => setReply(event.target.value)}
-          placeholder={
-            !canComment
-              ? "你没有任务对话权限"
-              : waiting
-                ? isQa
-                  ? "继续追问，提交后 Claude 会续接同一会话回答…"
-                  : "回复 Worker 的提问，提交后将续接执行…"
-                : isQa
-                  ? closed
-                    ? "对话已结束"
-                    : "等待 Claude 回答中…"
-                  : "仅在任务「等待回复」时可回复"
-          }
-          disabled={!canReply || busy}
-        />
-        {error ? <div className="error-box">{error}</div> : null}
-        <div className="chat-actions">
-          <button className="btn btn-primary" type="submit" disabled={!canReply || busy || !reply.trim()}>
-            <Send size={16} />
-            {!canComment ? "无回复权限" : waiting ? (isQa ? "发送追问" : "回复并续接") : isQa ? "等待回答" : "等待 Worker 提问"}
-          </button>
-          {isQa && !closed && canCreateTask ? (
-            <button type="button" className="btn btn-sm" onClick={closeConversation} disabled={closing}>
-              结束对话
-            </button>
-          ) : null}
-        </div>
-      </form>
-    </div>
   );
 }
 
@@ -2194,49 +1547,6 @@ function Donut({
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const meta = metaOf(status);
-  return (
-    <span className="badge" data-tone={meta.tone}>
-      <span className="glyph">{meta.glyph}</span>
-      {meta.label}
-    </span>
-  );
-}
-
-function TaskTypeBadge({ type }: { type: string }) {
-  const isQa = type === "qa";
-  return (
-    <span className="badge" data-tone={isQa ? "waiting" : "queued"}>
-      {isQa ? <MessageSquare size={12} /> : <GitBranch size={12} />}
-      {isQa ? "问答" : "工作"}
-    </span>
-  );
-}
-
-function StatusDot({ status, pulse }: { status: string; pulse?: boolean }) {
-  const meta = metaOf(status);
-  return <span className={`dot${pulse ? " pulse" : ""}`} data-tone={status === "online" ? "online" : meta.tone} />;
-}
-
-function KvRow({ k, v, mono }: { k: string; v: React.ReactNode; mono?: boolean }) {
-  return (
-    <div className="kv-row">
-      <span className="kv-k">{k}</span>
-      <span className={`kv-v${mono ? " mono" : ""}`}>{v}</span>
-    </div>
-  );
-}
-
-function Empty({ icon, text }: { icon: React.ReactNode; text: string }) {
-  return (
-    <div className="empty">
-      <span className="ico">{icon}</span>
-      {text}
     </div>
   );
 }
