@@ -1,0 +1,8 @@
+case,desc,round-1
+C1,三层 typecheck + build（db/worker/console）,PASS
+C2,迁移 012 应用 + 6 列存在,PASS
+C3,DB 查询行为（默认 idle / 远程门控 / 本地切换 / active_count）,PASS
+C4,采集链路（claude 版本 / 订阅 / oauth 用量）,PASS
+C5,worktree 隔离（fresh / 并发 / 隔离 / 复用 / 移除 / GC）,PASS
+C6,Electron 两开关点击实测,NOT-RUN
+C7,端到端单任务经 worktree 跑真 Claude,NOT-RUN

@@ -1110,6 +1110,80 @@ table.table {
   color: var(--text-3);
 }
 
+/* ---- Worker 详情：套餐用量 / 并行处理 / 远程开关 ---- */
+.detail-subhead {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  margin: 16px 0 8px;
+}
+
+.usage-block {
+  margin-bottom: 10px;
+}
+
+.usage-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+  margin-bottom: 4px;
+}
+
+.usage-head .pct {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-track {
+  height: 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.usage-fill {
+  height: 100%;
+  border-radius: 4px;
+}
+
+.parallel-list {
+  display: grid;
+  gap: 6px;
+}
+
+.parallel-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.parallel-item .t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.remote-hint {
+  font-size: 11.5px;
+  color: var(--text-4);
+}
+
 /* ---------------- Forms ---------------- */
 
 .form {

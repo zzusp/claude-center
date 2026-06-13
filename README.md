@@ -128,15 +128,42 @@ CLAUDE_CENTER_CLAUDE_PRE_COMMAND='$env:HTTP_PROXY = "http://127.0.0.1:10808"; $e
 
 > 注意：`bypassPermissions` 会绕过所有权限询问（`claude --help` 建议仅用于隔离沙箱），这是 Worker 自主执行的设计姿态。爆炸半径靠任务工作树隔离 + `deny` 护栏 + 项目 `localPath` 须是可信仓库共同约束；`deny` 是护栏不是硬沙箱（复合命令可能绕过），真正的安全边界是 Worker 独占 git 收尾。本姿态仅作用于**任务执行**，不影响「定向指挥」的 `claude_prompt`。
 
+## 工作状态门控（在线 ≠ 接任务）
+
+Worker 在线（有心跳）**不等于**会领任务。Worker 有独立的「工作状态」：
+
+- **空闲（idle）**：默认态。在线、上报心跳与信息，但**不领取任何任务**（在途任务继续跑完）。
+- **工作（working）**：领取并执行任务。
+
+切换工作态有两个入口：
+
+1. **Worker 桌面窗口**的「工作状态」开关（本地，始终可用）。
+2. **Web Console** 执行机群 → worker 详情里的「切到工作 / 切到空闲」按钮（远程），需 `command.create`（admin）权限，且**仅当该 Worker 开启了「允许 web 端远程开关」**时生效——这是客户端侧策略，由 Worker 窗口的第二个开关 / `CLAUDE_CENTER_ALLOW_REMOTE_CONTROL` 控制，关闭时远程切换被服务端拒绝（403）。
+
+工作态以 DB 为准（`POST /api/workers/[id]/working-state`、`workers.working_state`），Worker 每个 tick 读它决定是否认领；新 Worker 默认 idle，重启保留上次状态。
+
+## 真并发执行（git worktree 隔离）
+
+Worker 可**同时执行多个任务**，上限由 `CLAUDE_CENTER_MAX_PARALLEL`（默认 1）控制。每个工作类任务在**独立的 git worktree**（`~/.claude-center/worktrees/<taskId>`，从 `origin/<base>` 起工作分支）里跑，互不踩主仓与彼此，故**同项目也能并发**。worktree 生命周期跨 waiting/resume/rejected 持有，进终态（merged/failed）即拆；启动时 GC 清理终态任务的残留 worktree。问答类只读、不建 worktree。实现见 `apps/worker/src/worktree.ts`、`runner.ts`。
+
+## Worker 详情（执行机群卡片）
+
+Console 执行机群点 worker 卡片展开详情，除在线状态/主机/心跳外，还展示 Worker 周期采集（默认 60s，`CLAUDE_CENTER_INFO_INTERVAL_MS`）并上报的信息：
+
+- **Claude Code 版本**（`claude --version`）。
+- **订阅类型**：套餐（Max/Pro/…，读 `~/.claude/.credentials.json` 的 `claudeAiOauth.subscriptionType`）或 API 计费（`ANTHROPIC_API_KEY`）。
+- **套餐用量**（仅套餐账号）：5 小时窗口与 7 天窗口的「已用率 + 重置剩余」，数据来自 `https://api.anthropic.com/api/oauth/usage`（用 access token，经 `CLAUDE_CENTER_USAGE_PROXY` / `HTTPS_PROXY` 代理）。该接口给的是利用率百分比，无绝对额度，故以「已用 X%」表达。
+- **并行处理**：当前在途任务列表 + 并行上限。
+
 ## 任务执行中途确认（评论 ↔ 回复 ↔ 续接）
 
 Worker 执行任务时，若 Claude 需要先与用户确认才能安全推进，会在任务下方留一条提问评论并把任务置为「等待回复」；用户在 Web Console 任务详情的「对话」tab 看到提问并回复后，Worker 下一轮 tick 会**续接同一个 Claude 会话**继续执行，直到完成或再次提问。详见 `docs/spec/task-comment-confirm.md`。
 
 实现要点：
 
-- Worker 用 `claude -p <prompt> --output-format json` 调用，记录返回的 `session_id`；续接时用 `claude -p <回复> --resume <session_id> --output-format json`，且始终在该任务绑定的同一 `localPath` 下执行（Claude 会话按工作目录持久化在 `~/.claude/projects/`）。
+- Worker 用 `claude -p <prompt> --output-format json` 调用，记录返回的 `session_id`；续接时用 `claude -p <回复> --resume <session_id> --output-format json`，且始终在该任务专属的 git worktree 下执行（见「真并发执行」一节；Claude 会话按工作目录持久化在 `~/.claude/projects/`）。
 - 约定哨兵串 `<<CLAUDE_CENTER_NEEDS_INPUT>>`：Claude 需要确认时在回复末尾输出该串 + 问题后停止，Worker 解析后落为评论并转入等待。
-- 续接路径不重建分支，保留上一轮工作树改动；同一 Worker 同一项目在有等待中**工作类**任务时不再领取该项目的新任务，避免 `git checkout` 清掉未提交改动。
+- 续接路径不重建工作树，复用上一轮该任务 worktree 里的未提交改动；每任务独立 worktree 隔离后，等待中任务不再阻止同项目其它任务被领取（旧的「同项目有等待任务则停领」护栏已移除）。
 - 该能力依赖数据库迁移 `002_task_comments.sql`（新增 `task_comments` 表、`tasks.claude_session_id` 列、`waiting` 状态）。升级后务必先跑 `npm run db:migrate`。
 
 ## 任务发布门禁（草稿 → 待处理）
