@@ -1,0 +1,11 @@
+node_modules/
+.next/
+dist/
+out/
+.env
+.env.*
+!.env.example
+*.log
+*.tsbuildinfo
+worker-data/
+docs/tmp/

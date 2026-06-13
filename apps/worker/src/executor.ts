@@ -1,0 +1,327 @@
+import {
+  addTaskComment,
+  addTaskEvent,
+  getPendingReply,
+  getPool,
+  getTaskLocalPath,
+  markDirectCommandFailed,
+  markDirectCommandRunning,
+  markDirectCommandSuccess,
+  markTaskFailed,
+  markTaskRunning,
+  markTaskSuccess,
+  setTaskClaudeSession,
+  setTaskWaiting,
+  type DirectCommand,
+  type Task
+} from "@claude-center/db";
+import type { WorkerConfig } from "./config.js";
+import { runCommand, runPowerShell, type CommandResult } from "./shell.js";
+
+const CLAUDE_TIMEOUT_MS = 60 * 60_000;
+
+// Claude 在 headless 模式下没有内建「需要提问」信号，约定这个哨兵：需要用户确认时
+// Claude 在回复末尾输出该串 + 问题后停止，Worker 解析后落为评论并等待回复。
+const NEEDS_INPUT_SENTINEL = "<<CLAUDE_CENTER_NEEDS_INPUT>>";
+
+type ClaudeTurn = { sessionId: string | null; result: string; raw: CommandResult };
+
+// 运行 `claude -p <prompt> --output-format json`，可选 `--resume <session_id>` 续接已有
+// 会话。配置了前置命令（代理 / VPN）时在同一 PowerShell 会话内先执行，使其设置的环境
+// 变量被 claude 继承；prompt 经环境变量传入，空格 / 引号 / 换行不被破坏。session id 是
+// UUID，无 shell 元字符，可安全内联进脚本。
+function runClaudeJson(
+  config: WorkerConfig,
+  opts: { prompt: string; cwd?: string; resumeSessionId?: string }
+): Promise<ClaudeTurn> {
+  const run = config.claudePreCommand
+    ? runPowerShell(
+        `${config.claudePreCommand}; & $env:CLAUDE_CENTER_CLAUDE_CMD -p $env:CLAUDE_CENTER_PROMPT --output-format json${
+          opts.resumeSessionId ? ` --resume ${opts.resumeSessionId}` : ""
+        }`,
+        {
+          cwd: opts.cwd,
+          timeoutMs: CLAUDE_TIMEOUT_MS,
+          env: {
+            ...process.env,
+            CLAUDE_CENTER_CLAUDE_CMD: config.claudeCommand,
+            CLAUDE_CENTER_PROMPT: opts.prompt
+          }
+        }
+      )
+    : runCommand(
+        config.claudeCommand,
+        opts.resumeSessionId
+          ? ["-p", opts.prompt, "--resume", opts.resumeSessionId, "--output-format", "json"]
+          : ["-p", opts.prompt, "--output-format", "json"],
+        { cwd: opts.cwd, timeoutMs: CLAUDE_TIMEOUT_MS }
+      );
+
+  return run.then((raw) => {
+    const parsed = parseClaudeJson(raw);
+    return { sessionId: parsed.session_id ?? null, result: parsed.result ?? "", raw };
+  });
+}
+
+function parseClaudeJson(raw: CommandResult): { session_id?: string; result?: string } {
+  try {
+    return JSON.parse(raw.stdout.trim()) as { session_id?: string; result?: string };
+  } catch {
+    throw new Error(
+      `Failed to parse claude --output-format json output.\nstdout:\n${raw.stdout.slice(
+        -2000
+      )}\nstderr:\n${raw.stderr.slice(-2000)}`
+    );
+  }
+}
+
+function extractQuestion(result: string): string | null {
+  const index = result.indexOf(NEEDS_INPUT_SENTINEL);
+  if (index === -1) {
+    return null;
+  }
+  const question = result.slice(index + NEEDS_INPUT_SENTINEL.length).trim();
+  return question || "（Claude 请求确认，但未给出具体问题）";
+}
+
+function taskPrompt(task: Task): string {
+  const targetFiles = task.target_files.length > 0 ? task.target_files.join("\n") : "No explicit target files.";
+  return [
+    `ClaudeCenter task: ${task.title}`,
+    "",
+    "Goal:",
+    task.description,
+    "",
+    "Target files:",
+    targetFiles,
+    "",
+    "Work directly in the current repository. Implement the requested code changes, keep edits scoped, and run the most relevant local verification command when possible.",
+    "",
+    `If you need a decision or clarification from the user before you can proceed safely, do NOT guess. End your reply with a line containing exactly ${NEEDS_INPUT_SENTINEL} followed by your question, then stop without making further changes. The user will reply and you will be resumed in this same session to continue.`
+  ].join("\n");
+}
+
+function resumePrompt(reply: string): string {
+  return [
+    "The user replied to your question:",
+    "",
+    reply,
+    "",
+    `Continue the ClaudeCenter task using this answer. If you still need another decision, use the same ${NEEDS_INPUT_SENTINEL} convention again; otherwise finish the implementation.`
+  ].join("\n");
+}
+
+function prBody(task: Task, claudeOutput: string): string {
+  return [
+    `ClaudeCenter task: ${task.id}`,
+    "",
+    "## Request",
+    task.description,
+    "",
+    "## Worker Evidence",
+    "Claude Code finished locally. The PR was created by the assigned desktop Worker.",
+    "",
+    "## Claude Output",
+    "```text",
+    claudeOutput.slice(-6000),
+    "```"
+  ].join("\n");
+}
+
+function extractPrUrl(output: string): string | null {
+  const match = output.match(/https:\/\/github\.com\/\S+\/pull\/\d+/);
+  return match?.[0] ?? null;
+}
+
+// 处理一轮 Claude 输出：先记下续接所需 session；若请求确认则落评论 + 转入等待；
+// 否则按 git 改动收尾（commit / push / PR）。
+async function handleClaudeTurn(config: WorkerConfig, task: Task, localPath: string, turn: ClaudeTurn): Promise<void> {
+  const pool = getPool();
+  if (turn.sessionId) {
+    await setTaskClaudeSession(pool, task.id, config.workerId, turn.sessionId);
+  }
+
+  const question = extractQuestion(turn.result);
+  if (question) {
+    await addTaskComment(pool, { taskId: task.id, author: "worker", workerId: config.workerId, body: question });
+    await setTaskWaiting(pool, task.id, config.workerId, turn.sessionId);
+    await addTaskEvent(pool, task.id, config.workerId, "waiting", "Worker is waiting for user reply", { question });
+    return;
+  }
+
+  await finalizeTask(config, task, localPath, turn.result);
+}
+
+// 收尾：无改动直接成功；有改动则提交、推送并用 gh 创建 PR。
+async function finalizeTask(config: WorkerConfig, task: Task, localPath: string, claudeOutput: string): Promise<void> {
+  const pool = getPool();
+  const status = await runCommand("git", ["-C", localPath, "status", "--porcelain"], { timeoutMs: 60_000 });
+  if (!status.stdout.trim()) {
+    await markTaskSuccess(
+      pool,
+      task.id,
+      config.workerId,
+      { localPath, noChanges: true, claudeResult: claudeOutput },
+      null
+    );
+    return;
+  }
+
+  const addArgs =
+    task.target_files.length > 0
+      ? ["-C", localPath, "add", ...task.target_files]
+      : ["-C", localPath, "add", "--all"];
+  await runCommand("git", addArgs, { timeoutMs: 5 * 60_000 });
+  await runCommand("git", ["-C", localPath, "commit", "-m", `ClaudeCenter task: ${task.title}`], {
+    timeoutMs: 5 * 60_000
+  });
+  await runCommand("git", ["-C", localPath, "push", "-u", "origin", task.work_branch], {
+    timeoutMs: 15 * 60_000
+  });
+
+  const pr = await runCommand(
+    config.ghCommand,
+    [
+      "pr",
+      "create",
+      "--base",
+      task.base_branch,
+      "--head",
+      task.work_branch,
+      "--title",
+      task.title,
+      "--body",
+      prBody(task, claudeOutput)
+    ],
+    { cwd: localPath, timeoutMs: 10 * 60_000 }
+  );
+  const prUrl = extractPrUrl(`${pr.stdout}\n${pr.stderr}`);
+
+  await markTaskSuccess(
+    pool,
+    task.id,
+    config.workerId,
+    {
+      localPath,
+      gitStatusBeforeCommit: status.stdout,
+      claudeResult: claudeOutput,
+      prStdout: pr.stdout,
+      prStderr: pr.stderr
+    },
+    prUrl
+  );
+}
+
+// 新任务：建分支后跑第一轮 Claude。
+export async function executeTask(config: WorkerConfig, task: Task): Promise<void> {
+  const pool = getPool();
+  await markTaskRunning(pool, task.id, config.workerId);
+
+  try {
+    const localPath = await getTaskLocalPath(pool, task.id, config.workerId);
+    if (!localPath) {
+      throw new Error(`No local path linked for task ${task.id}`);
+    }
+
+    await runCommand("git", ["-C", localPath, "fetch", "origin"], { timeoutMs: 10 * 60_000 });
+    await runCommand("git", ["-C", localPath, "checkout", task.base_branch], { timeoutMs: 5 * 60_000 });
+    await runCommand("git", ["-C", localPath, "pull", "--ff-only", "origin", task.base_branch], {
+      timeoutMs: 10 * 60_000
+    });
+    await runCommand("git", ["-C", localPath, "checkout", "-B", task.work_branch], { timeoutMs: 5 * 60_000 });
+
+    const turn = await runClaudeJson(config, { prompt: taskPrompt(task), cwd: localPath });
+    await handleClaudeTurn(config, task, localPath, turn);
+  } catch (error) {
+    await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
+      failedAt: new Date().toISOString()
+    });
+  }
+}
+
+// 续接：用户已回复，续接同一 Claude 会话继续执行。不重建分支，保留上一轮工作树改动。
+export async function resumeTask(config: WorkerConfig, task: Task): Promise<void> {
+  const pool = getPool();
+
+  try {
+    const localPath = await getTaskLocalPath(pool, task.id, config.workerId);
+    if (!localPath) {
+      throw new Error(`No local path linked for task ${task.id}`);
+    }
+    if (!task.claude_session_id) {
+      throw new Error(`Task ${task.id} has no claude_session_id to resume`);
+    }
+
+    const reply = await getPendingReply(pool, task.id);
+    if (!reply) {
+      // 理论上 claimNextResumableTask 已保证有新回复；这里兜底退回等待，避免空跑 Claude。
+      await setTaskWaiting(pool, task.id, config.workerId, task.claude_session_id);
+      return;
+    }
+
+    const turn = await runClaudeJson(config, {
+      prompt: resumePrompt(reply),
+      cwd: localPath,
+      resumeSessionId: task.claude_session_id
+    });
+    await handleClaudeTurn(config, task, localPath, turn);
+  } catch (error) {
+    await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
+      failedAt: new Date().toISOString()
+    });
+  }
+}
+
+function payloadText(command: DirectCommand): string {
+  const value = command.payload.text;
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("Command payload.text is required");
+  }
+  return value;
+}
+
+function payloadCwd(command: DirectCommand): string | undefined {
+  const value = command.payload.cwd;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+// 定向指令仍用文本模式调用 claude（无需会话续接），与任务执行解耦。
+function runClaude(config: WorkerConfig, prompt: string, cwd?: string): Promise<CommandResult> {
+  if (!config.claudePreCommand) {
+    return runCommand(config.claudeCommand, ["-p", prompt], { cwd, timeoutMs: CLAUDE_TIMEOUT_MS });
+  }
+
+  const script = `${config.claudePreCommand}; & $env:CLAUDE_CENTER_CLAUDE_CMD -p $env:CLAUDE_CENTER_PROMPT`;
+  return runPowerShell(script, {
+    cwd,
+    timeoutMs: CLAUDE_TIMEOUT_MS,
+    env: {
+      ...process.env,
+      CLAUDE_CENTER_CLAUDE_CMD: config.claudeCommand,
+      CLAUDE_CENTER_PROMPT: prompt
+    }
+  });
+}
+
+export async function executeDirectCommand(config: WorkerConfig, command: DirectCommand): Promise<void> {
+  const pool = getPool();
+  await markDirectCommandRunning(pool, command.id, config.workerId);
+
+  try {
+    const text = payloadText(command);
+    const cwd = payloadCwd(command);
+    const result =
+      command.command === "shell" ? await runPowerShell(text, { cwd }) : await runClaude(config, text, cwd);
+
+    await markDirectCommandSuccess(pool, command.id, config.workerId, {
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      cwd
+    });
+  } catch (error) {
+    await markDirectCommandFailed(pool, command.id, config.workerId, error instanceof Error ? error.message : String(error), {
+      failedAt: new Date().toISOString()
+    });
+  }
+}

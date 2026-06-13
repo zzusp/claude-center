@@ -1,0 +1,22 @@
+{
+  "name": "claude-center",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "db:migrate": "npm -w @claude-center/db run migrate",
+    "dev:console": "npm -w @claude-center/db run build && node scripts/dev-console.mjs",
+    "dev:worker": "npm -w @claude-center/worker run dev",
+    "verify:console": "npm -w @claude-center/db run build && node scripts/verify-console.mjs",
+    "build": "npm -w @claude-center/db run build && npm -w @claude-center/console run build && npm -w @claude-center/worker run build",
+    "typecheck": "npm -w @claude-center/db run typecheck && npm -w @claude-center/console run typecheck && npm -w @claude-center/worker run typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
