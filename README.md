@@ -190,3 +190,21 @@ Console 看板用不同徽章区分「已完成（PR 已建待合并）」`succe
 - 领取门控在 `claimNextTask`：候选须不存在「状态不在 (`accepted`, `merged`) 的前置」。
 - 验收入口 `POST /api/tasks/[id]/review`（`accept` / `reject`，各在事务内完成）；打回意见落为 user 评论供 Worker 续接读取。
 - 打回重跑（`rerunRejectedTask`）先 `checkout work_branch` 再续接（不同于等待续接的不重建分支），`finalizeTask` 在 PR 已存在时跳过 `gh pr create`、复用原 PR。详见 `docs/spec/task-acceptance-dependencies.md`。
+
+## 定时任务（到点自动进入待处理队列）
+
+新建任务时可在发布表单填一个**定时发布**时间（留空则照旧建为 `draft` 草稿、需人工发布）。填了时间的任务落初始态 `scheduled`（定时待发），到点后由 Console 后台调度器自动转为 `pending`，进入可认领队列供在线 Worker 领取——不用人工到点手动点「发布」。
+
+状态生命周期新增一条入口分支：
+
+```
+draft     ──人工发布──────────────────▶ pending ──▶ claimed ──▶ ...
+scheduled ──到点(自动) / 人工立即发布──▶ pending ──▶ claimed ──▶ ...
+```
+
+实现要点：
+
+- **调度器在 Console**：`apps/console/instrumentation.ts` 在服务进程启动时（Next.js `register()`）起一个周期定时器，调 `promoteDueScheduledTasks`：`UPDATE tasks SET status='pending' WHERE status='scheduled' AND scheduled_at<=now()`，幂等、并逐条落 `scheduled_published` 审计事件。默认每 30s 检查一次，可经 `CLAUDE_CENTER_SCHEDULER_INTERVAL_MS` 覆盖。**Worker 零改动**，仍只认领 `pending`。
+- 「定时」机制落在 web 端，状态翻转不依赖 Worker 是否在线，看板始终如实显示；前提是 Console 进程在跑（本就是该 web 特性的前提）。
+- 建任务 `POST /api/tasks` 接受可选 `scheduledAt`（ISO 时间），校验为将来时间，落 `scheduled` 态；详情页「发布」按钮对 `scheduled` 任务即「立即发布」（到点前手动提前发布，覆盖定时，复用 `publishTask`，WHERE 放开为 `status IN ('draft','scheduled')`）。
+- 该能力依赖数据库迁移 `009_task_scheduled.sql`（新增 `tasks.scheduled_at` 列、`status` CHECK 增加 `scheduled`、待发部分索引）。升级后务必先跑 `npm run db:migrate`。详见 `docs/spec/task-scheduled.md`。
