@@ -22,6 +22,12 @@ export type WorkerConfig = {
   claudeCommand: string;
   claudePreCommand: string;
   ghCommand: string;
+  // 任务执行内核的安全姿态：headless 下自主跑，不为权限停（deny 规则仍硬生效）。
+  permissionMode: string;
+  // 经 --settings 注入的 deny 护栏（写类 git 交还 Worker），默认指向随应用分发的配置。
+  claudeSettingsPath: string;
+  // 经 --append-system-prompt-file 注入的中控协议规则，默认指向随应用分发的规则文件。
+  claudeRulesPath: string;
 };
 
 function readStableWorkerId(): string {
@@ -76,7 +82,10 @@ function readNumber(name: string, fallback: number): number {
 }
 
 export function readWorkerConfig(): WorkerConfig {
-  loadRootEnv(path.dirname(fileURLToPath(import.meta.url)));
+  // dist/config.js 与 src/config.ts 的 `../prompts`、`../config` 都解析到 apps/worker 下，
+  // 故无论以 electron(dist) 还是 tsx(src) 方式运行，资产文件路径都一致。
+  const workerDir = path.dirname(fileURLToPath(import.meta.url));
+  loadRootEnv(workerDir);
   return {
     workerId: readStableWorkerId(),
     workerName: process.env.CLAUDE_CENTER_WORKER_NAME || os.hostname(),
@@ -87,6 +96,11 @@ export function readWorkerConfig(): WorkerConfig {
     heartbeatIntervalMs: readNumber("CLAUDE_CENTER_HEARTBEAT_INTERVAL_MS", 15_000),
     claudeCommand: process.env.CLAUDE_CODE_COMMAND || "claude",
     claudePreCommand: process.env.CLAUDE_CENTER_CLAUDE_PRE_COMMAND?.trim() || "",
-    ghCommand: process.env.GH_COMMAND || "gh"
+    ghCommand: process.env.GH_COMMAND || "gh",
+    permissionMode: process.env.CLAUDE_CENTER_PERMISSION_MODE || "bypassPermissions",
+    claudeSettingsPath:
+      process.env.CLAUDE_CENTER_CLAUDE_SETTINGS || path.resolve(workerDir, "../config/claude-settings.json"),
+    claudeRulesPath:
+      process.env.CLAUDE_CENTER_CLAUDE_RULES || path.resolve(workerDir, "../prompts/center-rules.md")
   };
 }

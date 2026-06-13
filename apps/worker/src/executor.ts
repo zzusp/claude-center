@@ -29,16 +29,19 @@ const NEEDS_INPUT_SENTINEL = "<<CLAUDE_CENTER_NEEDS_INPUT>>";
 type ClaudeTurn = { sessionId: string | null; result: string; raw: CommandResult };
 
 // 运行 `claude -p <prompt> --output-format json`，可选 `--resume <session_id>` 续接已有
-// 会话。配置了前置命令（代理 / VPN）时在同一 PowerShell 会话内先执行，使其设置的环境
-// 变量被 claude 继承；prompt 经环境变量传入，空格 / 引号 / 换行不被破坏。session id 是
-// UUID，无 shell 元字符，可安全内联进脚本。
+// 会话。统一附带任务执行的安全姿态：`--permission-mode bypassPermissions`（headless 自主跑、
+// 不为权限停）+ `--settings`（deny 写类 git，交还 Worker）+ `--append-system-prompt-file`
+// （中控协议规则）。配置了前置命令（代理 / VPN）时在同一 PowerShell 会话内先执行，使其设置
+// 的环境变量被 claude 继承；prompt 与路径经环境变量传入，空格 / 引号 / 换行不被破坏。session
+// id 是 UUID，无 shell 元字符，可安全内联进脚本。
 function runClaudeJson(
   config: WorkerConfig,
   opts: { prompt: string; cwd?: string; resumeSessionId?: string }
 ): Promise<ClaudeTurn> {
   const run = config.claudePreCommand
     ? runPowerShell(
-        `${config.claudePreCommand}; & $env:CLAUDE_CENTER_CLAUDE_CMD -p $env:CLAUDE_CENTER_PROMPT --output-format json${
+        // 路径经环境变量传入：PowerShell 在实参位展开 $env: 变量不做分词，含空格的路径仍是单个实参。
+        `${config.claudePreCommand}; & $env:CLAUDE_CENTER_CLAUDE_CMD -p $env:CLAUDE_CENTER_PROMPT --permission-mode $env:CLAUDE_CENTER_PERMISSION_MODE --settings $env:CLAUDE_CENTER_SETTINGS_PATH --append-system-prompt-file $env:CLAUDE_CENTER_RULES_PATH --output-format json${
           opts.resumeSessionId ? ` --resume ${opts.resumeSessionId}` : ""
         }`,
         {
@@ -47,15 +50,28 @@ function runClaudeJson(
           env: {
             ...process.env,
             CLAUDE_CENTER_CLAUDE_CMD: config.claudeCommand,
-            CLAUDE_CENTER_PROMPT: opts.prompt
+            CLAUDE_CENTER_PROMPT: opts.prompt,
+            CLAUDE_CENTER_PERMISSION_MODE: config.permissionMode,
+            CLAUDE_CENTER_SETTINGS_PATH: config.claudeSettingsPath,
+            CLAUDE_CENTER_RULES_PATH: config.claudeRulesPath
           }
         }
       )
     : runCommand(
         config.claudeCommand,
-        opts.resumeSessionId
-          ? ["-p", opts.prompt, "--resume", opts.resumeSessionId, "--output-format", "json"]
-          : ["-p", opts.prompt, "--output-format", "json"],
+        [
+          "-p",
+          opts.prompt,
+          ...(opts.resumeSessionId ? ["--resume", opts.resumeSessionId] : []),
+          "--permission-mode",
+          config.permissionMode,
+          "--settings",
+          config.claudeSettingsPath,
+          "--append-system-prompt-file",
+          config.claudeRulesPath,
+          "--output-format",
+          "json"
+        ],
         { cwd: opts.cwd, timeoutMs: CLAUDE_TIMEOUT_MS }
       );
 

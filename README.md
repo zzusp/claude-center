@@ -110,6 +110,24 @@ CLAUDE_CENTER_CLAUDE_PRE_COMMAND='$env:HTTP_PROXY = "http://127.0.0.1:10808"; $e
 
 前置命令只包裹 `claude`，不影响 `git` / `gh`。如果这些命令也要走代理，直接在启动 Worker 的环境里设置 `HTTP_PROXY` / `HTTPS_PROXY`——Worker 会把自身环境透传给所有子进程。
 
+## 任务执行的安全姿态（bypassPermissions + deny 护栏）
+
+为了让桌面端尽量无人值守地自主执行任务，Worker 调用 `claude` 跑任务时统一附带三项配置（远程接管整体设计见 `docs/spec/worker-remote-takeover.md`）：
+
+- **`--permission-mode bypassPermissions`**：headless 下不为权限询问停顿，自主跑到底。
+- **`--settings <claude-settings.json>`**：注入一组 `deny` 规则，把**写类 git**（`git add` / `commit` / `push` / `checkout` / `switch` / `branch` / `reset` / `merge` / `rebase` / `worktree`）交还 Worker 处理；只读 git（`status` / `diff` / `log` / `show`）放行。`deny` 规则在 `bypassPermissions` 下仍硬生效，是 bypass 姿态下的安全护栏。
+- **`--append-system-prompt-file <center-rules.md>`**：注入中控协议规则（headless 上下文 + git 归 Worker），不再每个任务提示词里重复。
+
+默认规则 / 配置文件随 Worker 应用分发（`apps/worker/prompts/center-rules.md`、`apps/worker/config/claude-settings.json`），可经环境变量覆盖：
+
+| 环境变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `CLAUDE_CENTER_PERMISSION_MODE` | `bypassPermissions` | 任务执行的 `--permission-mode` |
+| `CLAUDE_CENTER_CLAUDE_SETTINGS` | 随应用分发的 `claude-settings.json` | `--settings` 的来源（deny 护栏） |
+| `CLAUDE_CENTER_CLAUDE_RULES` | 随应用分发的 `center-rules.md` | `--append-system-prompt-file` 的来源 |
+
+> 注意：`bypassPermissions` 会绕过所有权限询问（`claude --help` 建议仅用于隔离沙箱），这是 Worker 自主执行的设计姿态。爆炸半径靠任务工作树隔离 + `deny` 护栏 + 项目 `localPath` 须是可信仓库共同约束；`deny` 是护栏不是硬沙箱（复合命令可能绕过），真正的安全边界是 Worker 独占 git 收尾。本姿态仅作用于**任务执行**，不影响「定向指挥」的 `claude_prompt`。
+
 ## 任务执行中途确认（评论 ↔ 回复 ↔ 续接）
 
 Worker 执行任务时，若 Claude 需要先与用户确认才能安全推进，会在任务下方留一条提问评论并把任务置为「等待回复」；用户在 Web Console 任务详情的「对话」tab 看到提问并回复后，Worker 下一轮 tick 会**续接同一个 Claude 会话**继续执行，直到完成或再次提问。详见 `docs/spec/task-comment-confirm.md`。
