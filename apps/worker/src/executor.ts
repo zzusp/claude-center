@@ -111,6 +111,29 @@ function resumePrompt(reply: string): string {
   ].join("\n");
 }
 
+// 问答类任务：纯对话，只读地回答关于该项目的问题，不修改任何文件。整段回复会原样作为
+// 一条评论展示给用户，所以直接写成对用户的回答即可（无哨兵、无 git 收尾）。
+function qaPrompt(task: Task): string {
+  return [
+    `ClaudeCenter Q&A: ${task.title}`,
+    "",
+    "Question:",
+    task.description,
+    "",
+    "Answer the user's question about this repository. You may read any files to ground your answer, but this is a read-only conversation: do NOT modify, create, or delete any files, and do NOT run git. Reply with the answer itself — it will be shown to the user verbatim as a comment."
+  ].join("\n");
+}
+
+function qaResumePrompt(reply: string): string {
+  return [
+    "The user followed up:",
+    "",
+    reply,
+    "",
+    "Continue the conversation. Stay read-only (no file or git changes); reply with the answer itself."
+  ].join("\n");
+}
+
 function prBody(task: Task, claudeOutput: string): string {
   return [
     `ClaudeCenter task: ${task.id}`,
@@ -150,6 +173,20 @@ async function handleClaudeTurn(config: WorkerConfig, task: Task, localPath: str
   }
 
   await finalizeTask(config, task, localPath, turn.result);
+}
+
+// 问答类一轮：记下续接 session → 把回答落为 worker 评论 → 转入等待，让用户继续追问或
+// 手动「结束对话」。问答不收尾 git，恒定「答完即等待」。
+async function handleQaTurn(config: WorkerConfig, task: Task, turn: ClaudeTurn): Promise<void> {
+  const pool = getPool();
+  if (turn.sessionId) {
+    await setTaskClaudeSession(pool, task.id, config.workerId, turn.sessionId);
+  }
+
+  const answer = turn.result.trim() || "（Claude 未返回内容）";
+  await addTaskComment(pool, { taskId: task.id, author: "worker", workerId: config.workerId, body: answer });
+  await setTaskWaiting(pool, task.id, config.workerId, turn.sessionId);
+  await addTaskEvent(pool, task.id, config.workerId, "waiting", "Q&A answered, waiting for next message", {});
 }
 
 // 收尾：无改动直接成功；有改动则提交、推送并用 gh 创建 PR。
@@ -212,7 +249,7 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
   );
 }
 
-// 新任务：建分支后跑第一轮 Claude。
+// 新任务：工作类建分支后跑第一轮 Claude；问答类跳过 git，只读对话。
 export async function executeTask(config: WorkerConfig, task: Task): Promise<void> {
   const pool = getPool();
   await markTaskRunning(pool, task.id, config.workerId);
@@ -221,6 +258,12 @@ export async function executeTask(config: WorkerConfig, task: Task): Promise<voi
     const localPath = await getTaskLocalPath(pool, task.id, config.workerId);
     if (!localPath) {
       throw new Error(`No local path linked for task ${task.id}`);
+    }
+
+    if (task.task_type === "qa") {
+      const turn = await runClaudeJson(config, { prompt: qaPrompt(task), cwd: localPath });
+      await handleQaTurn(config, task, turn);
+      return;
     }
 
     await runCommand("git", ["-C", localPath, "fetch", "origin"], { timeoutMs: 10 * 60_000 });
@@ -256,6 +299,16 @@ export async function resumeTask(config: WorkerConfig, task: Task): Promise<void
     if (!reply) {
       // 理论上 claimNextResumableTask 已保证有新回复；这里兜底退回等待，避免空跑 Claude。
       await setTaskWaiting(pool, task.id, config.workerId, task.claude_session_id);
+      return;
+    }
+
+    if (task.task_type === "qa") {
+      const turn = await runClaudeJson(config, {
+        prompt: qaResumePrompt(reply),
+        cwd: localPath,
+        resumeSessionId: task.claude_session_id
+      });
+      await handleQaTurn(config, task, turn);
       return;
     }
 

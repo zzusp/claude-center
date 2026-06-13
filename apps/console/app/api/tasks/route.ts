@@ -14,6 +14,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as {
       projectId?: string;
+      taskType?: string;
       title?: string;
       description?: string;
       baseBranch?: string;
@@ -26,17 +27,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Project, title and description are required" }, { status: 400 });
     }
 
-    const targetFiles = (body.targetFilesText ?? "")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
+    const taskType = body.taskType === "qa" ? "qa" : "work";
+
+    // 问答类不碰 git：分支 / 目标文件对它无意义，统一存空。
+    const targetFiles =
+      taskType === "qa"
+        ? []
+        : (body.targetFilesText ?? "")
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
 
     const task = await createTask(getPool(), {
       projectId: body.projectId,
+      taskType,
       title: body.title.trim(),
       description: body.description.trim(),
-      baseBranch: body.baseBranch?.trim() || "main",
-      workBranch: body.workBranch?.trim() || defaultWorkBranch(body.title),
+      baseBranch: taskType === "qa" ? "" : body.baseBranch?.trim() || "main",
+      workBranch: taskType === "qa" ? "" : body.workBranch?.trim() || defaultWorkBranch(body.title),
       targetFiles,
       priority: Number.isFinite(body.priority) ? Number(body.priority) : 0
     });

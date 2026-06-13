@@ -1274,3 +1274,12 @@ select:focus {
   border-top: 1px solid var(--border);
   padding-top: 12px;
 }
+
+.chat-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-actions .btn-primary {
+  flex: 1;
+}
