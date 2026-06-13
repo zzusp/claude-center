@@ -1,4 +1,5 @@
 import {
+  claimNextCleanupCandidate,
   claimNextDirectCommand,
   claimNextRejectedTask,
   claimNextResumableTask,
@@ -9,7 +10,7 @@ import {
   upsertWorkerProjectLink
 } from "@claude-center/db";
 import { readWorkerConfig, type WorkerConfig } from "./config.js";
-import { executeDirectCommand, executeTask, rerunRejectedTask, resumeTask } from "./executor.js";
+import { cleanupMergedTask, executeDirectCommand, executeTask, rerunRejectedTask, resumeTask } from "./executor.js";
 
 export class ClaudeCenterWorker {
   private readonly config: WorkerConfig;
@@ -98,6 +99,14 @@ export class ClaudeCenterWorker {
       const task = await claimNextTask(getPool(), this.config.workerId);
       if (task) {
         await executeTask(this.config, task);
+        return;
+      }
+
+      // 最低优先级：执行类工作都没有时，轮转检查一个已建 PR 的 success 任务是否已合并，
+      // 合并则清理本地/远端 work 分支并转入 merged 终态。
+      const cleanup = await claimNextCleanupCandidate(getPool(), this.config.workerId);
+      if (cleanup) {
+        await cleanupMergedTask(this.config, cleanup);
       }
     } finally {
       this.polling = false;

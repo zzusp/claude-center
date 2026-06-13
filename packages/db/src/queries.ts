@@ -1,5 +1,5 @@
 import type pg from "pg";
-import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, Worker } from "./types.js";
+import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, TaskEvent, TaskSubmitMode, TaskType, Worker } from "./types.js";
 
 export type WorkerRegistration = {
   id: string;
@@ -37,33 +37,58 @@ export async function createProject(
   return result.rows[0]!;
 }
 
+export async function getProject(client: pg.Pool | pg.PoolClient, id: string): Promise<Project | null> {
+  const result = await client.query<Project>(`SELECT * FROM projects WHERE id = $1 LIMIT 1`, [id]);
+  return result.rows[0] ?? null;
+}
+
 export async function createTask(
   client: pg.Pool | pg.PoolClient,
   input: {
     projectId: string;
+    taskType: TaskType;
     title: string;
     description: string;
     baseBranch: string;
     workBranch: string;
+    targetBranch: string;
+    submitMode: TaskSubmitMode;
     targetFiles: string[];
     priority: number;
   }
 ): Promise<Task> {
   const result = await client.query<Task>(
-    `INSERT INTO tasks (project_id, title, description, base_branch, work_branch, target_files, priority)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO tasks (project_id, task_type, title, description, base_branch, work_branch, target_branch, submit_mode, target_files, priority)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING *`,
     [
       input.projectId,
+      input.taskType,
       input.title,
       input.description,
       input.baseBranch,
       input.workBranch,
+      input.targetBranch,
+      input.submitMode,
       input.targetFiles,
       input.priority
     ]
   );
   return result.rows[0]!;
+}
+
+// 发布草稿任务：draft → pending，进入可认领队列。WHERE status='draft' 保证只有草稿
+// 可发布，对已认领/运行中/已完成任务无副作用；未命中返回 null（任务不存在或非草稿）。
+export async function publishTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET status = 'pending',
+            updated_at = now()
+      WHERE id = $1 AND status = 'draft'
+      RETURNING *`,
+    [taskId]
+  );
+  return result.rows[0] ?? null;
 }
 
 export async function listRecentTasks(client: pg.Pool | pg.PoolClient, limit = 50): Promise<Task[]> {
@@ -76,7 +101,7 @@ export async function listRecentTasks(client: pg.Pool | pg.PoolClient, limit = 5
        JOIN projects ON projects.id = tasks.project_id
        LEFT JOIN LATERAL (
          SELECT array_agg(d.depends_on_task_id) AS depends_on,
-                bool_or(pre.status <> 'accepted') AS blocked
+                bool_or(pre.status NOT IN ('accepted', 'merged')) AS blocked
            FROM task_dependencies d
            JOIN tasks pre ON pre.id = d.depends_on_task_id
           WHERE d.task_id = tasks.id
@@ -124,6 +149,77 @@ export async function addTaskDependencies(
      ON CONFLICT DO NOTHING`,
     [taskId, unique]
   );
+}
+
+export type TaskSort = "updated" | "created" | "priority";
+
+export type ListTasksFilters = {
+  status?: string[];
+  projectId?: string | null;
+  q?: string | null;
+  sort?: TaskSort;
+  limit: number;
+  offset: number;
+};
+
+// 排序白名单：避免把外部输入直接拼进 ORDER BY。
+const TASK_SORT_SQL: Record<TaskSort, string> = {
+  updated: "tasks.updated_at DESC",
+  created: "tasks.created_at DESC",
+  priority: "tasks.priority DESC, tasks.created_at DESC"
+};
+
+// 任务流分页/筛选查询：状态(多选) + 项目 + 关键词(标题/分支)；count(*) OVER() 单次拿总数。
+export async function listTasks(
+  client: pg.Pool | pg.PoolClient,
+  filters: ListTasksFilters
+): Promise<{ tasks: Task[]; total: number }> {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filters.status && filters.status.length > 0) {
+    params.push(filters.status);
+    conditions.push(`tasks.status = ANY($${params.length}::text[])`);
+  }
+  if (filters.projectId) {
+    params.push(filters.projectId);
+    conditions.push(`tasks.project_id = $${params.length}`);
+  }
+  const keyword = filters.q?.trim();
+  if (keyword) {
+    params.push(`%${keyword}%`);
+    conditions.push(`(tasks.title ILIKE $${params.length} OR tasks.work_branch ILIKE $${params.length})`);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const orderBy = TASK_SORT_SQL[filters.sort ?? "updated"];
+
+  params.push(filters.limit);
+  const limitIdx = params.length;
+  params.push(filters.offset);
+  const offsetIdx = params.length;
+
+  const result = await client.query<Task & { total_count: string }>(
+    `SELECT tasks.*, projects.name AS project_name, count(*) OVER() AS total_count
+       FROM tasks
+       JOIN projects ON projects.id = tasks.project_id
+       ${where}
+      ORDER BY ${orderBy}
+      LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    params
+  );
+
+  const total = result.rows[0] ? Number(result.rows[0].total_count) : 0;
+  const tasks = result.rows.map(({ total_count: _total, ...task }) => task as Task);
+  return { tasks, total };
+}
+
+export async function listTaskEvents(client: pg.Pool | pg.PoolClient, taskId: string): Promise<TaskEvent[]> {
+  const result = await client.query<TaskEvent>(
+    `SELECT * FROM task_events WHERE task_id = $1 ORDER BY created_at ASC`,
+    [taskId]
+  );
+  return result.rows;
 }
 
 export async function listWorkers(client: pg.Pool | pg.PoolClient): Promise<Worker[]> {
@@ -209,22 +305,25 @@ export async function claimNextTask(client: pg.Pool | pg.PoolClient, workerId: s
         WHERE tasks.status = 'pending'
           AND worker_project_links.worker_id = $1
           AND worker_project_links.enabled = true
-          -- 同 worker 在该项目已有等待用户回复的任务时，不领新任务：新任务会在同一
-          -- 本地工作树执行 git checkout，清掉等待中任务未提交的改动。
+          -- 同 worker 在该项目已有「等待用户回复的工作类任务」时，不领新任务：该任务
+          -- 工作树有未提交改动，新任务会在同一本地工作树 git checkout 清掉它。问答类
+          -- 等待任务是只读对话、不持有改动，不锁工作树，故不阻止领新任务。
           AND NOT EXISTS (
             SELECT 1
               FROM tasks waiting
              WHERE waiting.project_id = tasks.project_id
                AND waiting.claimed_by = $1
                AND waiting.status = 'waiting'
+               AND waiting.task_type = 'work'
           )
-          -- 前置依赖门控：任一前置任务未达 accepted（人工验收通过）则不可领取。
+          -- 前置依赖门控：任一前置任务未到达「已完成」终态则不可领取。已完成 = accepted
+          -- （人工验收通过）或 merged（PR 已合并清理 / 直推已落地，工作已进目标分支）。
           AND NOT EXISTS (
             SELECT 1
               FROM task_dependencies dep
               JOIN tasks pre ON pre.id = dep.depends_on_task_id
              WHERE dep.task_id = tasks.id
-               AND pre.status <> 'accepted'
+               AND pre.status NOT IN ('accepted', 'merged')
           )
         ORDER BY tasks.priority DESC, tasks.created_at ASC
         FOR UPDATE SKIP LOCKED
@@ -356,6 +455,79 @@ export async function rejectTask(
   );
   await addTaskEvent(client, taskId, null, "rejected", "Task sent back by user", { feedback });
   return result.rows[0]!;
+}
+
+// PR 已合并并完成本地清理 / 直推（submit_mode='push'）已落地：进入终态 merged。resultPayload
+// 合并进既有 result，不丢之前 success 阶段写入的内容；finished_at 只在首次设置（直推无 success 中间态）。
+export async function markTaskMerged(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  workerId: string,
+  resultPayload: Record<string, unknown>
+): Promise<void> {
+  await client.query(
+    `UPDATE tasks
+        SET status = 'merged',
+            finished_at = COALESCE(finished_at, now()),
+            merge_checked_at = now(),
+            result = result || $3::jsonb,
+            updated_at = now()
+      WHERE id = $1 AND claimed_by = $2`,
+    [taskId, workerId, resultPayload]
+  );
+  await addTaskEvent(client, taskId, workerId, "merged", "Task merged and cleaned up", resultPayload);
+}
+
+// 清理候选（PR 模式）：本 worker 的、已建 PR 的 success 任务，按 merge_checked_at 轮转取最久未查
+// 的一个（NULL 优先）。只读不翻状态——是否清理由 cleanupMergedTask 依据 PR 合并状态决定。
+export async function claimNextCleanupCandidate(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `SELECT *
+       FROM tasks
+      WHERE status = 'success'
+        AND claimed_by = $1
+        AND pr_url IS NOT NULL
+      ORDER BY merge_checked_at ASC NULLS FIRST
+      LIMIT 1`,
+    [workerId]
+  );
+  return result.rows[0] ?? null;
+}
+
+// PR 尚未合并：仅打检查时间戳，让该任务退到轮转队尾，下次优先查更久未查的。
+export async function setTaskMergeChecked(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  workerId: string
+): Promise<void> {
+  await client.query(
+    `UPDATE tasks
+        SET merge_checked_at = now()
+      WHERE id = $1 AND claimed_by = $2`,
+    [taskId, workerId]
+  );
+}
+
+// 用户在对话区点「结束对话」：把问答类任务收口为 success。仅作用于 task_type='qa'，
+// 避免误关工作类任务（工作类的收尾由 Worker 按 git 改动驱动）。
+export async function completeQaTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET status = 'success',
+            finished_at = now(),
+            result = result || '{"closedByUser": true}'::jsonb,
+            error_message = NULL,
+            updated_at = now()
+      WHERE id = $1
+        AND task_type = 'qa'
+        AND status IN ('pending', 'claimed', 'running', 'waiting', 'failed')
+      RETURNING *`,
+    [taskId]
+  );
+  return result.rows[0] ?? null;
 }
 
 // 续接：认领本 Worker 自己的、已收到新用户回复的等待中任务（原子翻转为 running）。
