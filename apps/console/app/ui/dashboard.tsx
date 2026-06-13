@@ -39,7 +39,6 @@ import {
   Plus,
   Power,
   RadioTower,
-  RefreshCw,
   RotateCcw,
   Save,
   Search,
@@ -178,7 +177,6 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
   const [projectDrawerOpen, setProjectDrawerOpen] = useState(false);
 
   const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [selectedWorkerId, setSelectedWorkerId] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function loadOverview() {
@@ -191,9 +189,6 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
       const data = (await response.json()) as Overview;
       setOverview(data);
       setSelectedProjectId((current) => current || data.projects[0]?.id || "");
-      setSelectedWorkerId(
-        (current) => current || data.workers.find((worker) => worker.status === "online")?.id || ""
-      );
       setHistory((prev) => ({
         online: [...prev.online, data.summary.onlineWorkers].slice(-SPARK_CAP),
         pending: [...prev.pending, data.summary.pendingTasks].slice(-SPARK_CAP),
@@ -212,11 +207,6 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
   usePolling(() => {
     void loadOverview();
   }, []);
-
-  const onlineWorkers = useMemo(
-    () => overview.workers.filter((worker) => worker.status === "online"),
-    [overview.workers]
-  );
 
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -290,28 +280,6 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
     }
   }
 
-  async function handleCommandSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const data = new FormData(form);
-    setBusy(true);
-    try {
-      await postJson("/api/direct-commands", {
-        workerId: selectedWorkerId,
-        command: data.get("command"),
-        text: data.get("text"),
-        cwd: data.get("cwd")
-      });
-      form.reset();
-      await loadOverview();
-      setMessage("指令已下发");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "指令下发失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function handleLogout() {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
@@ -331,7 +299,7 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
   const pageMeta: Record<ViewKey, { title: string; sub: string }> = {
     dashboard: { title: "总览", sub: "系统整体态势与健康状态" },
     tasks: { title: "任务调度", sub: "任务流转、PR 跟踪与发布" },
-    workers: { title: "执行机群", sub: "Worker 在线状态与定向指挥" },
+    workers: { title: "执行机群", sub: "Worker 在线状态与心跳，点击卡片查看详情" },
     projects: { title: "代码项目", sub: "仓库管理与默认分支配置" },
     users: { title: "用户权限", sub: "用户、角色与项目分配管理" }
   };
@@ -415,17 +383,7 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
             />
           ) : null}
 
-          {view === "workers" ? (
-            <WorkersView
-              overview={overview}
-              onlineWorkers={onlineWorkers}
-              busy={busy}
-              selectedWorkerId={selectedWorkerId}
-              onSelectWorker={setSelectedWorkerId}
-              onSubmitCommand={handleCommandSubmit}
-              canCommand={can.command}
-            />
-          ) : null}
+          {view === "workers" ? <WorkersView overview={overview} /> : null}
 
           {view === "projects" ? (
             <ProjectsView
@@ -1181,24 +1139,16 @@ function ProjectDrawer({
 
 /* ============================== Workers ============================== */
 
-function WorkersView({
-  overview,
-  onlineWorkers,
-  busy,
-  selectedWorkerId,
-  onSelectWorker,
-  onSubmitCommand,
-  canCommand
-}: {
-  overview: Overview;
-  onlineWorkers: Worker[];
-  busy: boolean;
-  selectedWorkerId: string;
-  onSelectWorker: (id: string) => void;
-  onSubmitCommand: (event: FormEvent<HTMLFormElement>) => void;
-  canCommand: boolean;
-}) {
-  const [command, setCommand] = useState<"claude_prompt" | "shell">("claude_prompt");
+function WorkersView({ overview }: { overview: Overview }) {
+  const [selectedWorker, setSelectedWorker] = useState<Worker | null>(null);
+
+  function currentTaskOf(workerId: string) {
+    return overview.tasks.find(
+      (task) => task.claimed_by === workerId && (task.status === "running" || task.status === "claimed")
+    );
+  }
+
+  const detailTask = selectedWorker ? currentTaskOf(selectedWorker.id) : undefined;
 
   return (
     <>
@@ -1211,144 +1161,84 @@ function WorkersView({
         </div>
       </div>
 
-      <div className="grid-2">
-        <div className="col">
-          {overview.workers.length === 0 ? (
-            <section className="card">
-              <Empty icon={<Server size={28} />} text="暂无 Worker 心跳" />
-            </section>
-          ) : (
-            <div className="worker-grid">
-              {overview.workers.map((worker) => {
-                const currentTask = overview.tasks.find(
-                  (task) => task.claimed_by === worker.id && (task.status === "running" || task.status === "claimed")
-                );
-                return (
-                  <article className="worker-card" key={worker.id}>
-                    <div className="worker-top">
-                      <StatusDot status={worker.status} pulse={worker.status === "online"} />
-                      <span className="worker-name">{worker.name}</span>
-                      <StatusBadge status={worker.status} />
-                    </div>
-                    <div className="worker-rows">
-                      <div className="worker-row">
-                        <Network size={13} className="ico" />
-                        <span className="v">{worker.host_name}</span>
-                      </div>
-                      <div className="worker-row">
-                        <Tag size={13} className="ico" />
-                        <span className="v mono">v{worker.app_version}</span>
-                      </div>
-                      <div className="worker-row">
-                        <Clock size={13} className="ico" />
-                        <span className="v">心跳 {fmtAgo(worker.last_seen_at)}</span>
-                      </div>
-                      <div className="worker-row">
-                        <Activity size={13} className="ico" />
-                        <span className="v">{currentTask ? currentTask.title : "空闲"}</span>
-                      </div>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
+      {overview.workers.length === 0 ? (
+        <section className="card">
+          <Empty icon={<Server size={28} />} text="暂无 Worker 心跳" />
+        </section>
+      ) : (
+        <div className="worker-grid">
+          {overview.workers.map((worker) => {
+            const currentTask = currentTaskOf(worker.id);
+            return (
+              <article
+                className="worker-card"
+                key={worker.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => setSelectedWorker(worker)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setSelectedWorker(worker);
+                  }
+                }}
+              >
+                <div className="worker-top">
+                  <StatusDot status={worker.status} pulse={worker.status === "online"} />
+                  <span className="worker-name">{worker.name}</span>
+                  <StatusBadge status={worker.status} />
+                </div>
+                <div className="worker-rows">
+                  <div className="worker-row">
+                    <Network size={13} className="ico" />
+                    <span className="v">{worker.host_name}</span>
+                  </div>
+                  <div className="worker-row">
+                    <Tag size={13} className="ico" />
+                    <span className="v mono">v{worker.app_version}</span>
+                  </div>
+                  <div className="worker-row">
+                    <Clock size={13} className="ico" />
+                    <span className="v">心跳 {fmtAgo(worker.last_seen_at)}</span>
+                  </div>
+                  <div className="worker-row">
+                    <Activity size={13} className="ico" />
+                    <span className="v">{currentTask ? currentTask.title : "空闲"}</span>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
         </div>
+      )}
 
-        {canCommand ? (
-        <div className="col">
-          <section className="card">
-            <div className="card-head">
-              <h2 className="card-title">
-                <RadioTower size={16} className="ico" />
-                定向指挥
-              </h2>
-            </div>
-            <div className="card-body">
-              <form className="form" onSubmit={onSubmitCommand}>
-                <div className="field">
-                  <label className="field-label">Worker</label>
-                  <Select
-                    value={selectedWorkerId}
-                    onChange={onSelectWorker}
-                    options={onlineWorkers.map((worker) => ({ value: worker.id, label: worker.name }))}
-                    placeholder="选择 Worker"
-                    ariaLabel="Worker"
-                  />
-                </div>
-                <div className="field">
-                  <label className="field-label">类型</label>
-                  <Select
-                    name="command"
-                    value={command}
-                    onChange={(value) => setCommand(value as "claude_prompt" | "shell")}
-                    options={[
-                      { value: "claude_prompt", label: "Claude Prompt" },
-                      { value: "shell", label: "Shell" }
-                    ]}
-                    ariaLabel="指令类型"
-                  />
-                </div>
-                <div className="field">
-                  <label className="field-label">
-                    工作目录 <span className="field-hint">可选，本机路径</span>
-                  </label>
-                  <input name="cwd" placeholder="D:\\src\\example" />
-                </div>
-                <div className="field">
-                  <label className="field-label">指令</label>
-                  <textarea name="text" rows={4} placeholder="发送给 Worker 的即时指令" required />
-                </div>
-                <button className="btn btn-primary" disabled={busy || onlineWorkers.length === 0} type="submit">
-                  <Send size={16} />
-                  下发
-                </button>
-              </form>
-            </div>
-          </section>
-
-          <section className="card">
-            <div className="card-head">
-              <h2 className="card-title">
-                <RefreshCw size={16} className="ico" />
-                指令回执
-              </h2>
-              <span className="card-tools">{overview.commands.length} 条</span>
-            </div>
-            <div className="card-body flush">
-              {overview.commands.length === 0 ? (
-                <Empty icon={<Inbox size={28} />} text="暂无定向指令" />
-              ) : (
-                <div className="table-wrap">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>状态</th>
-                        <th>类型</th>
-                        <th>Worker</th>
-                        <th className="t-right">时间</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {overview.commands.map((command) => (
-                        <tr key={command.id} style={{ cursor: "default" }}>
-                          <td>
-                            <StatusBadge status={command.status} />
-                          </td>
-                          <td className="mono">{command.command}</td>
-                          <td>{command.worker_name ?? command.worker_id}</td>
-                          <td className="t-right t-num">{fmtTime(command.created_at)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </section>
-        </div>
+      <Drawer
+        open={selectedWorker !== null}
+        title={selectedWorker?.name ?? ""}
+        onClose={() => setSelectedWorker(null)}
+      >
+        {selectedWorker ? (
+          <div className="kv">
+            <KvRow k="状态" v={<StatusBadge status={selectedWorker.status} />} />
+            <KvRow k="主机" v={selectedWorker.host_name} mono />
+            <KvRow k="版本" v={`v${selectedWorker.app_version}`} mono />
+            <KvRow k="当前任务" v={detailTask ? detailTask.title : "空闲"} />
+            <KvRow
+              k="最后心跳"
+              v={`${fmtDateTime(selectedWorker.last_seen_at)}（${fmtAgo(selectedWorker.last_seen_at)}）`}
+            />
+            <KvRow k="创建于" v={fmtDateTime(selectedWorker.created_at)} />
+            <KvRow k="更新于" v={fmtDateTime(selectedWorker.updated_at)} />
+            {Object.keys(selectedWorker.capabilities).length > 0 ? (
+              <KvRow k="能力" v={JSON.stringify(selectedWorker.capabilities)} mono />
+            ) : null}
+            {Object.keys(selectedWorker.metadata).length > 0 ? (
+              <KvRow k="元数据" v={JSON.stringify(selectedWorker.metadata)} mono />
+            ) : null}
+            <KvRow k="Worker ID" v={selectedWorker.id} mono />
+          </div>
         ) : null}
-      </div>
+      </Drawer>
     </>
   );
 }
