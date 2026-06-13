@@ -5,6 +5,7 @@ import type {
   Permission,
   Project,
   Role,
+  SortDir,
   Task,
   TaskComment,
   TaskEvent,
@@ -13,6 +14,8 @@ import type {
 } from "@claude-center/db";
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
   Boxes,
   Bot,
   Check,
@@ -50,7 +53,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Empty, StatusBadge, StatusDot, fmtTime, metaOf, postJson, type Tone } from "./shared";
+import { Empty, StatusBadge, StatusDot, TaskTypeBadge, fmtDateTime, fmtTime, metaOf, postJson, type Tone } from "./shared";
 
 type Overview = {
   projects: Project[];
@@ -66,7 +69,6 @@ type Overview = {
 };
 
 type ViewKey = "dashboard" | "tasks" | "workers" | "projects" | "users";
-type TaskSort = "updated" | "created" | "priority";
 
 // 当前登录用户（由服务端 page.tsx 注入）。permissions 决定 UI 显隐。
 type CurrentUser = {
@@ -254,8 +256,6 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
         workBranch: data.get("workBranch"),
         targetBranch: data.get("targetBranch"),
         submitMode: data.get("submitMode"),
-        targetFilesText: data.get("targetFilesText"),
-        priority: Number(data.get("priority") || 0),
         dependsOn: data.getAll("dependsOn").map(String),
         scheduledAt
       });
@@ -659,12 +659,6 @@ const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: "cancelled", label: "已取消" }
 ];
 
-const SORT_OPTIONS: { value: TaskSort; label: string }[] = [
-  { value: "updated", label: "最近更新" },
-  { value: "created", label: "创建时间" },
-  { value: "priority", label: "优先级" }
-];
-
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 function TasksView({
@@ -682,7 +676,8 @@ function TasksView({
   const [projectId, setProjectId] = useState("");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
-  const [sort, setSort] = useState<TaskSort>("updated");
+  // 列表固定按更新时间排序，方向由「更新」表头切换（默认降序）。
+  const [dir, setDir] = useState<SortDir>("desc");
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(1);
   const [data, setData] = useState<ListResponse>({ tasks: [], total: 0, page: 1, pageSize: 20 });
@@ -697,7 +692,7 @@ function TasksView({
   // 任一筛选条件变化都回到第 1 页
   useEffect(() => {
     setPage(1);
-  }, [status, projectId, debouncedQ, sort, pageSize]);
+  }, [status, projectId, debouncedQ, dir, pageSize]);
 
   useEffect(() => {
     let active = true;
@@ -705,7 +700,7 @@ function TasksView({
     if (status) params.set("status", status);
     if (projectId) params.set("projectId", projectId);
     if (debouncedQ) params.set("q", debouncedQ);
-    params.set("sort", sort);
+    params.set("dir", dir);
     params.set("page", String(page));
     params.set("pageSize", String(pageSize));
 
@@ -727,7 +722,7 @@ function TasksView({
       active = false;
       window.clearInterval(timer);
     };
-  }, [status, projectId, debouncedQ, sort, page, pageSize]);
+  }, [status, projectId, debouncedQ, dir, page, pageSize]);
 
   const totalPages = Math.max(1, Math.ceil(data.total / pageSize));
   // 结果收窄导致当前页越界时回拉到末页
@@ -780,13 +775,6 @@ function TasksView({
             ]}
             ariaLabel="按项目筛选"
           />
-          <Select
-            className="tb-select"
-            value={sort}
-            onChange={(value) => setSort(value as TaskSort)}
-            options={SORT_OPTIONS}
-            ariaLabel="排序方式"
-          />
         </div>
 
         <div className="card-body flush">
@@ -802,9 +790,20 @@ function TasksView({
                   <tr>
                     <th>状态</th>
                     <th>任务</th>
+                    <th>项目</th>
+                    <th>类型</th>
                     <th>分支</th>
-                    <th className="t-right">优先级</th>
-                    <th className="t-right">更新</th>
+                    <th
+                      className="t-right"
+                      style={{ cursor: "pointer", userSelect: "none" }}
+                      onClick={() => setDir((prev) => (prev === "desc" ? "asc" : "desc"))}
+                      title="点击切换更新时间排序"
+                    >
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        更新
+                        {dir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
+                      </span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -814,17 +813,14 @@ function TasksView({
                         <StatusBadge status={task.status} />
                       </td>
                       <td>
-                        <div className="cell-stack">
-                          <span className="t-title">{task.title}</span>
-                          <span className="t-meta">
-                            {task.project_name ?? task.project_id} ·{" "}
-                            {task.task_type === "qa" ? "问答对话" : `${task.base_branch} → ${task.work_branch}`}
-                          </span>
-                        </div>
+                        <span className="t-title">{task.title}</span>
+                      </td>
+                      <td className="t-meta">{task.project_name ?? task.project_id}</td>
+                      <td>
+                        <TaskTypeBadge type={task.task_type} />
                       </td>
                       <td className="mono">{task.task_type === "qa" ? "对话" : task.work_branch}</td>
-                      <td className="t-right t-num">{task.priority}</td>
-                      <td className="t-right t-num">{fmtTime(task.updated_at)}</td>
+                      <td className="t-right t-num">{fmtDateTime(task.updated_at)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1013,18 +1009,8 @@ function ComposeTaskForm({
               />
             </div>
           </div>
-          <div className="field">
-            <label className="field-label">
-              目标文件 <span className="field-hint">每行一个路径，可留空</span>
-            </label>
-            <textarea name="targetFilesText" rows={3} placeholder={"src/app.tsx\nsrc/lib/auth.ts"} />
-          </div>
         </>
       )}
-      <div className="field">
-        <label className="field-label">优先级</label>
-        <input name="priority" type="number" defaultValue={0} />
-      </div>
       <div className="field">
         <label className="field-label">
           定时发布 <span className="field-hint">留空即建为草稿手动发布；设定时间则到点自动进入待处理队列</span>
