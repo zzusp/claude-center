@@ -34,7 +34,7 @@
 
 读取无独立 permission，凡登录用户即可读（按项目范围过滤）。
 
-## 数据库（migration `007_auth_rbac.sql`）
+## 数据库（migration `008_auth_rbac.sql`）
 
 ```sql
 CREATE TABLE users (
@@ -83,6 +83,7 @@ CREATE TABLE sessions (
 | `PATCH /api/tasks/[id]`（发布）| `task.create` + 任务项目在范围内 |
 | `GET /api/tasks/[id]/comments` | requireUser + 任务项目在范围内 |
 | `POST /api/tasks/[id]/comments` | `task.comment` + 任务项目在范围内 |
+| `POST /api/tasks/[id]/review`（人工验收 accept/reject）| `task.create` + 任务项目在范围内 |
 | `POST /api/direct-commands` | `command.create`（admin） |
 | `GET/POST /api/users`、`PATCH/DELETE /api/users/[id]` | `user.manage`（admin） |
 
@@ -98,7 +99,7 @@ CREATE TABLE sessions (
 ## 验证
 
 - `npm run typecheck` / `npm run build` 全绿。
-- `npm run db:migrate` 应用 007。
+- `npm run db:migrate` 应用 008。
 - `verify-console.mjs` 改造：断言未登录 `/api/overview` → 401；admin 登录拿 cookie → `/api/overview` → 200 且返回计数。
 - 手验：admin 建各角色用户 + 分配项目；分别登录验证可见项目 / 按钮显隐 / 越权 API 返回 401/403。
 </content>

@@ -26,6 +26,8 @@
   --cancelled: #6b7280;
   --queued: #a855f7;
   --waiting: #0891b2;
+  --review: #ea580c;
+  --rejected: #db2777;
   --draft: #64748b;
 
   /* Shape */
@@ -519,6 +521,14 @@ a:hover {
   color: var(--waiting);
   background: rgba(8, 145, 178, 0.12);
 }
+.badge[data-tone="review"] {
+  color: var(--review);
+  background: rgba(234, 88, 12, 0.12);
+}
+.badge[data-tone="rejected"] {
+  color: var(--rejected);
+  background: rgba(219, 39, 119, 0.12);
+}
 .badge[data-tone="draft"] {
   color: var(--draft);
   background: rgba(100, 116, 139, 0.12);
@@ -560,8 +570,38 @@ a:hover {
 .dot[data-tone="waiting"] {
   color: var(--waiting);
 }
+.dot[data-tone="review"] {
+  color: var(--review);
+}
+.dot[data-tone="rejected"] {
+  color: var(--rejected);
+}
 .dot[data-tone="draft"] {
   color: var(--draft);
+}
+
+/* Review actions (人工验收) */
+.review-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--review);
+  border-radius: var(--r-sm);
+  background: rgba(234, 88, 12, 0.05);
+}
+.review-hint {
+  font-size: 13px;
+  color: var(--text-2);
+}
+.review-btns {
+  display: flex;
+  gap: 8px;
+}
+.review-actions textarea {
+  width: 100%;
 }
 
 /* Running / online motion: breathing */

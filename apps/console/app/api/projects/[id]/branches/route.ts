@@ -1,7 +1,8 @@
-import { getPool, getProject } from "@claude-center/db";
+import { getPool, getProject, userHasProject } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { requirePermission } from "../../../../lib/session";
 
 const execFileAsync = promisify(execFile);
 
@@ -11,8 +12,17 @@ export const dynamic = "force-dynamic";
 // 根据项目仓库地址远程拉取分支列表，供发布任务时搜索选择签出分支 / PR 目标分支。
 // 不克隆仓库，只用 `git ls-remote --heads` 读取远端 refs；默认分支置顶。
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const gate = await requirePermission("task.create");
+  if (gate instanceof NextResponse) {
+    return gate;
+  }
+  const user = gate;
   try {
     const { id } = await params;
+    // 项目隔离：非 admin 只能读分配给自己项目的分支，避免枚举他人项目。
+    if (user.role !== "admin" && !(await userHasProject(getPool(), user.id, id))) {
+      return NextResponse.json({ error: "无权访问该项目" }, { status: 403 });
+    }
     const project = await getProject(getPool(), id);
     if (!project) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
