@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-const TASK_STATUSES = ["pending", "claimed", "running", "waiting", "success", "failed", "cancelled"];
+const TASK_STATUSES = ["draft", "pending", "claimed", "running", "waiting", "success", "failed", "cancelled"];
 const SORT_VALUES: TaskSort[] = ["updated", "created", "priority"];
 const PAGE_SIZES = [20, 50, 100];
 
@@ -60,6 +60,8 @@ export async function POST(request: NextRequest) {
       description?: string;
       baseBranch?: string;
       workBranch?: string;
+      targetBranch?: string;
+      submitMode?: string;
       targetFilesText?: string;
       priority?: number;
     };
@@ -73,12 +75,17 @@ export async function POST(request: NextRequest) {
       .map((line) => line.trim())
       .filter(Boolean);
 
+    const baseBranch = body.baseBranch?.trim() || "main";
+    const submitMode = body.submitMode === "push" ? "push" : "pr";
+
     const task = await createTask(getPool(), {
       projectId: body.projectId,
       title: body.title.trim(),
       description: body.description.trim(),
-      baseBranch: body.baseBranch?.trim() || "main",
+      baseBranch,
       workBranch: body.workBranch?.trim() || defaultWorkBranch(body.title),
+      targetBranch: body.targetBranch?.trim() || baseBranch,
+      submitMode,
       targetFiles,
       priority: Number.isFinite(body.priority) ? Number(body.priority) : 0
     });

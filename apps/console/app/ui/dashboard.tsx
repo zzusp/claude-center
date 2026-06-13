@@ -46,7 +46,7 @@ type Overview = {
 type ViewKey = "dashboard" | "tasks" | "workers" | "projects";
 type DetailTab = "overview" | "timeline" | "logs" | "conversation";
 type TaskSort = "updated" | "created" | "priority";
-type Tone = "success" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting";
+type Tone = "success" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting" | "draft";
 
 const emptyOverview: Overview = {
   projects: [],
@@ -59,6 +59,7 @@ const emptyOverview: Overview = {
 const SPARK_CAP = 24;
 
 const STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> = {
+  draft: { glyph: "✎", label: "草稿", tone: "draft" },
   pending: { glyph: "○", label: "待处理", tone: "pending" },
   claimed: { glyph: "◻", label: "已认领", tone: "queued" },
   running: { glyph: "◐", label: "执行中", tone: "running" },
@@ -77,7 +78,8 @@ const TONE_COLOR: Record<Tone, string> = {
   failed: "var(--failed)",
   cancelled: "var(--cancelled)",
   queued: "var(--queued)",
-  waiting: "var(--waiting)"
+  waiting: "var(--waiting)",
+  draft: "var(--draft)"
 };
 
 function metaOf(status: string) {
@@ -116,6 +118,13 @@ function fmtAgo(value: string | null): string {
   const h = Math.round(m / 60);
   if (h < 24) return `${h} 小时前`;
   return `${Math.round(h / 24)} 天前`;
+}
+
+function syncAgo(value: string, now: number): string {
+  const s = Math.max(0, Math.round((now - new Date(value).getTime()) / 1000));
+  if (s < 2) return "刚刚";
+  if (s < 60) return `${s} 秒前`;
+  return `${Math.floor(s / 60)} 分钟前`;
 }
 
 export default function Dashboard() {
@@ -241,15 +250,38 @@ export default function Dashboard() {
         description: data.get("description"),
         baseBranch: data.get("baseBranch"),
         workBranch: data.get("workBranch"),
+        targetBranch: data.get("targetBranch"),
+        submitMode: data.get("submitMode"),
         targetFilesText: data.get("targetFilesText"),
         priority: Number(data.get("priority") || 0)
       });
       form.reset();
       await loadOverview();
       setDrawerOpen(false);
-      setMessage("任务已入队");
+      setMessage("任务已创建为草稿，发布后 Worker 才会认领");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "任务创建失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handlePublishTask(taskId: string) {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "publish" })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? `发布失败：${response.status}`);
+      }
+      await loadOverview();
+      setMessage("任务已发布，进入可认领队列");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "任务发布失败");
     } finally {
       setBusy(false);
     }
@@ -333,10 +365,7 @@ export default function Dashboard() {
             <p className="page-sub">{pageMeta[view].sub}</p>
           </div>
           <div className="topbar-actions">
-            <span className="sync">
-              <RadioTower size={15} />
-              <span className="sync-text">{message}</span>
-            </span>
+            <SyncStatus synced={synced} message={message} lastSyncAt={lastSyncAt} />
           </div>
         </header>
 
@@ -388,6 +417,7 @@ export default function Dashboard() {
         onSetTab={setDetailTab}
         onSelectProject={setSelectedProjectId}
         onSubmitTask={handleTaskSubmit}
+        onPublishTask={handlePublishTask}
       />
     </div>
   );
@@ -409,7 +439,7 @@ function DashboardView({
   const recentTasks = overview.tasks.slice(0, 7);
   const failedTasks = overview.tasks.filter((task) => task.status === "failed").slice(0, 4);
 
-  const donutSegments = (["running", "waiting", "pending", "claimed", "success", "failed", "cancelled"] as const)
+  const donutSegments = (["running", "waiting", "pending", "draft", "claimed", "success", "failed", "cancelled"] as const)
     .map((status) => ({
       status,
       label: metaOf(status).label,
@@ -426,6 +456,12 @@ function DashboardView({
           icon={<Cpu size={16} />}
           label="在线 Worker"
           value={overview.summary.onlineWorkers}
+          total={overview.workers.length}
+          footLabel={`${
+            overview.workers.length > 0
+              ? Math.round((overview.summary.onlineWorkers / overview.workers.length) * 100)
+              : 0
+          }% 在线率`}
           series={history.online}
           tone="success"
         />
@@ -585,6 +621,7 @@ type ListResponse = { tasks: Task[]; total: number; page: number; pageSize: numb
 
 const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: "", label: "全部状态" },
+  { value: "draft", label: "草稿" },
   { value: "pending", label: "待处理" },
   { value: "claimed", label: "已认领" },
   { value: "running", label: "执行中" },
@@ -819,6 +856,46 @@ function ComposeTaskForm({
   onSelectProject: (id: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const [branches, setBranches] = useState<string[]>([]);
+  const [branchState, setBranchState] = useState<"idle" | "loading" | "error">("idle");
+
+  useEffect(() => {
+    if (!selectedProjectId) {
+      setBranches([]);
+      setBranchState("idle");
+      return;
+    }
+    let active = true;
+    setBranchState("loading");
+    fetch(`/api/projects/${selectedProjectId}/branches`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error();
+        const data = (await response.json()) as { branches: string[] };
+        if (active) {
+          setBranches(data.branches);
+          setBranchState("idle");
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setBranches([]);
+          setBranchState("error");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedProjectId]);
+
+  const branchHint =
+    branchState === "loading"
+      ? "拉取分支中…"
+      : branchState === "error"
+        ? "拉取失败，可手填"
+        : branches.length > 0
+          ? `${branches.length} 个远程分支`
+          : "可手动输入";
+
   return (
     <form className="form" onSubmit={onSubmit}>
       <div className="field">
@@ -841,14 +918,36 @@ function ComposeTaskForm({
       </div>
       <div className="form-row">
         <div className="field">
-          <label className="field-label">基准分支</label>
-          <input name="baseBranch" defaultValue="main" />
+          <label className="field-label">
+            签出分支 <span className="field-hint">{branchHint}</span>
+          </label>
+          <input name="baseBranch" list="cc-branch-list" defaultValue="main" placeholder="main" />
         </div>
+        <div className="field">
+          <label className="field-label">
+            PR 目标分支 <span className="field-hint">留空同签出分支</span>
+          </label>
+          <input name="targetBranch" list="cc-branch-list" placeholder="main" />
+        </div>
+      </div>
+      <datalist id="cc-branch-list">
+        {branches.map((branch) => (
+          <option key={branch} value={branch} />
+        ))}
+      </datalist>
+      <div className="form-row">
         <div className="field">
           <label className="field-label">
             工作分支 <span className="field-hint">留空自动生成</span>
           </label>
           <input name="workBranch" placeholder="cc/..." />
+        </div>
+        <div className="field">
+          <label className="field-label">提交模式</label>
+          <select name="submitMode" defaultValue="pr">
+            <option value="pr">创建 PR</option>
+            <option value="push">直接提交推送</option>
+          </select>
         </div>
       </div>
       <div className="field">
@@ -887,7 +986,8 @@ function TaskDrawer({
   onClose,
   onSetTab,
   onSelectProject,
-  onSubmitTask
+  onSubmitTask,
+  onPublishTask
 }: {
   open: boolean;
   mode: "detail" | "compose";
@@ -900,6 +1000,7 @@ function TaskDrawer({
   onSetTab: (tab: DetailTab) => void;
   onSelectProject: (id: string) => void;
   onSubmitTask: (event: FormEvent<HTMLFormElement>) => void;
+  onPublishTask: (taskId: string) => void;
 }) {
   // Esc 关闭
   useEffect(() => {
@@ -934,7 +1035,15 @@ function TaskDrawer({
             </div>
           </>
         ) : task ? (
-          <TaskDetailBody task={task} detailTab={detailTab} open={open} onSetTab={onSetTab} onClose={onClose} />
+          <TaskDetailBody
+            task={task}
+            detailTab={detailTab}
+            open={open}
+            busy={busy}
+            onSetTab={onSetTab}
+            onClose={onClose}
+            onPublishTask={onPublishTask}
+          />
         ) : (
           <div className="drawer-head">
             <span />
@@ -952,14 +1061,18 @@ function TaskDetailBody({
   task,
   detailTab,
   open,
+  busy,
   onSetTab,
-  onClose
+  onClose,
+  onPublishTask
 }: {
   task: Task;
   detailTab: DetailTab;
   open: boolean;
+  busy: boolean;
   onSetTab: (tab: DetailTab) => void;
   onClose: () => void;
+  onPublishTask: (taskId: string) => void;
 }) {
   const [events, setEvents] = useState<TaskEvent[]>([]);
 
@@ -1019,11 +1132,25 @@ function TaskDetailBody({
               <GitBranch size={13} className="ico" />
               {task.base_branch} → {task.work_branch}
             </span>
+            <span className="tag">
+              {task.submit_mode === "push" ? `直推 ${task.target_branch}` : `PR → ${task.target_branch}`}
+            </span>
             {task.pr_url ? (
               <a className="tag" href={task.pr_url} target="_blank" rel="noreferrer">
                 <ExternalLink size={13} className="ico" />
                 PR
               </a>
+            ) : null}
+            {task.status === "draft" ? (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={busy}
+                onClick={() => onPublishTask(task.id)}
+              >
+                <Send size={14} />
+                发布
+              </button>
             ) : null}
           </div>
         </div>
@@ -1057,8 +1184,10 @@ function TaskDetailBody({
             <div className="kv">
               <KvRow k="项目" v={task.project_name ?? task.project_id} />
               <KvRow k="描述" v={task.description} />
-              <KvRow k="基准分支" v={task.base_branch} mono />
+              <KvRow k="签出分支" v={task.base_branch} mono />
               <KvRow k="工作分支" v={task.work_branch} mono />
+              <KvRow k="目标分支" v={task.target_branch} mono />
+              <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
               <KvRow k="优先级" v={String(task.priority)} />
               <KvRow
                 k="目标文件"
@@ -1495,32 +1624,70 @@ function ProjectsView({
 
 /* ============================== Shared bits ============================== */
 
+function SyncStatus({
+  synced,
+  message,
+  lastSyncAt
+}: {
+  synced: boolean;
+  message: string;
+  lastSyncAt: string | null;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const ago = synced && lastSyncAt ? syncAgo(lastSyncAt, now) : null;
+
+  return (
+    <span className="sync" data-live={synced ? "on" : "off"}>
+      <span className={`dot${synced ? " pulse" : ""}`} data-tone={synced ? "online" : "offline"} />
+      <span className="sync-text">{message}</span>
+      {ago ? (
+        <span className="sync-ago" key={lastSyncAt}>
+          · {ago}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 function StatCard({
   icon,
   label,
   value,
+  total,
+  footLabel,
   series,
   tone
 }: {
   icon: React.ReactNode;
   label: string;
   value: number;
+  total?: number;
+  footLabel?: string;
   series: number[];
   tone: Tone;
 }) {
   const prev = series.length >= 2 ? series[series.length - 2] ?? value : value;
   const delta = value - prev;
+  const trend = delta === 0 ? "较昨日 持平" : `较昨日 ${delta > 0 ? "+" : "-"}${Math.abs(delta)}`;
   return (
     <article className="stat-card">
       <div className="stat-head">
-        <span className="ico">{icon}</span>
+        <span className="ico" style={{ color: TONE_COLOR[tone] }}>
+          {icon}
+        </span>
         {label}
       </div>
-      <div className="stat-value">{value}</div>
+      <div className="stat-value">
+        {value}
+        {typeof total === "number" ? <span className="unit">/ {total}</span> : null}
+      </div>
       <div className="stat-foot">
-        <span className="stat-trend">
-          {delta === 0 ? "持平" : delta > 0 ? `↑ ${delta}` : `↓ ${Math.abs(delta)}`}
-        </span>
+        <span className="stat-trend">{footLabel ?? trend}</span>
         <Sparkline data={series} tone={tone} />
       </div>
     </article>

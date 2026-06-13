@@ -1,5 +1,5 @@
 import type pg from "pg";
-import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, TaskEvent, Worker } from "./types.js";
+import type { DirectCommand, DirectCommandName, Project, Task, TaskComment, TaskCommentAuthor, TaskEvent, TaskSubmitMode, Worker } from "./types.js";
 
 export type WorkerRegistration = {
   id: string;
@@ -37,6 +37,11 @@ export async function createProject(
   return result.rows[0]!;
 }
 
+export async function getProject(client: pg.Pool | pg.PoolClient, id: string): Promise<Project | null> {
+  const result = await client.query<Project>(`SELECT * FROM projects WHERE id = $1 LIMIT 1`, [id]);
+  return result.rows[0] ?? null;
+}
+
 export async function createTask(
   client: pg.Pool | pg.PoolClient,
   input: {
@@ -45,13 +50,15 @@ export async function createTask(
     description: string;
     baseBranch: string;
     workBranch: string;
+    targetBranch: string;
+    submitMode: TaskSubmitMode;
     targetFiles: string[];
     priority: number;
   }
 ): Promise<Task> {
   const result = await client.query<Task>(
-    `INSERT INTO tasks (project_id, title, description, base_branch, work_branch, target_files, priority)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO tasks (project_id, title, description, base_branch, work_branch, target_branch, submit_mode, target_files, priority)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
     [
       input.projectId,
@@ -59,11 +66,27 @@ export async function createTask(
       input.description,
       input.baseBranch,
       input.workBranch,
+      input.targetBranch,
+      input.submitMode,
       input.targetFiles,
       input.priority
     ]
   );
   return result.rows[0]!;
+}
+
+// 发布草稿任务：draft → pending，进入可认领队列。WHERE status='draft' 保证只有草稿
+// 可发布，对已认领/运行中/已完成任务无副作用；未命中返回 null（任务不存在或非草稿）。
+export async function publishTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET status = 'pending',
+            updated_at = now()
+      WHERE id = $1 AND status = 'draft'
+      RETURNING *`,
+    [taskId]
+  );
+  return result.rows[0] ?? null;
 }
 
 export async function listRecentTasks(client: pg.Pool | pg.PoolClient, limit = 50): Promise<Task[]> {
