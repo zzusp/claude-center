@@ -69,7 +69,7 @@ try {
     throw new Error(`未登录的 GET /api/overview 应为 401，实际 ${unauth.status}: ${await unauth.text()}`);
   }
 
-  // 2) 用引导管理员登录，拿会话 cookie（需先跑过 db:migrate 应用 006）。
+  // 2) 用引导管理员登录，拿会话 cookie（需先跑过 db:migrate 应用 007）。
   const login = await fetch(`${baseUrl}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -8,9 +8,11 @@ import {
   markDirectCommandRunning,
   markDirectCommandSuccess,
   markTaskFailed,
+  markTaskMerged,
   markTaskRunning,
   markTaskSuccess,
   setTaskClaudeSession,
+  setTaskMergeChecked,
   setTaskWaiting,
   type DirectCommand,
   type Task
@@ -213,27 +215,21 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
     timeoutMs: 5 * 60_000
   });
   if (task.submit_mode === "push") {
-    // 直接把工作分支的提交推送到目标分支，不开 PR。
+    // 直接把工作分支的提交推送到目标分支，不开 PR——落地即 merged（无需后续合并轮询/清理）。
     const push = await runCommand(
       "git",
       ["-C", localPath, "push", "origin", `${task.work_branch}:${task.target_branch}`],
       { timeoutMs: 15 * 60_000 }
     );
-    await markTaskSuccess(
-      pool,
-      task.id,
-      config.workerId,
-      {
-        localPath,
-        submitMode: "push",
-        targetBranch: task.target_branch,
-        gitStatusBeforeCommit: status.stdout,
-        claudeResult: claudeOutput,
-        pushStdout: push.stdout,
-        pushStderr: push.stderr
-      },
-      null
-    );
+    await markTaskMerged(pool, task.id, config.workerId, {
+      localPath,
+      submitMode: "push",
+      targetBranch: task.target_branch,
+      gitStatusBeforeCommit: status.stdout,
+      claudeResult: claudeOutput,
+      pushStdout: push.stdout,
+      pushStderr: push.stderr
+    });
     return;
   }
 
@@ -348,6 +344,68 @@ export async function resumeTask(config: WorkerConfig, task: Task): Promise<void
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
       failedAt: new Date().toISOString()
     });
+  }
+}
+
+// 容错执行：清理里「可能本就不存在」的删分支操作，失败只回报、不抛，避免挡住 merged 迁移。
+async function runTolerant(args: string[]): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const result = await runCommand("git", args, { timeoutMs: 5 * 60_000 });
+    return { ok: true, detail: result.stdout.trim() || result.stderr.trim() };
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// periodic 清理（仅 PR 模式）：查 PR 是否已合并。已合并则把本地切回签出分支并更新、删本地/远端
+// 工作分支、转 merged；未合并仅打时间戳参与下轮轮转。checkout/pull 出错兜底为打时间戳重试，不丢「已合并」。
+export async function cleanupMergedTask(config: WorkerConfig, task: Task): Promise<void> {
+  const pool = getPool();
+  try {
+    const localPath = await getTaskLocalPath(pool, task.id, config.workerId);
+    if (!localPath || !task.pr_url) {
+      await setTaskMergeChecked(pool, task.id, config.workerId);
+      return;
+    }
+
+    const view = await runCommand(config.ghCommand, ["pr", "view", task.pr_url, "--json", "state,mergedAt,url"], {
+      cwd: localPath,
+      timeoutMs: 60_000
+    });
+    const pr = JSON.parse(view.stdout) as { state?: string; mergedAt?: string | null };
+
+    if (pr.state !== "MERGED") {
+      await setTaskMergeChecked(pool, task.id, config.workerId);
+      return;
+    }
+
+    // 已合并：把本地仓库切回签出分支并拉进改动，再删本地/远端工作分支。
+    await runCommand("git", ["-C", localPath, "fetch", "origin", "--prune"], { timeoutMs: 10 * 60_000 });
+    await runCommand("git", ["-C", localPath, "checkout", task.base_branch], { timeoutMs: 5 * 60_000 });
+    await runCommand("git", ["-C", localPath, "pull", "--ff-only", "origin", task.base_branch], {
+      timeoutMs: 10 * 60_000
+    });
+    // squash/rebase 合并时签出分支没有工作分支的提交，必须 -D 强删；远端可能已被 GitHub 自动删除。
+    const localBranchDeleted = await runTolerant(["-C", localPath, "branch", "-D", task.work_branch]);
+    const remoteBranchDeleted = await runTolerant(["-C", localPath, "push", "origin", "--delete", task.work_branch]);
+
+    await markTaskMerged(pool, task.id, config.workerId, {
+      mergedAt: pr.mergedAt ?? null,
+      cleanedUpAt: new Date().toISOString(),
+      localBranchDeleted,
+      remoteBranchDeleted
+    });
+  } catch (error) {
+    // PR 已合并但本地清理失败（如签出分支切换/拉取出错）：打时间戳退到轮转队尾，下轮重试，不丢「已合并」。
+    await setTaskMergeChecked(pool, task.id, config.workerId);
+    await addTaskEvent(
+      pool,
+      task.id,
+      config.workerId,
+      "cleanup_retry",
+      error instanceof Error ? error.message : String(error),
+      {}
+    );
   }
 }
 
