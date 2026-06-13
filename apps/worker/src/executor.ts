@@ -87,15 +87,11 @@ function extractQuestion(result: string): string | null {
 }
 
 function taskPrompt(task: Task): string {
-  const targetFiles = task.target_files.length > 0 ? task.target_files.join("\n") : "No explicit target files.";
   return [
     `ClaudeCenter task: ${task.title}`,
     "",
     "Goal:",
     task.description,
-    "",
-    "Target files:",
-    targetFiles,
     "",
     "Work directly in the current repository. Implement the requested code changes, keep edits scoped, and run the most relevant local verification command when possible.",
     "",
@@ -216,11 +212,7 @@ async function finalizeTask(config: WorkerConfig, task: Task, localPath: string,
     return;
   }
 
-  const addArgs =
-    task.target_files.length > 0
-      ? ["-C", localPath, "add", ...task.target_files]
-      : ["-C", localPath, "add", "--all"];
-  await runCommand("git", addArgs, { timeoutMs: 5 * 60_000 });
+  await runCommand("git", ["-C", localPath, "add", "--all"], { timeoutMs: 5 * 60_000 });
   await runCommand("git", ["-C", localPath, "commit", "-m", `ClaudeCenter task: ${task.title}`], {
     timeoutMs: 5 * 60_000
   });

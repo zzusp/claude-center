@@ -258,7 +258,7 @@ export default function TaskDetailPage({
                     <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
                   </>
                 )}
-                <KvRow k="优先级" v={String(task.priority)} />
+                <KvRow k="Session ID" v={task.claude_session_id ?? "—"} mono />
                 {depIds.length > 0 ? (
                   <KvRow
                     k="前置任务"
@@ -280,24 +280,6 @@ export default function TaskDetailPage({
                     }
                   />
                 ) : null}
-                {isQa ? null : (
-                  <KvRow
-                    k="目标文件"
-                    v={
-                      task.target_files.length > 0 ? (
-                        <div className="pill-row">
-                          {task.target_files.map((file) => (
-                            <span className="pill" key={file}>
-                              {file}
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        "—"
-                      )
-                    }
-                  />
-                )}
                 {!isQa && task.pr_url ? (
                   <KvRow
                     k="PR"

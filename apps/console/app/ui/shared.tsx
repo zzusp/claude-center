@@ -60,6 +60,14 @@ export function fmtTime(value: string | null): string {
   }).format(new Date(value));
 }
 
+// 完整日期时间：YYYY-MM-dd HH:mm:ss（本地时区）。任务流列表「更新」列用，手动拼接保证分隔符固定。
+export function fmtDateTime(value: string | null): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 export function StatusBadge({ status }: { status: string }) {
   const meta = metaOf(status);
   return (
