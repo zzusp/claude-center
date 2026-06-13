@@ -29,6 +29,7 @@
   --review: #ea580c;
   --rejected: #db2777;
   --draft: #64748b;
+  --scheduled: #7c3aed;
 
   /* Shape */
   --r-sm: 8px;
@@ -533,6 +534,10 @@ a:hover {
   color: var(--draft);
   background: rgba(100, 116, 139, 0.12);
 }
+.badge[data-tone="scheduled"] {
+  color: var(--scheduled);
+  background: rgba(124, 58, 237, 0.12);
+}
 
 .dot {
   display: inline-block;
@@ -578,6 +583,9 @@ a:hover {
 }
 .dot[data-tone="draft"] {
   color: var(--draft);
+}
+.dot[data-tone="scheduled"] {
+  color: var(--scheduled);
 }
 
 /* Review actions (人工验收) */

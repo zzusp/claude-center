@@ -105,6 +105,7 @@ const TONE_COLOR: Record<Tone, string> = {
   queued: "var(--queued)",
   waiting: "var(--waiting)",
   draft: "var(--draft)",
+  scheduled: "var(--scheduled)",
   review: "var(--review)",
   rejected: "var(--rejected)"
 };
@@ -238,6 +239,9 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
+    // datetime-local 取到的是本地时间（无时区），转 ISO（带时区）再发；留空即非定时任务。
+    const scheduledLocal = String(data.get("scheduledAt") ?? "").trim();
+    const scheduledAt = scheduledLocal ? new Date(scheduledLocal).toISOString() : undefined;
     setBusy(true);
     try {
       await postJson("/api/tasks", {
@@ -251,12 +255,15 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
         submitMode: data.get("submitMode"),
         targetFilesText: data.get("targetFilesText"),
         priority: Number(data.get("priority") || 0),
-        dependsOn: data.getAll("dependsOn").map(String)
+        dependsOn: data.getAll("dependsOn").map(String),
+        scheduledAt
       });
       form.reset();
       await loadOverview();
       setDrawerOpen(false);
-      setMessage("任务已创建为草稿，发布后 Worker 才会认领");
+      setMessage(
+        scheduledAt ? "已创建定时任务，到点自动进入待处理队列" : "任务已创建为草稿，发布后 Worker 才会认领"
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "任务创建失败");
     } finally {
@@ -447,6 +454,7 @@ function DashboardView({
       "running",
       "waiting",
       "pending",
+      "scheduled",
       "draft",
       "claimed",
       "success",
@@ -639,6 +647,7 @@ type ListResponse = { tasks: Task[]; total: number; page: number; pageSize: numb
 const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: "", label: "全部状态" },
   { value: "draft", label: "草稿" },
+  { value: "scheduled", label: "定时待发" },
   { value: "pending", label: "待处理" },
   { value: "claimed", label: "已认领" },
   { value: "running", label: "执行中" },
@@ -1003,6 +1012,12 @@ function ComposeTaskForm({
       <div className="field">
         <label className="field-label">优先级</label>
         <input name="priority" type="number" defaultValue={0} />
+      </div>
+      <div className="field">
+        <label className="field-label">
+          定时发布 <span className="field-hint">留空即建为草稿手动发布；设定时间则到点自动进入待处理队列</span>
+        </label>
+        <input name="scheduledAt" type="datetime-local" />
       </div>
       <div className="field">
         <label className="field-label">

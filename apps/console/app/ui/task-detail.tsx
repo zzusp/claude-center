@@ -23,7 +23,8 @@ const EVENT_LABEL: Record<string, string> = {
   success: "执行完成",
   merged: "已合并",
   failed: "执行失败",
-  waiting: "等待回复"
+  waiting: "等待回复",
+  scheduled_published: "定时到点·进入待处理"
 };
 
 export default function TaskDetailPage({
@@ -204,7 +205,7 @@ export default function TaskDetailPage({
                 PR
               </a>
             ) : null}
-            {task.status === "draft" && canCreateTask ? (
+            {(task.status === "draft" || task.status === "scheduled") && canCreateTask ? (
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
@@ -212,7 +213,7 @@ export default function TaskDetailPage({
                 onClick={() => void publish()}
               >
                 <Send size={14} />
-                发布
+                {task.status === "scheduled" ? "立即发布" : "发布"}
               </button>
             ) : null}
           </div>
@@ -304,6 +305,16 @@ export default function TaskDetailPage({
                       <a href={task.pr_url} target="_blank" rel="noreferrer">
                         {task.pr_url}
                       </a>
+                    }
+                  />
+                ) : null}
+                {task.scheduled_at ? (
+                  <KvRow
+                    k="定时发布"
+                    v={
+                      task.status === "scheduled"
+                        ? `${fmtTime(task.scheduled_at)}（到点自动进入待处理）`
+                        : fmtTime(task.scheduled_at)
                     }
                   />
                 ) : null}

@@ -13,11 +13,13 @@ export type Tone =
   | "queued"
   | "waiting"
   | "draft"
+  | "scheduled"
   | "review"
   | "rejected";
 
 export const STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> = {
   draft: { glyph: "✎", label: "草稿", tone: "draft" },
+  scheduled: { glyph: "⏰", label: "定时待发", tone: "scheduled" },
   pending: { glyph: "○", label: "待处理", tone: "pending" },
   claimed: { glyph: "◻", label: "已认领", tone: "queued" },
   running: { glyph: "◐", label: "执行中", tone: "running" },

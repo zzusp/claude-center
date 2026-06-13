@@ -1,5 +1,6 @@
 export type TaskStatus =
   | "draft"
+  | "scheduled"
   | "pending"
   | "claimed"
   | "running"
@@ -11,8 +12,8 @@ export type TaskStatus =
   | "failed"
   | "cancelled";
 export type TaskType = "work" | "qa";
-// direct_commands 没有 merged 终态，沿用任务状态里除 merged 外的子集。
-export type DirectCommandStatus = Exclude<TaskStatus, "merged">;
+// direct_commands 没有 merged 终态，也没有 scheduled 定时态，沿用任务状态里的子集。
+export type DirectCommandStatus = Exclude<TaskStatus, "merged" | "scheduled">;
 export type DirectCommandName = "shell" | "claude_prompt";
 export type TaskSubmitMode = "pr" | "push";
 
@@ -99,6 +100,8 @@ export type Task = {
   pr_url: string | null;
   merge_checked_at: string | null;
   claude_session_id: string | null;
+  // 定时发布时间：scheduled 任务到此刻自动转 pending；非定时任务为 null。
+  scheduled_at: string | null;
   // 前置任务 id（listRecentTasks 聚合填充；其余查询不返回，故可选）。
   depends_on?: string[];
   // 存在「状态非 accepted 的前置」时为 true，用于 UI 提示阻塞（同上，可选）。
