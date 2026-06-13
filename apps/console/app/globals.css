@@ -391,6 +391,26 @@ a:hover {
   align-items: start;
 }
 
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+/* 系统运行状态：标题 + 三张健康卡 */
+.health-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.health-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .grid-tasks {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
@@ -1553,6 +1573,9 @@ select:focus {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .grid-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .grid-3 {
     grid-template-columns: minmax(0, 1fr);
   }
 }

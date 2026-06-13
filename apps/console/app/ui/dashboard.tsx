@@ -22,6 +22,7 @@ import {
   ChevronRight,
   Clock,
   Cpu,
+  Database,
   ExternalLink,
   FolderGit2,
   GitBranch,
@@ -50,7 +51,23 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Empty, StatusBadge, StatusDot, fmtTime, metaOf, postJson, type Tone } from "./shared";
+import { Empty, KvRow, StatusBadge, StatusDot, fmtTime, metaOf, postJson, type Tone } from "./shared";
+import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
+
+type Health = {
+  db: { ok: boolean; latencyMs: number | null; pool: { total: number; idle: number; waiting: number; max: number } };
+  scheduler: {
+    startedAt: string | null;
+    intervalMs: number | null;
+    lastTickAt: string | null;
+    lastError: string | null;
+    lastPromoted: number;
+    totalPromoted: number;
+    tickCount: number;
+    scheduledPending: number;
+    ok: boolean;
+  };
+};
 
 type Overview = {
   projects: Project[];
@@ -63,6 +80,7 @@ type Overview = {
     runningTasks: number;
     failedTasks: number;
   };
+  health: Health | null;
 };
 
 type ViewKey = "dashboard" | "tasks" | "workers" | "projects" | "users";
@@ -91,7 +109,8 @@ const emptyOverview: Overview = {
   workers: [],
   tasks: [],
   commands: [],
-  summary: { onlineWorkers: 0, pendingTasks: 0, runningTasks: 0, failedTasks: 0 }
+  summary: { onlineWorkers: 0, pendingTasks: 0, runningTasks: 0, failedTasks: 0 },
+  health: null
 };
 
 const SPARK_CAP = 24;
@@ -187,11 +206,8 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
     }
   }
 
-  useEffect(() => {
+  usePolling(() => {
     void loadOverview();
-    const timer = window.setInterval(() => void loadOverview(), 3000);
-    return () => window.clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const onlineWorkers = useMemo(
@@ -382,6 +398,8 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
               overview={overview}
               history={history}
               statusCounts={statusCounts}
+              synced={synced}
+              lastSyncAt={lastSyncAt}
               onOpenTask={openTask}
             />
           ) : null}
@@ -440,11 +458,15 @@ function DashboardView({
   overview,
   history,
   statusCounts,
+  synced,
+  lastSyncAt,
   onOpenTask
 }: {
   overview: Overview;
   history: Record<"online" | "pending" | "running" | "failed", number[]>;
   statusCounts: Record<string, number>;
+  synced: boolean;
+  lastSyncAt: string | null;
   onOpenTask: (task: Task) => void;
 }) {
   const recentTasks = overview.tasks.slice(0, 7);
@@ -513,6 +535,8 @@ function DashboardView({
           tone="failed"
         />
       </div>
+
+      <RuntimeHealth health={overview.health} synced={synced} lastSyncAt={lastSyncAt} />
 
       <div className="grid-2">
         <div className="col">
@@ -699,35 +723,28 @@ function TasksView({
     setPage(1);
   }, [status, projectId, debouncedQ, sort, pageSize]);
 
-  useEffect(() => {
-    let active = true;
-    const params = new URLSearchParams();
-    if (status) params.set("status", status);
-    if (projectId) params.set("projectId", projectId);
-    if (debouncedQ) params.set("q", debouncedQ);
-    params.set("sort", sort);
-    params.set("page", String(page));
-    params.set("pageSize", String(pageSize));
-
-    async function load() {
+  usePolling(
+    async (isActive) => {
+      const params = new URLSearchParams();
+      if (status) params.set("status", status);
+      if (projectId) params.set("projectId", projectId);
+      if (debouncedQ) params.set("q", debouncedQ);
+      params.set("sort", sort);
+      params.set("page", String(page));
+      params.set("pageSize", String(pageSize));
       try {
         const response = await fetch(`/api/tasks?${params.toString()}`, { cache: "no-store" });
         if (!response.ok) return;
         const json = (await response.json()) as ListResponse;
-        if (active) setData(json);
+        if (isActive()) setData(json);
       } catch {
         /* 轮询失败静默，下次重试 */
       } finally {
-        if (active) setLoading(false);
+        if (isActive()) setLoading(false);
       }
-    }
-    void load();
-    const timer = window.setInterval(load, 3000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [status, projectId, debouncedQ, sort, page, pageSize]);
+    },
+    [status, projectId, debouncedQ, sort, page, pageSize]
+  );
 
   const totalPages = Math.max(1, Math.ceil(data.total / pageSize));
   // 结果收窄导致当前页越界时回拉到末页
@@ -1433,6 +1450,99 @@ function SyncStatus({
         </span>
       ) : null}
     </span>
+  );
+}
+
+function RuntimeHealth({
+  health,
+  synced,
+  lastSyncAt
+}: {
+  health: Health | null;
+  synced: boolean;
+  lastSyncAt: string | null;
+}) {
+  const db = health?.db;
+  const sched = health?.scheduler;
+  const intervalSec = sched?.intervalMs ? Math.round(sched.intervalMs / 1000) : null;
+
+  return (
+    <section className="health-section">
+      <div className="section-head">
+        <h2 className="section-title">系统运行状态</h2>
+        <span className="section-sub">数据库 · 调度器 · 实时同步</span>
+      </div>
+      <div className="grid-3">
+        <HealthCard
+          icon={<Database size={16} />}
+          title="数据库连接"
+          ok={db?.ok ?? false}
+          okLabel={db?.ok ? "已连接" : "未连接"}
+          rows={[
+            { k: "往返延迟", v: db?.latencyMs != null ? `${db.latencyMs} ms` : "—" },
+            { k: "连接池", v: db ? `${db.pool.total} / ${db.pool.max}（空闲 ${db.pool.idle}）` : "—" },
+            { k: "等待队列", v: db ? `${db.pool.waiting}` : "—" }
+          ]}
+        />
+        <HealthCard
+          icon={<Clock size={16} />}
+          title="定时调度器"
+          ok={sched?.ok ?? false}
+          okLabel={sched?.ok ? "运行中" : sched?.startedAt ? "异常" : "未启动"}
+          rows={[
+            { k: "检查周期", v: intervalSec != null ? `每 ${intervalSec}s` : "—" },
+            { k: "上次检查", v: sched?.lastTickAt ? fmtAgo(sched.lastTickAt) : "—" },
+            { k: "定时待发", v: sched ? `${sched.scheduledPending} 个` : "—" },
+            { k: "累计提升", v: sched ? `${sched.totalPromoted} 个` : "—" },
+            ...(sched?.lastError ? [{ k: "最近错误", v: sched.lastError, mono: true }] : [])
+          ]}
+        />
+        <HealthCard
+          icon={<RadioTower size={16} />}
+          title="实时同步"
+          ok={synced}
+          okLabel={synced ? "同步中" : "已断开"}
+          rows={[
+            { k: "轮询节奏", v: `每 ${Math.round(POLL_INTERVAL_MS / 1000)}s` },
+            { k: "上次同步", v: lastSyncAt ? fmtAgo(lastSyncAt) : "—" }
+          ]}
+        />
+      </div>
+    </section>
+  );
+}
+
+function HealthCard({
+  icon,
+  title,
+  ok,
+  okLabel,
+  rows
+}: {
+  icon: React.ReactNode;
+  title: string;
+  ok: boolean;
+  okLabel: string;
+  rows: { k: string; v: React.ReactNode; mono?: boolean }[];
+}) {
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h2 className="card-title">
+          <span className="ico">{icon}</span>
+          {title}
+        </h2>
+        <span className="badge" data-tone={ok ? "success" : "failed"}>
+          <span className="glyph">{ok ? "●" : "✕"}</span>
+          {okLabel}
+        </span>
+      </div>
+      <div className="card-body health-body">
+        {rows.map((row) => (
+          <KvRow key={row.k} k={row.k} v={row.v} mono={row.mono} />
+        ))}
+      </div>
+    </section>
   );
 }
 

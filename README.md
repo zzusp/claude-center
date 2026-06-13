@@ -208,3 +208,18 @@ scheduled ──到点(自动) / 人工立即发布──▶ pending ──▶ c
 - 「定时」机制落在 web 端，状态翻转不依赖 Worker 是否在线，看板始终如实显示；前提是 Console 进程在跑（本就是该 web 特性的前提）。
 - 建任务 `POST /api/tasks` 接受可选 `scheduledAt`（ISO 时间），校验为将来时间，落 `scheduled` 态；详情页「发布」按钮对 `scheduled` 任务即「立即发布」（到点前手动提前发布，覆盖定时，复用 `publishTask`，WHERE 放开为 `status IN ('draft','scheduled')`）。
 - 该能力依赖数据库迁移 `009_task_scheduled.sql`（新增 `tasks.scheduled_at` 列、`status` CHECK 增加 `scheduled`、待发部分索引）。升级后务必先跑 `npm run db:migrate`。详见 `docs/spec/task-scheduled.md`。
+
+## 系统运行状态总览
+
+总览页在业务量卡片下新增「系统运行状态」区，三张健康卡：
+
+- **数据库连接**：连接池 `total/idle/waiting`（上限 10）+ `SELECT 1` 往返延迟。
+- **定时调度器**：检查周期、上次检查时间、`scheduled` 待发队列深度、累计提升数、最近错误（若有）。
+- **实时同步**：客户端轮询节奏与上次同步时间。
+
+实现要点：
+
+- 这三样分属共享库 / Console 服务进程 / 浏览器三个上下文，**代码各自留在原处**（不强行合并），总览页只做统一的运行健康视图。
+- 健康数据**搭 `/api/overview` 既有 3s 轮询返回**（新增 `health: { db, scheduler }` 块），不另开端点、不加定时器。`db` 走 `getPoolStats` + `pingDatabase`；`scheduler` 由 `apps/console/app/lib/scheduler-state.ts` 把调度器的启动 / tick 状态记在 `globalThis`（instrumentation 写、route 读）。
+- 全站客户端轮询统一到 `apps/console/app/lib/use-polling.ts` 的 `POLL_INTERVAL_MS` 常量 + `usePolling` hook，取代散落的 `setInterval(…, 3000)`。
+- 纯内存调度器状态在单 Console 进程下成立；多实例时为 per-instance 视图。详见 `docs/spec/runtime-health-overview.md`。
