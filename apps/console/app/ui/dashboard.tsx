@@ -1,11 +1,13 @@
 "use client";
 
-import type { DirectCommand, Project, Task, TaskComment, Worker } from "@claude-center/db";
+import type { DirectCommand, Project, Task, TaskComment, TaskEvent, Worker } from "@claude-center/db";
 import {
   Activity,
   Boxes,
   Bot,
   CircleAlert,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Cpu,
   ExternalLink,
@@ -19,10 +21,12 @@ import {
   Plus,
   RadioTower,
   RefreshCw,
+  Search,
   Send,
   Server,
   Tag,
-  UserRound
+  UserRound,
+  X
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
@@ -41,6 +45,7 @@ type Overview = {
 
 type ViewKey = "dashboard" | "tasks" | "workers" | "projects";
 type DetailTab = "overview" | "timeline" | "logs" | "conversation";
+type TaskSort = "updated" | "created" | "priority";
 type Tone = "success" | "running" | "pending" | "failed" | "cancelled" | "queued" | "waiting";
 
 const emptyOverview: Overview = {
@@ -126,9 +131,11 @@ export default function Dashboard() {
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
 
   const [view, setView] = useState<ViewKey>("dashboard");
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("overview");
-  const [rightMode, setRightMode] = useState<"detail" | "compose">("detail");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerMode, setDrawerMode] = useState<"detail" | "compose">("detail");
+  const [openedTaskId, setOpenedTaskId] = useState<string | null>(null);
+  const [openedTaskSeed, setOpenedTaskSeed] = useState<Task | null>(null);
 
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [selectedWorkerId, setSelectedWorkerId] = useState("");
@@ -174,10 +181,11 @@ export default function Dashboard() {
     [overview.workers]
   );
 
-  const selectedTask = useMemo(() => {
-    if (overview.tasks.length === 0) return null;
-    return overview.tasks.find((task) => task.id === selectedTaskId) ?? overview.tasks[0] ?? null;
-  }, [overview.tasks, selectedTaskId]);
+  // 抽屉里的任务：优先用总览轮询到的最新对象，回退到点击时捕获的快照（可能不在最近 80 条里）
+  const openedTask = useMemo(
+    () => overview.tasks.find((task) => task.id === openedTaskId) ?? openedTaskSeed,
+    [overview.tasks, openedTaskId, openedTaskSeed]
+  );
 
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -185,11 +193,18 @@ export default function Dashboard() {
     return counts;
   }, [overview.tasks]);
 
-  function openTask(taskId: string) {
-    setSelectedTaskId(taskId);
-    setRightMode("detail");
+  function openTask(task: Task) {
+    setOpenedTaskId(task.id);
+    setOpenedTaskSeed(task);
+    setDrawerMode("detail");
     setDetailTab("overview");
+    setDrawerOpen(true);
     setView("tasks");
+  }
+
+  function openCompose() {
+    setDrawerMode("compose");
+    setDrawerOpen(true);
   }
 
   async function handleProjectSubmit(event: FormEvent<HTMLFormElement>) {
@@ -231,7 +246,7 @@ export default function Dashboard() {
       });
       form.reset();
       await loadOverview();
-      setRightMode("detail");
+      setDrawerOpen(false);
       setMessage("任务已入队");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "任务创建失败");
@@ -338,21 +353,9 @@ export default function Dashboard() {
           {view === "tasks" ? (
             <TasksView
               overview={overview}
-              selectedTask={selectedTask}
-              selectedTaskId={selectedTaskId}
-              detailTab={detailTab}
-              rightMode={rightMode}
-              busy={busy}
-              selectedProjectId={selectedProjectId}
-              onSelectProject={setSelectedProjectId}
-              onSelectTask={(id) => {
-                setSelectedTaskId(id);
-                setRightMode("detail");
-                setDetailTab("overview");
-              }}
-              onSetTab={setDetailTab}
-              onSetRightMode={setRightMode}
-              onSubmitTask={handleTaskSubmit}
+              openedTaskId={drawerOpen && drawerMode === "detail" ? openedTaskId : null}
+              onOpenTask={openTask}
+              onOpenCompose={openCompose}
             />
           ) : null}
 
@@ -372,6 +375,20 @@ export default function Dashboard() {
           ) : null}
         </div>
       </main>
+
+      <TaskDrawer
+        open={drawerOpen}
+        mode={drawerMode}
+        task={openedTask}
+        detailTab={detailTab}
+        busy={busy}
+        overview={overview}
+        selectedProjectId={selectedProjectId}
+        onClose={() => setDrawerOpen(false)}
+        onSetTab={setDetailTab}
+        onSelectProject={setSelectedProjectId}
+        onSubmitTask={handleTaskSubmit}
+      />
     </div>
   );
 }
@@ -387,7 +404,7 @@ function DashboardView({
   overview: Overview;
   history: Record<"online" | "pending" | "running" | "failed", number[]>;
   statusCounts: Record<string, number>;
-  onOpenTask: (id: string) => void;
+  onOpenTask: (task: Task) => void;
 }) {
   const recentTasks = overview.tasks.slice(0, 7);
   const failedTasks = overview.tasks.filter((task) => task.status === "failed").slice(0, 4);
@@ -461,7 +478,7 @@ function DashboardView({
                     </thead>
                     <tbody>
                       {recentTasks.map((task) => (
-                        <tr key={task.id} onClick={() => onOpenTask(task.id)}>
+                        <tr key={task.id} onClick={() => onOpenTask(task)}>
                           <td>
                             <StatusBadge status={task.status} />
                           </td>
@@ -564,117 +581,232 @@ function DashboardView({
 
 /* ============================== Tasks ============================== */
 
+type ListResponse = { tasks: Task[]; total: number; page: number; pageSize: number };
+
+const STATUS_FILTERS: { value: string; label: string }[] = [
+  { value: "", label: "全部状态" },
+  { value: "pending", label: "待处理" },
+  { value: "claimed", label: "已认领" },
+  { value: "running", label: "执行中" },
+  { value: "waiting", label: "等待回复" },
+  { value: "success", label: "已完成" },
+  { value: "failed", label: "失败" },
+  { value: "cancelled", label: "已取消" }
+];
+
+const SORT_OPTIONS: { value: TaskSort; label: string }[] = [
+  { value: "updated", label: "最近更新" },
+  { value: "created", label: "创建时间" },
+  { value: "priority", label: "优先级" }
+];
+
+const PAGE_SIZE_OPTIONS = [20, 50, 100];
+
 function TasksView({
   overview,
-  selectedTask,
-  selectedTaskId,
-  detailTab,
-  rightMode,
-  busy,
-  selectedProjectId,
-  onSelectProject,
-  onSelectTask,
-  onSetTab,
-  onSetRightMode,
-  onSubmitTask
+  openedTaskId,
+  onOpenTask,
+  onOpenCompose
 }: {
   overview: Overview;
-  selectedTask: Task | null;
-  selectedTaskId: string | null;
-  detailTab: DetailTab;
-  rightMode: "detail" | "compose";
-  busy: boolean;
-  selectedProjectId: string;
-  onSelectProject: (id: string) => void;
-  onSelectTask: (id: string) => void;
-  onSetTab: (tab: DetailTab) => void;
-  onSetRightMode: (mode: "detail" | "compose") => void;
-  onSubmitTask: (event: FormEvent<HTMLFormElement>) => void;
+  openedTaskId: string | null;
+  onOpenTask: (task: Task) => void;
+  onOpenCompose: () => void;
 }) {
+  const [status, setStatus] = useState("");
+  const [projectId, setProjectId] = useState("");
+  const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
+  const [sort, setSort] = useState<TaskSort>("updated");
+  const [pageSize, setPageSize] = useState(20);
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState<ListResponse>({ tasks: [], total: 0, page: 1, pageSize: 20 });
+  const [loading, setLoading] = useState(true);
+
+  // 关键词 debounce，避免每敲一个字符就发一次请求
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQ(q.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [q]);
+
+  // 任一筛选条件变化都回到第 1 页
+  useEffect(() => {
+    setPage(1);
+  }, [status, projectId, debouncedQ, sort, pageSize]);
+
+  useEffect(() => {
+    let active = true;
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (projectId) params.set("projectId", projectId);
+    if (debouncedQ) params.set("q", debouncedQ);
+    params.set("sort", sort);
+    params.set("page", String(page));
+    params.set("pageSize", String(pageSize));
+
+    async function load() {
+      try {
+        const response = await fetch(`/api/tasks?${params.toString()}`, { cache: "no-store" });
+        if (!response.ok) return;
+        const json = (await response.json()) as ListResponse;
+        if (active) setData(json);
+      } catch {
+        /* 轮询失败静默，下次重试 */
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    void load();
+    const timer = window.setInterval(load, 3000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [status, projectId, debouncedQ, sort, page, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(data.total / pageSize));
+  // 结果收窄导致当前页越界时回拉到末页
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  const hasFilter = Boolean(status || projectId || debouncedQ);
+
   return (
     <>
       <div className="section-head">
         <div>
           <h2 className="section-title">任务流</h2>
-          <span className="section-sub">{overview.tasks.length} 个任务 · 点击行查看详情</span>
+          <span className="section-sub">{data.total} 个任务 · 点击行查看详情</span>
         </div>
         <button
           type="button"
-          className={rightMode === "compose" ? "btn btn-sm" : "btn btn-primary btn-sm"}
-          onClick={() => onSetRightMode(rightMode === "compose" ? "detail" : "compose")}
+          className="btn btn-primary btn-sm"
+          onClick={onOpenCompose}
           disabled={overview.projects.length === 0}
         >
           <Plus size={16} />
-          {rightMode === "compose" ? "返回详情" : "发布任务"}
+          发布任务
         </button>
       </div>
 
-      <div className="grid-tasks">
-        <section className="card">
-          <div className="card-body flush">
-            {overview.tasks.length === 0 ? (
-              <Empty icon={<Inbox size={28} />} text="暂无任务，点击右上角发布第一个任务" />
-            ) : (
-              <div className="table-wrap">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>状态</th>
-                      <th>任务</th>
-                      <th>分支</th>
-                      <th className="t-right">优先级</th>
-                      <th className="t-right">更新</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {overview.tasks.map((task) => (
-                      <tr
-                        key={task.id}
-                        className={selectedTask?.id === task.id ? "selected" : ""}
-                        onClick={() => onSelectTask(task.id)}
-                      >
-                        <td>
-                          <StatusBadge status={task.status} />
-                        </td>
-                        <td>
-                          <div className="cell-stack">
-                            <span className="t-title">{task.title}</span>
-                            <span className="t-meta">
-                              {task.project_name ?? task.project_id} · {task.base_branch} → {task.work_branch}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="mono">{task.work_branch}</td>
-                        <td className="t-right t-num">{task.priority}</td>
-                        <td className="t-right t-num">{fmtTime(task.updated_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+      <section className="card">
+        <div className="toolbar">
+          <div className="tb-search">
+            <Search size={15} className="ico" />
+            <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="搜索标题或工作分支" />
           </div>
-        </section>
+          <select className="tb-select" value={status} onChange={(event) => setStatus(event.target.value)}>
+            {STATUS_FILTERS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <select className="tb-select" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+            <option value="">全部项目</option>
+            {overview.projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+          <select className="tb-select" value={sort} onChange={(event) => setSort(event.target.value as TaskSort)}>
+            {SORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
 
-        <div className="col">
-          {rightMode === "compose" ? (
-            <ComposeTaskCard
-              overview={overview}
-              busy={busy}
-              selectedProjectId={selectedProjectId}
-              onSelectProject={onSelectProject}
-              onSubmit={onSubmitTask}
+        <div className="card-body flush">
+          {data.tasks.length === 0 ? (
+            <Empty
+              icon={<Inbox size={28} />}
+              text={loading ? "加载中…" : hasFilter ? "没有符合条件的任务" : "暂无任务，点击右上角发布第一个任务"}
             />
           ) : (
-            <TaskDetail task={selectedTask} detailTab={detailTab} onSetTab={onSetTab} />
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>状态</th>
+                    <th>任务</th>
+                    <th>分支</th>
+                    <th className="t-right">优先级</th>
+                    <th className="t-right">更新</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.tasks.map((task) => (
+                    <tr
+                      key={task.id}
+                      className={openedTaskId === task.id ? "selected" : ""}
+                      onClick={() => onOpenTask(task)}
+                    >
+                      <td>
+                        <StatusBadge status={task.status} />
+                      </td>
+                      <td>
+                        <div className="cell-stack">
+                          <span className="t-title">{task.title}</span>
+                          <span className="t-meta">
+                            {task.project_name ?? task.project_id} · {task.base_branch} → {task.work_branch}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="mono">{task.work_branch}</td>
+                      <td className="t-right t-num">{task.priority}</td>
+                      <td className="t-right t-num">{fmtTime(task.updated_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
-      </div>
+
+        {data.total > 0 ? (
+          <div className="pager">
+            <span className="pager-info">
+              第 {Math.min(page, totalPages)} / {totalPages} 页 · 共 {data.total} 条
+            </span>
+            <div className="pager-controls">
+              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+                {PAGE_SIZE_OPTIONS.map((size) => (
+                  <option key={size} value={size}>
+                    每页 {size} 条
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={page <= 1}
+                onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+              >
+                <ChevronLeft size={16} />
+                上一页
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={page >= totalPages}
+                onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+              >
+                下一页
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </section>
     </>
   );
 }
 
-function ComposeTaskCard({
+function ComposeTaskForm({
   overview,
   busy,
   selectedProjectId,
@@ -688,97 +820,181 @@ function ComposeTaskCard({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <section className="card detail">
-      <div className="card-head">
-        <h2 className="card-title">
-          <Send size={16} className="ico" />
-          发布任务
-        </h2>
+    <form className="form" onSubmit={onSubmit}>
+      <div className="field">
+        <label className="field-label">项目</label>
+        <select value={selectedProjectId} onChange={(event) => onSelectProject(event.target.value)} required>
+          {overview.projects.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.name}
+            </option>
+          ))}
+        </select>
       </div>
-      <div className="card-body">
-        <form className="form" onSubmit={onSubmit}>
-          <div className="field">
-            <label className="field-label">项目</label>
-            <select value={selectedProjectId} onChange={(event) => onSelectProject(event.target.value)} required>
-              {overview.projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label className="field-label">标题</label>
-            <input name="title" placeholder="修复登录按钮状态" required />
-          </div>
-          <div className="field">
-            <label className="field-label">目标</label>
-            <textarea name="description" rows={4} placeholder="写清期望行为、约束和验收方式" required />
-          </div>
-          <div className="form-row">
-            <div className="field">
-              <label className="field-label">基准分支</label>
-              <input name="baseBranch" defaultValue="main" />
-            </div>
-            <div className="field">
-              <label className="field-label">
-                工作分支 <span className="field-hint">留空自动生成</span>
-              </label>
-              <input name="workBranch" placeholder="cc/..." />
-            </div>
-          </div>
-          <div className="field">
-            <label className="field-label">
-              目标文件 <span className="field-hint">每行一个路径，可留空</span>
-            </label>
-            <textarea name="targetFilesText" rows={3} placeholder={"src/app.tsx\nsrc/lib/auth.ts"} />
-          </div>
-          <div className="field">
-            <label className="field-label">优先级</label>
-            <input name="priority" type="number" defaultValue={0} />
-          </div>
-          <button className="btn btn-primary" disabled={busy || overview.projects.length === 0} type="submit">
-            <Send size={16} />
-            入队
-          </button>
-        </form>
+      <div className="field">
+        <label className="field-label">标题</label>
+        <input name="title" placeholder="修复登录按钮状态" required />
       </div>
-    </section>
+      <div className="field">
+        <label className="field-label">目标</label>
+        <textarea name="description" rows={4} placeholder="写清期望行为、约束和验收方式" required />
+      </div>
+      <div className="form-row">
+        <div className="field">
+          <label className="field-label">基准分支</label>
+          <input name="baseBranch" defaultValue="main" />
+        </div>
+        <div className="field">
+          <label className="field-label">
+            工作分支 <span className="field-hint">留空自动生成</span>
+          </label>
+          <input name="workBranch" placeholder="cc/..." />
+        </div>
+      </div>
+      <div className="field">
+        <label className="field-label">
+          目标文件 <span className="field-hint">每行一个路径，可留空</span>
+        </label>
+        <textarea name="targetFilesText" rows={3} placeholder={"src/app.tsx\nsrc/lib/auth.ts"} />
+      </div>
+      <div className="field">
+        <label className="field-label">优先级</label>
+        <input name="priority" type="number" defaultValue={0} />
+      </div>
+      <button className="btn btn-primary" disabled={busy || overview.projects.length === 0} type="submit">
+        <Send size={16} />
+        入队
+      </button>
+    </form>
   );
 }
 
-function TaskDetail({
+const EVENT_LABEL: Record<string, string> = {
+  running: "开始执行",
+  success: "执行完成",
+  failed: "执行失败",
+  waiting: "等待回复"
+};
+
+function TaskDrawer({
+  open,
+  mode,
   task,
   detailTab,
-  onSetTab
+  busy,
+  overview,
+  selectedProjectId,
+  onClose,
+  onSetTab,
+  onSelectProject,
+  onSubmitTask
 }: {
+  open: boolean;
+  mode: "detail" | "compose";
   task: Task | null;
   detailTab: DetailTab;
+  busy: boolean;
+  overview: Overview;
+  selectedProjectId: string;
+  onClose: () => void;
   onSetTab: (tab: DetailTab) => void;
+  onSelectProject: (id: string) => void;
+  onSubmitTask: (event: FormEvent<HTMLFormElement>) => void;
 }) {
-  if (!task) {
-    return (
-      <section className="card detail">
-        <Empty icon={<Inbox size={28} />} text="选择左侧任务查看详情" />
-      </section>
-    );
-  }
+  // Esc 关闭
+  useEffect(() => {
+    if (!open) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
 
-  const timeline: { label: string; time: string | null; state: "done" | "active" | "idle" }[] = [
+  return (
+    <>
+      <div className={`drawer-backdrop${open ? " open" : ""}`} onClick={onClose} />
+      <aside className={`drawer${open ? " open" : ""}`} aria-hidden={!open}>
+        {mode === "compose" ? (
+          <>
+            <div className="drawer-head">
+              <h2 className="detail-title">发布任务</h2>
+              <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="drawer-scroll drawer-pad">
+              <ComposeTaskForm
+                overview={overview}
+                busy={busy}
+                selectedProjectId={selectedProjectId}
+                onSelectProject={onSelectProject}
+                onSubmit={onSubmitTask}
+              />
+            </div>
+          </>
+        ) : task ? (
+          <TaskDetailBody task={task} detailTab={detailTab} open={open} onSetTab={onSetTab} onClose={onClose} />
+        ) : (
+          <div className="drawer-head">
+            <span />
+            <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭">
+              <X size={18} />
+            </button>
+          </div>
+        )}
+      </aside>
+    </>
+  );
+}
+
+function TaskDetailBody({
+  task,
+  detailTab,
+  open,
+  onSetTab,
+  onClose
+}: {
+  task: Task;
+  detailTab: DetailTab;
+  open: boolean;
+  onSetTab: (tab: DetailTab) => void;
+  onClose: () => void;
+}) {
+  const [events, setEvents] = useState<TaskEvent[]>([]);
+
+  // 抽屉打开时轮询真实 task_events，喂给时间线
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    async function load() {
+      try {
+        const response = await fetch(`/api/tasks/${task.id}/events`, { cache: "no-store" });
+        if (!response.ok) return;
+        const data = (await response.json()) as { events: TaskEvent[] };
+        if (active) setEvents(data.events);
+      } catch {
+        /* 轮询失败静默，下次重试 */
+      }
+    }
+    void load();
+    const timer = window.setInterval(load, 3000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [task.id, open]);
+
+  const lifecycle: { label: string; time: string | null; state: "done" | "active" | "idle" }[] = [
     { label: "已创建", time: task.created_at, state: "done" },
-    {
-      label: "已认领",
-      time: task.claimed_at,
-      state: task.claimed_at ? "done" : "idle"
-    },
+    { label: "已认领", time: task.claimed_at, state: task.claimed_at ? "done" : "idle" },
     {
       label: "开始执行",
       time: task.started_at,
       state: task.started_at ? (task.status === "running" ? "active" : "done") : "idle"
     },
     {
-      label:
-        task.status === "failed" ? "执行失败" : task.status === "cancelled" ? "已取消" : "执行完成",
+      label: task.status === "failed" ? "执行失败" : task.status === "cancelled" ? "已取消" : "执行完成",
       time: task.finished_at,
       state: task.finished_at ? "done" : "idle"
     }
@@ -793,22 +1009,27 @@ function TaskDetail({
       .join("\n\n") || "暂无日志输出";
 
   return (
-    <section className="card detail">
-      <div className="detail-head">
-        <h2 className="detail-title">{task.title}</h2>
-        <div className="detail-tags">
-          <StatusBadge status={task.status} />
-          <span className="tag">
-            <GitBranch size={13} className="ico" />
-            {task.base_branch} → {task.work_branch}
-          </span>
-          {task.pr_url ? (
-            <a className="tag" href={task.pr_url} target="_blank" rel="noreferrer">
-              <ExternalLink size={13} className="ico" />
-              PR
-            </a>
-          ) : null}
+    <>
+      <div className="drawer-head">
+        <div className="drawer-head-main">
+          <h2 className="detail-title">{task.title}</h2>
+          <div className="detail-tags">
+            <StatusBadge status={task.status} />
+            <span className="tag">
+              <GitBranch size={13} className="ico" />
+              {task.base_branch} → {task.work_branch}
+            </span>
+            {task.pr_url ? (
+              <a className="tag" href={task.pr_url} target="_blank" rel="noreferrer">
+                <ExternalLink size={13} className="ico" />
+                PR
+              </a>
+            ) : null}
+          </div>
         </div>
+        <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭">
+          <X size={18} />
+        </button>
       </div>
 
       <div className="tabs">
@@ -830,73 +1051,90 @@ function TaskDetail({
         ))}
       </div>
 
-      <div className="tab-body">
-        {detailTab === "overview" ? (
-          <div className="kv">
-            <KvRow k="项目" v={task.project_name ?? task.project_id} />
-            <KvRow k="描述" v={task.description} />
-            <KvRow k="基准分支" v={task.base_branch} mono />
-            <KvRow k="工作分支" v={task.work_branch} mono />
-            <KvRow k="优先级" v={String(task.priority)} />
-            <KvRow
-              k="目标文件"
-              v={
-                task.target_files.length > 0 ? (
-                  <div className="pill-row">
-                    {task.target_files.map((file) => (
-                      <span className="pill" key={file}>
-                        {file}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  "—"
-                )
-              }
-            />
-            {task.pr_url ? (
+      <div className="drawer-scroll">
+        <div className="tab-body">
+          {detailTab === "overview" ? (
+            <div className="kv">
+              <KvRow k="项目" v={task.project_name ?? task.project_id} />
+              <KvRow k="描述" v={task.description} />
+              <KvRow k="基准分支" v={task.base_branch} mono />
+              <KvRow k="工作分支" v={task.work_branch} mono />
+              <KvRow k="优先级" v={String(task.priority)} />
               <KvRow
-                k="PR"
+                k="目标文件"
                 v={
-                  <a href={task.pr_url} target="_blank" rel="noreferrer">
-                    {task.pr_url}
-                  </a>
+                  task.target_files.length > 0 ? (
+                    <div className="pill-row">
+                      {task.target_files.map((file) => (
+                        <span className="pill" key={file}>
+                          {file}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    "—"
+                  )
                 }
               />
-            ) : null}
-            <KvRow k="创建于" v={fmtTime(task.created_at)} />
-            <KvRow k="更新于" v={fmtTime(task.updated_at)} />
-            {task.error_message ? (
-              <div className="error-box">{task.error_message}</div>
-            ) : null}
-          </div>
-        ) : null}
-
-        {detailTab === "timeline" ? (
-          <div className="timeline">
-            {timeline.map((item, index) => (
-              <div className="tl-item" key={index}>
-                <span
-                  className={`tl-node${item.state === "done" ? " done" : item.state === "active" ? " active" : ""}`}
+              {task.pr_url ? (
+                <KvRow
+                  k="PR"
+                  v={
+                    <a href={task.pr_url} target="_blank" rel="noreferrer">
+                      {task.pr_url}
+                    </a>
+                  }
                 />
-                <div>
-                  <div className="tl-label">{item.label}</div>
-                  <div className="tl-time">{item.time ? fmtTime(item.time) : "—"}</div>
+              ) : null}
+              <KvRow k="创建于" v={fmtTime(task.created_at)} />
+              <KvRow k="更新于" v={fmtTime(task.updated_at)} />
+              {task.error_message ? <div className="error-box">{task.error_message}</div> : null}
+            </div>
+          ) : null}
+
+          {detailTab === "timeline" ? (
+            <div className="timeline">
+              {lifecycle.map((item, index) => (
+                <div className="tl-item" key={`lc-${index}`}>
+                  <span
+                    className={`tl-node${item.state === "done" ? " done" : item.state === "active" ? " active" : ""}`}
+                  />
+                  <div>
+                    <div className="tl-label">{item.label}</div>
+                    <div className="tl-time">{item.time ? fmtTime(item.time) : "—"}</div>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        ) : null}
+              ))}
+              {events.length > 0 ? (
+                <>
+                  <div className="tl-sep">执行事件</div>
+                  {events.map((event) => (
+                    <div className="tl-item" key={event.id}>
+                      <span className="tl-node done" />
+                      <div>
+                        <div className="tl-label">
+                          {EVENT_LABEL[event.event_type] ?? event.event_type}
+                          {event.message ? <span className="tl-msg"> · {event.message}</span> : null}
+                        </div>
+                        <div className="tl-time">{fmtTime(event.created_at)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              ) : null}
+            </div>
+          ) : null}
 
-        {detailTab === "conversation" ? <TaskConversation task={task} /> : null}
+          {detailTab === "conversation" ? <TaskConversation task={task} enabled={open} /> : null}
 
-        {detailTab === "logs" ? <pre className="logs">{logText}</pre> : null}
+          {detailTab === "logs" ? <pre className="logs">{logText}</pre> : null}
+        </div>
       </div>
-    </section>
+    </>
   );
 }
 
-function TaskConversation({ task }: { task: Task }) {
+function TaskConversation({ task, enabled }: { task: Task; enabled: boolean }) {
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState(false);
@@ -904,6 +1142,7 @@ function TaskConversation({ task }: { task: Task }) {
   const waiting = task.status === "waiting";
 
   useEffect(() => {
+    if (!enabled) return;
     let active = true;
     async function load() {
       try {
@@ -921,7 +1160,7 @@ function TaskConversation({ task }: { task: Task }) {
       active = false;
       window.clearInterval(timer);
     };
-  }, [task.id]);
+  }, [task.id, enabled]);
 
   async function submitReply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
