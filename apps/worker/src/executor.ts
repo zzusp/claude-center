@@ -310,6 +310,29 @@ async function finalizeTask(
   );
   const prUrl = extractPrUrl(`${pr.stdout}\n${pr.stderr}`);
 
+  // 自动合并 PR（仅 auto_merge_pr 开启且拿到 PR URL 时）：创建后立即 gh pr merge --merge。
+  // best-effort：合并失败不影响任务成功（PR 已建好，可人工合）；成败都落 task event。
+  // 合并成功后，周期性 cleanupMergedTask 会侦测 MERGED 并完成分支清理与 merged 终态迁移。
+  const autoMerge: { attempted: boolean; ok?: boolean; detail?: string } = { attempted: false };
+  if (task.auto_merge_pr && prUrl) {
+    autoMerge.attempted = true;
+    try {
+      const merge = await runCommand(config.ghCommand, ["pr", "merge", prUrl, "--merge"], {
+        cwd: wtPath,
+        timeoutMs: 10 * 60_000
+      });
+      autoMerge.ok = true;
+      autoMerge.detail = merge.stdout.trim() || merge.stderr.trim();
+      await addTaskEvent(pool, task.id, config.workerId, "auto_merged", "PR auto-merged via gh pr merge --merge", {
+        prUrl
+      });
+    } catch (error) {
+      autoMerge.ok = false;
+      autoMerge.detail = error instanceof Error ? error.message : String(error);
+      await addTaskEvent(pool, task.id, config.workerId, "auto_merge_failed", autoMerge.detail, { prUrl });
+    }
+  }
+
   await markTaskSuccess(
     pool,
     task.id,
@@ -320,7 +343,8 @@ async function finalizeTask(
       gitStatusBeforeCommit: status.stdout,
       claudeResult: claudeOutput,
       prStdout: pr.stdout,
-      prStderr: pr.stderr
+      prStderr: pr.stderr,
+      autoMerge
     },
     prUrl
   );

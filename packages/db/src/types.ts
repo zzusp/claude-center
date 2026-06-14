@@ -117,6 +117,8 @@ export type Task = {
   work_branch: string;
   target_branch: string;
   submit_mode: TaskSubmitMode;
+  // 自动合并 PR：仅 submit_mode='pr' 时有意义；Worker 建 PR 后自动执行 gh pr merge --merge。
+  auto_merge_pr: boolean;
   // 任务级 Claude 执行模型，见 TaskModel；'default' 表示 Worker 执行时不传 --model。
   model: TaskModel;
   status: TaskStatus;

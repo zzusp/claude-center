@@ -94,6 +94,7 @@ export async function POST(request: NextRequest) {
       workBranch?: string;
       targetBranch?: string;
       submitMode?: string;
+      autoMergePr?: boolean;
       model?: string;
       dependsOn?: string[];
       scheduledAt?: string;
@@ -126,6 +127,8 @@ export async function POST(request: NextRequest) {
 
     const baseBranch = body.baseBranch?.trim() || "main";
     const submitMode = body.submitMode === "push" ? "push" : "pr";
+    // 自动合并 PR 仅对 PR 模式有效：push 模式直推目标分支、无 PR 可合。
+    const autoMergePr = submitMode === "pr" && body.autoMergePr === true;
 
     // 执行模型白名单校验：非法 / 缺省一律落 'default'（Worker 执行时不传 --model）。
     const model: TaskModel =
@@ -146,6 +149,7 @@ export async function POST(request: NextRequest) {
         workBranch: taskType === "qa" ? "" : body.workBranch?.trim() || defaultWorkBranch(body.title),
         targetBranch: taskType === "qa" ? "" : body.targetBranch?.trim() || baseBranch,
         submitMode: taskType === "qa" ? "pr" : submitMode,
+        autoMergePr: taskType === "qa" ? false : autoMergePr,
         model,
         scheduledAt
       });
