@@ -87,7 +87,6 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as {
       projectId?: string;
-      taskType?: string;
       title?: string;
       description?: string;
       baseBranch?: string;
@@ -123,8 +122,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "无权在该项目下创建任务" }, { status: 403 });
     }
 
-    const taskType = body.taskType === "qa" ? "qa" : "work";
-
     const baseBranch = body.baseBranch?.trim() || "main";
     const submitMode = body.submitMode === "push" ? "push" : "pr";
     // 自动合并 PR 仅对 PR 模式有效：push 模式直推目标分支、无 PR 可合。
@@ -142,14 +139,13 @@ export async function POST(request: NextRequest) {
       await client.query("BEGIN");
       const task = await createTask(client, {
         projectId: body.projectId,
-        taskType,
         title: body.title.trim(),
         description: body.description.trim(),
-        baseBranch: taskType === "qa" ? "" : baseBranch,
-        workBranch: taskType === "qa" ? "" : body.workBranch?.trim() || defaultWorkBranch(body.title),
-        targetBranch: taskType === "qa" ? "" : body.targetBranch?.trim() || baseBranch,
-        submitMode: taskType === "qa" ? "pr" : submitMode,
-        autoMergePr: taskType === "qa" ? false : autoMergePr,
+        baseBranch,
+        workBranch: body.workBranch?.trim() || defaultWorkBranch(body.title),
+        targetBranch: body.targetBranch?.trim() || baseBranch,
+        submitMode,
+        autoMergePr,
         model,
         scheduledAt
       });

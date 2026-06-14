@@ -1,0 +1,6 @@
+case,round-1,note
+typecheck（db/console/worker 三包）,PASS,tsc --noEmit 三包无错
+build（含 next build + worker tsc）,PASS,console 20 路由产物正常 + worker dist
+ephemeral 全量迁移（含 016 删 task_type）,PASS,16 个迁移干净应用于临时库，无错
+verify:console（401→login→200 + health）,PASS,unauth=401 / login=200 / page=200，db+scheduler ok
+源码零残留 task_type/qa-as-tasktype,PASS,grep 仅命中 005(加列)/016(删列) 两个迁移

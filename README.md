@@ -156,7 +156,7 @@ Worker 桌面窗口除两个开关外，还提供**并发上限**数字输入（
 
 ## 真并发执行（git worktree 隔离）
 
-Worker 可**同时执行多个任务**，上限由 `CLAUDE_CENTER_MAX_PARALLEL`（默认 1）控制。每个工作类任务在**独立的 git worktree**（`~/.claude-center/worktrees/<taskId>`，从 `origin/<base>` 起工作分支）里跑，互不踩主仓与彼此，故**同项目也能并发**。worktree 生命周期跨 waiting/resume/rejected 持有，进终态（merged/failed）即拆；启动时 GC 清理终态任务的残留 worktree。问答类只读、不建 worktree。实现见 `apps/worker/src/worktree.ts`、`runner.ts`。
+Worker 可**同时执行多个任务**，上限由 `CLAUDE_CENTER_MAX_PARALLEL`（默认 1）控制。每个任务在**独立的 git worktree**（`~/.claude-center/worktrees/<taskId>`，从 `origin/<base>` 起工作分支）里跑，互不踩主仓与彼此，故**同项目也能并发**。worktree 生命周期跨 waiting/resume/rejected 持有，进终态（merged/failed）即拆；启动时 GC 清理终态任务的残留 worktree。实现见 `apps/worker/src/worktree.ts`、`runner.ts`。
 
 ## 取消在途任务
 
@@ -226,21 +226,6 @@ Worker 桌面窗口的「任务」面板汇总**本机**（`claimed_by` = 本 Wo
 发布表单里「签出分支 / PR 目标分支」是带远程分支候选的可搜索输入框：选定项目后，Console 后端用 `git ls-remote --heads <repo_url>` 拉取该仓库的远程分支供选择（默认分支置顶），拉取失败时仍可手动输入。private 仓库需要运行 Console 的机器具备 git 访问凭据。
 
 该能力依赖数据库迁移 `004_task_target_branch.sql`（新增 `tasks.target_branch`、`tasks.submit_mode` 列）。升级后务必先跑 `npm run db:migrate`。
-
-## 任务分类（工作类 vs 问答类）
-
-发布任务时可选两种类型，按是否产出代码改动区分流程：
-
-- **工作类（work，默认）**：需要开发、改文件，最终 commit / push / 开 PR（或按提交模式直推）。即上文的建分支 → Claude → 收尾全流程，行为不变。
-- **问答类（qa）**：纯对话问答，**不碰 git**（不建分支 / 不 commit / 不开 PR）。Worker 在项目本地目录里只读地跑 Claude 回答，答案落成任务评论；用户在「对话」tab 继续追问、Claude 续接同一会话回答，满意后点「结束对话」把任务标记完成。详见 `docs/spec/task-types.md`。
-
-实现要点：
-
-- Console 发布表单选「问答类」时隐藏 分支 / 提交模式 字段；问答类任务的 `base_branch` / `work_branch` / `target_branch` 存空、`submit_mode` 取默认。
-- Worker `executeTask` / `resumeTask` 按 `task_type` 分叉：问答类跳过所有 git 分支操作，`runClaudeJson(qaPrompt)` → 回答落评论 + 转「等待回复」，恒定多轮（不用哨兵、不收尾 git）。续接走同一 `--resume <session_id>` 机制。
-- 工作树互斥只对「等待中的工作类任务」生效（它持有未提交改动）；问答类是只读对话、不锁工作树，不会冻结项目的任务流转。
-- 用户「结束对话」经 `PATCH /api/tasks/:id { action: "complete" }` 把问答类任务置为 `success`（与「发布」共用同一状态切换端点）。
-- 该能力依赖数据库迁移 `005_task_types.sql`（新增 `tasks.task_type` 列，默认 `work`）。升级后务必先跑 `npm run db:migrate`。
 
 ## 任务完成后清理（merged 终态）
 

@@ -22,7 +22,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
-  Empty, KvRow, MergeStatusBadge, StatusBadge, StatusDot, TaskTypeBadge,
+  Empty, KvRow, MergeStatusBadge, StatusBadge, StatusDot,
   fmtDateTime, fmtTime, metaOf, postJson, type Tone
 } from "./shared";
 import {
@@ -153,7 +153,7 @@ function DashboardView({
                               <span className="t-meta">{task.project_name ?? task.project_id}</span>
                             </div>
                           </td>
-                          <td className="mono">{task.task_type === "qa" ? "对话" : task.work_branch}</td>
+                          <td className="mono">{task.work_branch}</td>
                           <td className="t-right t-num">{fmtTime(task.updated_at)}</td>
                         </tr>
                       ))}

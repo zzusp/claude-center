@@ -11,7 +11,6 @@ export type TaskStatus =
   | "rejected"
   | "failed"
   | "cancelled";
-export type TaskType = "work" | "qa";
 // 合并状态：Console 定时检查 work_branch 是否已并入 target_branch 的结果。unknown 未检查。
 export type MergeStatus = "unknown" | "unmerged" | "merged";
 // direct_commands 没有 merged 终态，也没有 scheduled 定时态，沿用任务状态里的子集。
@@ -120,7 +119,6 @@ export type Task = {
   id: string;
   project_id: string;
   project_name?: string;
-  task_type: TaskType;
   title: string;
   description: string;
   base_branch: string;
