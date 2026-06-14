@@ -37,12 +37,17 @@ type ClaudeTurn = { sessionId: string | null; result: string; raw: CommandResult
 // id 是 UUID，无 shell 元字符，可安全内联进脚本。
 function runClaudeJson(
   config: WorkerConfig,
-  opts: { prompt: string; cwd?: string; resumeSessionId?: string }
+  opts: { prompt: string; cwd?: string; resumeSessionId?: string; model?: string }
 ): Promise<ClaudeTurn> {
+  // 任务级模型：'default' / 空表示不指定（不传 --model，跟随 claude 自身默认）；其余为白名单别名
+  // （opus/sonnet/haiku），无 shell 元字符，可安全内联进脚本（同 resumeSessionId UUID 的论证）。
+  const modelArg = opts.model && opts.model !== "default" ? opts.model : null;
   const run = config.claudePreCommand
     ? runPowerShell(
         // 路径经环境变量传入：PowerShell 在实参位展开 $env: 变量不做分词，含空格的路径仍是单个实参。
         `${config.claudePreCommand}; & $env:CLAUDE_CENTER_CLAUDE_CMD -p $env:CLAUDE_CENTER_PROMPT --permission-mode $env:CLAUDE_CENTER_PERMISSION_MODE --settings $env:CLAUDE_CENTER_SETTINGS_PATH --append-system-prompt-file $env:CLAUDE_CENTER_RULES_PATH --output-format json${
+          modelArg ? ` --model ${modelArg}` : ""
+        }${
           opts.resumeSessionId ? ` --resume ${opts.resumeSessionId}` : ""
         }`,
         {
@@ -63,6 +68,7 @@ function runClaudeJson(
         [
           "-p",
           opts.prompt,
+          ...(modelArg ? ["--model", modelArg] : []),
           ...(opts.resumeSessionId ? ["--resume", opts.resumeSessionId] : []),
           "--permission-mode",
           config.permissionMode,
@@ -334,7 +340,7 @@ export async function executeTask(config: WorkerConfig, task: Task): Promise<voi
 
     if (task.task_type === "qa") {
       // 问答类只读对话，不改文件、不需工作树隔离，仍在主仓只读地回答。
-      const turn = await runClaudeJson(config, { prompt: qaPrompt(task), cwd: localPath });
+      const turn = await runClaudeJson(config, { prompt: qaPrompt(task), cwd: localPath, model: task.model });
       await handleQaTurn(config, task, turn);
       return;
     }
@@ -348,7 +354,7 @@ export async function executeTask(config: WorkerConfig, task: Task): Promise<voi
       fresh: true
     });
 
-    const turn = await runClaudeJson(config, { prompt: taskPrompt(task), cwd: wtPath });
+    const turn = await runClaudeJson(config, { prompt: taskPrompt(task), cwd: wtPath, model: task.model });
     await handleClaudeTurn(config, task, localPath, wtPath, turn);
   } catch (error) {
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
@@ -385,7 +391,8 @@ export async function resumeTask(config: WorkerConfig, task: Task): Promise<void
       const turn = await runClaudeJson(config, {
         prompt: qaResumePrompt(reply),
         cwd: localPath,
-        resumeSessionId: task.claude_session_id
+        resumeSessionId: task.claude_session_id,
+        model: task.model
       });
       await handleQaTurn(config, task, turn);
       return;
@@ -397,7 +404,8 @@ export async function resumeTask(config: WorkerConfig, task: Task): Promise<void
     const turn = await runClaudeJson(config, {
       prompt: resumePrompt(reply),
       cwd: wtPath,
-      resumeSessionId: task.claude_session_id
+      resumeSessionId: task.claude_session_id,
+      model: task.model
     });
     await handleClaudeTurn(config, task, localPath, wtPath, turn);
   } catch (error) {
@@ -437,7 +445,8 @@ export async function rerunRejectedTask(config: WorkerConfig, task: Task): Promi
     const turn = await runClaudeJson(config, {
       prompt: rejectionPrompt(feedback),
       cwd: wtPath,
-      resumeSessionId: task.claude_session_id
+      resumeSessionId: task.claude_session_id,
+      model: task.model
     });
     await handleClaudeTurn(config, task, localPath, wtPath, turn);
   } catch (error) {

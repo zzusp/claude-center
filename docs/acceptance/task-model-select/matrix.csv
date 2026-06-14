@@ -1,0 +1,9 @@
+case,description,round-1
+C1,migration 013 应用 + model 列默认 default + CHECK 约束,PASS
+C2,createTask(model=opus) 真实路径落库读回 opus,PASS
+C3,非法 model 被 tasks_model_check 拒绝,PASS
+C4,worker argv/pwsh opus 含 --model opus,PASS
+C5,worker default/undefined 不传 --model,PASS
+C6,worker --model 拼在 --resume 之前,PASS
+C7,typecheck db/console/worker,PASS
+C8,console next build,PASS

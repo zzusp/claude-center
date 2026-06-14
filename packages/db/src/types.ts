@@ -18,6 +18,9 @@ export type MergeStatus = "unknown" | "unmerged" | "merged";
 export type DirectCommandStatus = Exclude<TaskStatus, "merged" | "scheduled">;
 export type DirectCommandName = "shell" | "claude_prompt";
 export type TaskSubmitMode = "pr" | "push";
+// 任务级 Claude 执行模型：'default' 不指定（Worker 执行时不传 --model，跟随 claude 自身默认），
+// 其余由 Worker 映射为 `claude --model <alias>`。
+export type TaskModel = "default" | "opus" | "sonnet" | "haiku";
 
 export type Role = "admin" | "publisher" | "commenter" | "viewer";
 
@@ -114,6 +117,8 @@ export type Task = {
   work_branch: string;
   target_branch: string;
   submit_mode: TaskSubmitMode;
+  // 任务级 Claude 执行模型，见 TaskModel；'default' 表示 Worker 执行时不传 --model。
+  model: TaskModel;
   status: TaskStatus;
   claimed_by: string | null;
   claimed_at: string | null;

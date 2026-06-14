@@ -5,7 +5,8 @@ import {
   listTasks,
   listUserProjectIds,
   userHasProject,
-  type SortDir
+  type SortDir,
+  type TaskModel
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../lib/session";
@@ -15,6 +16,7 @@ export const dynamic = "force-dynamic";
 const TASK_STATUSES = ["draft", "scheduled", "pending", "claimed", "running", "waiting", "success", "failed", "cancelled"];
 const MERGE_STATUSES = ["unknown", "unmerged", "merged"];
 const PAGE_SIZES = [20, 50, 100];
+const TASK_MODELS = ["default", "opus", "sonnet", "haiku"];
 
 export async function GET(request: NextRequest) {
   const gate = await requireUser();
@@ -92,6 +94,7 @@ export async function POST(request: NextRequest) {
       workBranch?: string;
       targetBranch?: string;
       submitMode?: string;
+      model?: string;
       dependsOn?: string[];
       scheduledAt?: string;
     };
@@ -124,6 +127,10 @@ export async function POST(request: NextRequest) {
     const baseBranch = body.baseBranch?.trim() || "main";
     const submitMode = body.submitMode === "push" ? "push" : "pr";
 
+    // 执行模型白名单校验：非法 / 缺省一律落 'default'（Worker 执行时不传 --model）。
+    const model: TaskModel =
+      typeof body.model === "string" && TASK_MODELS.includes(body.model) ? (body.model as TaskModel) : "default";
+
     const dependsOn = Array.isArray(body.dependsOn) ? body.dependsOn.filter((id) => typeof id === "string") : [];
 
     // 任务与其前置依赖须原子入库：依赖校验失败（跨项目 / 不存在）应整体回滚。
@@ -139,6 +146,7 @@ export async function POST(request: NextRequest) {
         workBranch: taskType === "qa" ? "" : body.workBranch?.trim() || defaultWorkBranch(body.title),
         targetBranch: taskType === "qa" ? "" : body.targetBranch?.trim() || baseBranch,
         submitMode: taskType === "qa" ? "pr" : submitMode,
+        model,
         scheduledAt
       });
       await addTaskDependencies(client, task.id, dependsOn);

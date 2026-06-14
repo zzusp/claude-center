@@ -276,6 +276,7 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
         workBranch: data.get("workBranch"),
         targetBranch: data.get("targetBranch"),
         submitMode: data.get("submitMode"),
+        model: data.get("model"),
         dependsOn: data.getAll("dependsOn").map(String),
         scheduledAt
       });
@@ -900,6 +901,7 @@ function ComposeTaskForm({
   const [branchState, setBranchState] = useState<"idle" | "loading" | "error">("idle");
   const [taskType, setTaskType] = useState<"work" | "qa">("work");
   const [submitMode, setSubmitMode] = useState<"pr" | "push">("pr");
+  const [model, setModel] = useState<"default" | "opus" | "sonnet" | "haiku">("default");
   const isQa = taskType === "qa";
 
   useEffect(() => {
@@ -1026,6 +1028,23 @@ function ComposeTaskForm({
           </div>
         </>
       )}
+      <div className="field">
+        <label className="field-label">
+          执行模型 <span className="field-hint">该任务执行时用哪个 Claude 模型，默认跟随 Worker</span>
+        </label>
+        <Select
+          name="model"
+          value={model}
+          onChange={(value) => setModel(value as "default" | "opus" | "sonnet" | "haiku")}
+          options={[
+            { value: "default", label: "默认 · 跟随 Worker" },
+            { value: "opus", label: "Opus" },
+            { value: "sonnet", label: "Sonnet" },
+            { value: "haiku", label: "Haiku" }
+          ]}
+          ariaLabel="执行模型"
+        />
+      </div>
       <div className="field">
         <label className="field-label">
           定时发布 <span className="field-hint">留空即建为草稿手动发布；设定时间则到点自动进入待处理队列</span>
