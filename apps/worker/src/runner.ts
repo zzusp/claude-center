@@ -462,7 +462,29 @@ export class ClaudeCenterWorker {
   // 采集 claude 版本/订阅/用量 + 当前客户端策略，写入 DB 供 Console 展示。
   private async refreshInfo(): Promise<void> {
     this.lastInspect = await inspectClaude(this.config);
+    this.logUsage();
     await this.reportInfo();
+  }
+
+  // 把套餐用量采集结果打到日志面板：成功显示百分比，失败显示原因（代理被挡 / token 失效等），
+  // 让「套餐账号却没用量」可被直接看出，而非永远空着无从排查。
+  private logUsage(): void {
+    const { subscriptionType, usage } = this.lastInspect;
+    // 非套餐账号本就不采集用量，不打扰日志。
+    if (subscriptionType === "api" || subscriptionType === "unknown") {
+      return;
+    }
+    if (usage.five_hour || usage.seven_day) {
+      const five = usage.five_hour ? `5h ${usage.five_hour.utilization}%` : "5h —";
+      const seven = usage.seven_day ? `7d ${usage.seven_day.utilization}%` : "7d —";
+      this.log("info", `Usage — ${five} · ${seven}`);
+    } else {
+      this.log(
+        "error",
+        `Usage 采集失败（${subscriptionType} 套餐）：${usage.error ?? "未知原因"}` +
+          (this.config.usageProxy ? "" : "；当前未配置 CLAUDE_CENTER_USAGE_PROXY，直连 api.anthropic.com 可能被挡")
+      );
+    }
   }
 
   // 仅上报当前已知的动态信息 + 客户端策略（不重新采集 claude）。开关/并发改动后即时落库用。

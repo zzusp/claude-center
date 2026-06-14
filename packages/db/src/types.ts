@@ -63,6 +63,9 @@ export type WorkerUsage = {
   five_hour?: UsageWindow;
   seven_day?: UsageWindow;
   fetched_at?: string;
+  // 采集失败原因（网络/代理被挡、token 失效、接口返回 error 等）。套餐账号但没窗口时由它解释为何，
+  // 不再静默吞成空对象——否则 UI 只能空着、无法定位（曾因此反复修不好）。
+  error?: string;
 };
 
 // 订阅类型：套餐档位 / api（按量计费）/ unknown（未识别）。
