@@ -1654,3 +1654,12 @@ export async function closeConversation(
     [conversationId]
   );
 }
+
+// 通知 console 的 SSE 端点：某 assistant 消息有新分片（seq>=0）或本轮结束（seq=-1）。
+// payload 小（仅 id + seq），经 PG LISTEN/NOTIFY 跨实例广播，SSE 端据此读增量分片转发浏览器。
+export async function notifyConversationChunk(
+  client: pg.Pool | pg.PoolClient,
+  payload: { conversationId: string; messageId: string; seq: number }
+): Promise<void> {
+  await client.query(`SELECT pg_notify('cc_conversation', $1)`, [JSON.stringify(payload)]);
+}

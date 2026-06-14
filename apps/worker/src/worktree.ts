@@ -14,6 +14,11 @@ export function worktreePathFor(config: WorkerConfig, taskId: string): string {
   return path.join(worktreesRoot(config), taskId);
 }
 
+// 实时对话的只读工作树：每会话一棵，检出到 origin/<branch>，全程不 commit。conv- 前缀与任务树区分。
+export function conversationWorktreePathFor(config: WorkerConfig, conversationId: string): string {
+  return path.join(worktreesRoot(config), `conv-${conversationId}`);
+}
+
 async function gitTolerant(args: string[]): Promise<void> {
   try {
     await runCommand("git", args, { timeoutMs: 5 * 60_000 });

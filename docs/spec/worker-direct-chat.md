@@ -173,7 +173,8 @@ SELECT 出一个会话：其 worker_id = $1、status='active'，
 
 - 对话在 `origin/<branch>` 的**独立只读 worktree**里跑，全程无 `git add/commit/push`、无 PR——与任务执行（建工作分支、finalize commit/PR）彻底分开。
 - worktree 复用同一会话的多轮；`close` 时 `removeWorktree`。
-- claude 调用用 `full:false`（不挂 `--permission-mode` / `--settings` / `--append-system-prompt-file`，跟随 claude 默认，等同现 `direct_commands` 的 `claude_prompt` 调用语义）——避免对话被赋予任务级写权限。
+- claude 调用用直接 spawn + 跟随 claude 默认安全姿态（不挂 `--permission-mode` / `--settings` / `--append-system-prompt-file`，等同现 `direct_commands` 的 `claude_prompt` 语义）——避免对话被赋予任务级写权限。
+- **流式用直接 spawn**（`--output-format stream-json`），**不走 worker 的「终端 / 前置命令」形态**（终端包裹会污染 NDJSON）。因此对话所需的**代理 / 环境变量须在 worker 进程 env**（如 `HTTP_PROXY` / `HTTPS_PROXY`），而非仅靠桌面端「前置命令」——已由 P1 端到端验证（`docs/acceptance/worker-direct-chat/round-2.md`）。
 
 ## 8. 权限（RBAC）
 
