@@ -2,23 +2,26 @@
 
 import type { Task, TaskComment, TaskEvent, TaskPredecessor } from "@claude-center/db";
 import {
+  Activity,
   Bot,
   Check,
   ChevronLeft,
   ExternalLink,
+  FileText,
   GitBranch,
+  Info,
+  ListChecks,
   MessageSquare,
   RotateCcw,
   Send,
+  Terminal,
   UserRound,
   X
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { FormEvent, useMemo, useState } from "react";
-import { Empty, KvRow, StatusBadge, TaskTypeBadge, fmtTime, metaOf, postJson } from "./shared";
+import { FormEvent, ReactNode, useMemo, useState } from "react";
+import { Empty, KvRow, StatusBadge, TaskTypeBadge, fmtTime, postJson } from "./shared";
 import { usePolling } from "../lib/use-polling";
-
-type DetailTab = "overview" | "timeline" | "logs" | "conversation";
 
 const EVENT_LABEL: Record<string, string> = {
   running: "开始执行",
@@ -45,10 +48,6 @@ export default function TaskDetailPage({
   const [task, setTask] = useState<Task>(initialTask);
   const [predecessors, setPredecessors] = useState<TaskPredecessor[]>(initialPredecessors);
   const [events, setEvents] = useState<TaskEvent[]>([]);
-  const [detailTab, setDetailTab] = useState<DetailTab>(
-    // 问答类默认进「对话」tab（对话即主要交互），工作类进「概览」。
-    initialTask.task_type === "qa" ? "conversation" : "overview"
-  );
   const [publishing, setPublishing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
 
@@ -82,7 +81,7 @@ export default function TaskDetailPage({
     [taskId]
   );
 
-  // 真实 task_events，喂给时间线。
+  // 真实 task_events，喂给「活动」区。
   usePolling(
     async (isActive) => {
       try {
@@ -141,6 +140,8 @@ export default function TaskDetailPage({
 
   const isQa = task.task_type === "qa";
   const isBlocked = task.status === "pending" && (task.blocked ?? false);
+  const canPublish = (task.status === "draft" || task.status === "scheduled") && canCreateTask;
+  const canReview = task.status === "success" && canCreateTask;
   // 在途态可取消（已认领 / 执行中 / 等待回复）。
   const isCancellable = task.status === "claimed" || task.status === "running" || task.status === "waiting";
 
@@ -182,6 +183,8 @@ export default function TaskDetailPage({
       .filter(Boolean)
       .join("\n\n") || "暂无日志输出";
 
+  const modelLabel = { default: "默认（跟随 Worker）", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" }[task.model];
+
   return (
     <div className="detail-page">
       <header className="detail-page-top">
@@ -216,57 +219,102 @@ export default function TaskDetailPage({
                 PR
               </a>
             ) : null}
-            {(task.status === "draft" || task.status === "scheduled") && canCreateTask ? (
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={publishing}
-                onClick={() => void publish()}
-              >
-                <Send size={14} />
-                {task.status === "scheduled" ? "立即发布" : "发布"}
-              </button>
-            ) : null}
-            {isCancellable && canCreateTask ? (
-              <button type="button" className="btn btn-sm" disabled={cancelling} onClick={() => void cancel()}>
-                <X size={14} />
-                {cancelling ? "取消中…" : "取消任务"}
-              </button>
-            ) : null}
           </div>
         </div>
       </header>
 
       <div className="detail-page-body">
-        <section className="card detail-card">
-          <div className="tabs">
-            {(["overview", "conversation", "timeline", "logs"] as DetailTab[]).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                className={`tab${detailTab === tab ? " active" : ""}`}
-                onClick={() => setDetailTab(tab)}
-              >
-                {tab === "overview"
-                  ? "概览"
-                  : tab === "conversation"
-                    ? "对话"
-                    : tab === "timeline"
-                      ? "时间线"
-                      : "日志"}
-              </button>
+        {/* 状态总览：生命周期进度 + 关键动作 */}
+        <section className="card detail-hero">
+          <div className="lifecycle-bar">
+            {lifecycle.map((item, index) => (
+              <div className={`lc-step ${item.state}`} key={`lc-${index}`}>
+                <span className="lc-node" />
+                <div className="lc-text">
+                  <div className="lc-label">{item.label}</div>
+                  <div className="lc-time">{item.time ? fmtTime(item.time) : "—"}</div>
+                </div>
+              </div>
             ))}
           </div>
 
-          <div className="tab-body">
-            {detailTab === "overview" ? (
+          {canPublish ? (
+            <div className="detail-hero-actions">
+              <div className="hero-publish">
+                <span className="hero-publish-hint">
+                  {task.status === "scheduled"
+                    ? "定时未到，可立即发布进入待处理队列。"
+                    : "草稿尚未发布，发布后进入任务队列等待认领。"}
+                </span>
+                <button type="button" className="btn btn-primary btn-sm" disabled={publishing} onClick={() => void publish()}>
+                  <Send size={14} />
+                  {task.status === "scheduled" ? "立即发布" : "发布"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {canReview ? (
+            <div className="detail-hero-actions">
+              <TaskReviewActions task={task} onReviewed={loadTask} />
+            </div>
+          ) : null}
+
+          {isCancellable && canCreateTask ? (
+            <div className="detail-hero-actions">
+              <div className="hero-cancel">
+                <span className="hero-cancel-hint">任务在途，可取消执行（终止 Claude 进程并标记为已取消）。</span>
+                <button type="button" className="btn btn-sm" disabled={cancelling} onClick={() => void cancel()}>
+                  <X size={14} />
+                  {cancelling ? "取消中…" : "取消任务"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </section>
+
+        <div className="detail-grid">
+          <div className="detail-main">
+            <Section icon={<FileText size={15} />} title={isQa ? "问题" : "描述"}>
+              <p className="detail-desc">{task.description || "（无描述）"}</p>
+              {task.error_message ? <div className="error-box">{task.error_message}</div> : null}
+            </Section>
+
+            <Section icon={<MessageSquare size={15} />} title="对话">
+              <TaskConversation task={task} canComment={canComment} canCreateTask={canCreateTask} />
+            </Section>
+
+            <Section icon={<Activity size={15} />} title="活动">
+              {events.length > 0 ? (
+                <div className="timeline">
+                  {events.map((event) => (
+                    <div className="tl-item" key={event.id}>
+                      <span className="tl-node done" />
+                      <div>
+                        <div className="tl-label">
+                          {EVENT_LABEL[event.event_type] ?? event.event_type}
+                          {event.message ? <span className="tl-msg"> · {event.message}</span> : null}
+                        </div>
+                        <div className="tl-time">{fmtTime(event.created_at)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Empty icon={<Activity size={24} />} text="暂无执行事件" />
+              )}
+            </Section>
+
+            <Section icon={<Terminal size={15} />} title="日志">
+              <pre className="logs">{logText}</pre>
+            </Section>
+          </div>
+
+          <aside className="detail-side">
+            <Section icon={<Info size={15} />} title="信息">
               <div className="kv">
-                {task.status === "success" && canCreateTask ? (
-                  <TaskReviewActions task={task} onReviewed={loadTask} />
-                ) : null}
                 <KvRow k="项目" v={task.project_name ?? task.project_id} />
                 <KvRow k="类型" v={isQa ? "问答类 · 纯对话" : "工作类 · 改代码开 PR"} />
-                <KvRow k={isQa ? "问题" : "描述"} v={task.description} />
                 {isQa ? null : (
                   <>
                     <KvRow k="签出分支" v={task.base_branch} mono />
@@ -278,32 +326,8 @@ export default function TaskDetailPage({
                     ) : null}
                   </>
                 )}
-                <KvRow
-                  k="执行模型"
-                  v={{ default: "默认（跟随 Worker）", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" }[task.model]}
-                />
+                <KvRow k="执行模型" v={modelLabel} />
                 <KvRow k="Session ID" v={task.claude_session_id ?? "—"} mono />
-                {depIds.length > 0 ? (
-                  <KvRow
-                    k="前置任务"
-                    v={
-                      <div className="pill-row">
-                        {depIds.map((id, index) => {
-                          const pre = preById.get(id);
-                          return pre ? (
-                            <span className="pill" key={pre.id}>
-                              [{metaOf(pre.status).label}] {pre.title}
-                            </span>
-                          ) : (
-                            <span className="pill" key={index}>
-                              已删除任务
-                            </span>
-                          );
-                        })}
-                      </div>
-                    }
-                  />
-                ) : null}
                 {!isQa && task.pr_url ? (
                   <KvRow
                     k="PR"
@@ -326,52 +350,46 @@ export default function TaskDetailPage({
                 ) : null}
                 <KvRow k="创建于" v={fmtTime(task.created_at)} />
                 <KvRow k="更新于" v={fmtTime(task.updated_at)} />
-                {task.error_message ? <div className="error-box">{task.error_message}</div> : null}
               </div>
-            ) : null}
+            </Section>
 
-            {detailTab === "timeline" ? (
-              <div className="timeline">
-                {lifecycle.map((item, index) => (
-                  <div className="tl-item" key={`lc-${index}`}>
-                    <span
-                      className={`tl-node${item.state === "done" ? " done" : item.state === "active" ? " active" : ""}`}
-                    />
-                    <div>
-                      <div className="tl-label">{item.label}</div>
-                      <div className="tl-time">{item.time ? fmtTime(item.time) : "—"}</div>
-                    </div>
-                  </div>
-                ))}
-                {events.length > 0 ? (
-                  <>
-                    <div className="tl-sep">执行事件</div>
-                    {events.map((event) => (
-                      <div className="tl-item" key={event.id}>
-                        <span className="tl-node done" />
-                        <div>
-                          <div className="tl-label">
-                            {EVENT_LABEL[event.event_type] ?? event.event_type}
-                            {event.message ? <span className="tl-msg"> · {event.message}</span> : null}
-                          </div>
-                          <div className="tl-time">{fmtTime(event.created_at)}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </>
-                ) : null}
-              </div>
+            {depIds.length > 0 ? (
+              <Section icon={<ListChecks size={15} />} title="前置任务">
+                <div className="dep-list">
+                  {depIds.map((id, index) => {
+                    const pre = preById.get(id);
+                    return pre ? (
+                      <a className="dep-item" href={`/tasks/${pre.id}`} key={pre.id}>
+                        <StatusBadge status={pre.status} />
+                        <span className="dep-title">{pre.title}</span>
+                      </a>
+                    ) : (
+                      <span className="dep-item is-gone" key={index}>
+                        <span className="badge" data-tone="cancelled">
+                          已删除任务
+                        </span>
+                      </span>
+                    );
+                  })}
+                </div>
+              </Section>
             ) : null}
-
-            {detailTab === "conversation" ? (
-              <TaskConversation task={task} canComment={canComment} canCreateTask={canCreateTask} />
-            ) : null}
-
-            {detailTab === "logs" ? <pre className="logs">{logText}</pre> : null}
-          </div>
-        </section>
+          </aside>
+        </div>
       </div>
     </div>
+  );
+}
+
+function Section({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
+  return (
+    <section className="card detail-section">
+      <div className="section-head">
+        <span className="section-ico">{icon}</span>
+        <h3 className="section-title">{title}</h3>
+      </div>
+      <div className="section-body">{children}</div>
+    </section>
   );
 }
 
