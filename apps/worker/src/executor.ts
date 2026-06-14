@@ -39,6 +39,7 @@ import {
   terminalLaunch
 } from "./terminal.js";
 import { conversationWorktreePathFor, ensureWorktree, removeWorktree, worktreePathFor } from "./worktree.js";
+import { startTaskSessionSync } from "./session.js";
 
 const CLAUDE_TIMEOUT_MS = 60 * 60_000;
 
@@ -161,6 +162,23 @@ function runClaudeJson(
     const parsed = parseClaudeJson(raw);
     return { sessionId: parsed.session_id ?? null, result: parsed.result ?? "", raw };
   });
+}
+
+// 任务执行入口：跑 claude 的同时周期同步会话 transcript 到 task_sessions，并在进程退出（成功/抛错/
+// 超时/被取消 kill）后强制最终同步一次，再返回 turn 交调用方翻终态——保证 web 见终态时 transcript 完整。
+function runTaskClaude(
+  config: WorkerConfig,
+  taskId: string,
+  opts: {
+    prompt: string;
+    cwd: string;
+    resumeSessionId?: string;
+    model?: string;
+    onSpawn?: (child: ChildProcess) => void;
+  }
+): Promise<ClaudeTurn> {
+  const stopSync = startTaskSessionSync(taskId, opts.cwd);
+  return runClaudeJson(config, opts).finally(() => stopSync());
 }
 
 function parseClaudeJson(raw: CommandResult): { session_id?: string; result?: string } {
@@ -487,8 +505,8 @@ export async function executeTask(config: WorkerConfig, task: Task, hooks?: Exec
       throw new Error(`No local path linked for task ${task.id}`);
     }
 
-    // 真并发隔离：每任务一棵独立工作树，从 origin/<base> 起新工作分支，互不踩主仓与彼此。
-    const wtPath = worktreePathFor(config, task.id);
+    // 真并发隔离：每任务一棵独立工作树（项目内 .claude/worktrees/），从 origin/<base> 起新工作分支，互不踩主仓与彼此。
+    const wtPath = worktreePathFor(localPath, task.id);
     await runCommand("git", ["-C", localPath, "fetch", "origin"], { timeoutMs: 10 * 60_000 });
     await ensureWorktree(localPath, wtPath, {
       workBranch: task.work_branch,
@@ -496,7 +514,7 @@ export async function executeTask(config: WorkerConfig, task: Task, hooks?: Exec
       fresh: true
     });
 
-    const turn = await runClaudeJson(config, {
+    const turn = await runTaskClaude(config, task.id, {
       prompt: taskPrompt(task),
       cwd: wtPath,
       model: task.model,
@@ -508,7 +526,7 @@ export async function executeTask(config: WorkerConfig, task: Task, hooks?: Exec
       failedAt: new Date().toISOString()
     });
     if (localPath) {
-      await removeWorktree(localPath, worktreePathFor(config, task.id));
+      await removeWorktree(localPath, worktreePathFor(localPath, task.id));
     }
   }
 }
@@ -535,10 +553,10 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
       return;
     }
 
-    const wtPath = worktreePathFor(config, task.id);
+    const wtPath = worktreePathFor(localPath, task.id);
     // 复用工作树；若已被清理（如曾 GC）则从 work_branch 重建。
     await ensureWorktree(localPath, wtPath, { workBranch: task.work_branch, fresh: false });
-    const turn = await runClaudeJson(config, {
+    const turn = await runTaskClaude(config, task.id, {
       prompt: resumePrompt(reply),
       cwd: wtPath,
       resumeSessionId: task.claude_session_id,
@@ -551,7 +569,7 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
       failedAt: new Date().toISOString()
     });
     if (localPath) {
-      await removeWorktree(localPath, worktreePathFor(config, task.id));
+      await removeWorktree(localPath, worktreePathFor(localPath, task.id));
     }
   }
 }
@@ -577,11 +595,11 @@ export async function rerunRejectedTask(config: WorkerConfig, task: Task, hooks?
       throw new Error(`Task ${task.id} was rejected without feedback`);
     }
 
-    const wtPath = worktreePathFor(config, task.id);
+    const wtPath = worktreePathFor(localPath, task.id);
     await runCommand("git", ["-C", localPath, "fetch", "origin"], { timeoutMs: 10 * 60_000 });
     await ensureWorktree(localPath, wtPath, { workBranch: task.work_branch, fresh: false });
 
-    const turn = await runClaudeJson(config, {
+    const turn = await runTaskClaude(config, task.id, {
       prompt: rejectionPrompt(feedback),
       cwd: wtPath,
       resumeSessionId: task.claude_session_id,
@@ -594,7 +612,7 @@ export async function rerunRejectedTask(config: WorkerConfig, task: Task, hooks?
       failedAt: new Date().toISOString()
     });
     if (localPath) {
-      await removeWorktree(localPath, worktreePathFor(config, task.id));
+      await removeWorktree(localPath, worktreePathFor(localPath, task.id));
     }
   }
 }
@@ -632,7 +650,7 @@ export async function cleanupMergedTask(config: WorkerConfig, task: Task): Promi
     }
 
     // 已合并：先拆掉任务工作树（否则工作分支仍被 checkout，-D 删不掉），再把主仓拉新、删本地/远端工作分支。
-    await removeWorktree(localPath, worktreePathFor(config, task.id));
+    await removeWorktree(localPath, worktreePathFor(localPath, task.id));
     await runCommand("git", ["-C", localPath, "fetch", "origin", "--prune"], { timeoutMs: 10 * 60_000 });
     await runCommand("git", ["-C", localPath, "checkout", task.base_branch], { timeoutMs: 5 * 60_000 });
     await runCommand("git", ["-C", localPath, "pull", "--ff-only", "origin", task.base_branch], {
@@ -723,8 +741,8 @@ export async function executeConversationTurn(
       throw new Error(`Conversation ${conv.id} has no pending user prompt`);
     }
 
-    // 只读检出：每会话一棵 worktree，检出到 origin/<branch>。首轮新建，续轮复用；全程不 commit。
-    const wtPath = conversationWorktreePathFor(config, conv.id);
+    // 只读检出：每会话一棵 worktree（项目内 .claude/worktrees/），检出到 origin/<branch>。首轮新建，续轮复用；全程不 commit。
+    const wtPath = conversationWorktreePathFor(localPath, conv.id);
     await runCommand("git", ["-C", localPath, "fetch", "origin"], { timeoutMs: 10 * 60_000 });
     await ensureWorktree(localPath, wtPath, {
       workBranch: `cc-conv-${conv.id}`,
