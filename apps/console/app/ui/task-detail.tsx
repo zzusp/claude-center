@@ -15,7 +15,8 @@ import {
   RotateCcw,
   Send,
   Terminal,
-  UserRound
+  UserRound,
+  X
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { FormEvent, ReactNode, useMemo, useState } from "react";
@@ -48,6 +49,7 @@ export default function TaskDetailPage({
   const [predecessors, setPredecessors] = useState<TaskPredecessor[]>(initialPredecessors);
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [publishing, setPublishing] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   // 单任务详情轮询：状态翻转 / PR 链接 / 前置阻塞会随之刷新。
   async function loadTask() {
@@ -119,10 +121,29 @@ export default function TaskDetailPage({
     }
   }
 
+  // 取消在途任务：对 claimed/running/waiting 打取消请求戳，Worker 扫到后杀 Claude 进程并翻 cancelled。
+  async function cancel() {
+    setCancelling(true);
+    try {
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cancel" })
+      });
+      if (response.ok) {
+        await loadTask();
+      }
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   const isQa = task.task_type === "qa";
   const isBlocked = task.status === "pending" && (task.blocked ?? false);
   const canPublish = (task.status === "draft" || task.status === "scheduled") && canCreateTask;
   const canReview = task.status === "success" && canCreateTask;
+  // 在途态可取消（已认领 / 执行中 / 等待回复）。
+  const isCancellable = task.status === "claimed" || task.status === "running" || task.status === "waiting";
 
   const lifecycle: { label: string; time: string | null; state: "done" | "active" | "idle" }[] = [
     { label: "已创建", time: task.created_at, state: "done" },
@@ -236,6 +257,18 @@ export default function TaskDetailPage({
           {canReview ? (
             <div className="detail-hero-actions">
               <TaskReviewActions task={task} onReviewed={loadTask} />
+            </div>
+          ) : null}
+
+          {isCancellable && canCreateTask ? (
+            <div className="detail-hero-actions">
+              <div className="hero-cancel">
+                <span className="hero-cancel-hint">任务在途，可取消执行（终止 Claude 进程并标记为已取消）。</span>
+                <button type="button" className="btn btn-sm" disabled={cancelling} onClick={() => void cancel()}>
+                  <X size={14} />
+                  {cancelling ? "取消中…" : "取消任务"}
+                </button>
+              </div>
             </div>
           ) : null}
         </section>

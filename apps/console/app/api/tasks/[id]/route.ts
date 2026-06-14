@@ -4,6 +4,7 @@ import {
   getTaskProjectId,
   getTaskWithDeps,
   publishTask,
+  requestTaskCancellation,
   userHasProject
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
@@ -37,7 +38,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   }
 }
 
-// 任务状态切换：publish（草稿 → 待处理，进入可认领队列）、complete（问答类「结束对话」→ 已完成）。
+// 任务状态切换：publish（草稿 → 待处理，进入可认领队列）、complete（问答类「结束对话」→ 已完成）、
+// cancel（对在途任务打取消请求戳，由 Worker 扫到后杀进程并翻 cancelled 终态）。
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requirePermission("task.create");
   if (gate instanceof NextResponse) {
@@ -68,6 +70,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const task = await completeQaTask(getPool(), id);
       if (!task) {
         return NextResponse.json({ error: "无法结束：仅问答类且未完成的任务可结束对话" }, { status: 409 });
+      }
+      return NextResponse.json({ task });
+    }
+
+    if (body.action === "cancel") {
+      const task = await requestTaskCancellation(getPool(), id);
+      if (!task) {
+        return NextResponse.json({ error: "无法取消：仅在途（已领取/执行中/等待中）任务可取消" }, { status: 409 });
       }
       return NextResponse.json({ task });
     }

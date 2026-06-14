@@ -80,21 +80,26 @@ try {
   }
   const sample = [...picked.values()].slice(0, 12);
 
+  const CANCELLABLE = new Set(["claimed", "running", "waiting"]);
   const results = [];
   for (const t of sample) {
     const res = await fetch(`${baseUrl}/tasks/${t.id}`, { headers: { cookie } });
     const html = await res.text();
     const missing = MARKERS.filter((m) => !html.includes(m));
+    const hasCancel = html.includes("hero-cancel");
+    const cancelOk = CANCELLABLE.has(t.status) ? hasCancel : !hasCancel; // 在途态须有取消块，其余不得有
     results.push({
       id: t.id,
       type: t.task_type,
       status: t.status,
       http: res.status,
-      ok: res.status === 200 && missing.length === 0 && !html.includes('class="tabs"'),
+      ok: res.status === 200 && missing.length === 0 && !html.includes('class="tabs"') && cancelOk,
       missingMarkers: missing,
       hasOldTabs: html.includes('class="tabs"'),
       hasPublish: html.includes("hero-publish"),
-      hasReview: html.includes("review-actions")
+      hasReview: html.includes("review-actions"),
+      hasCancel,
+      cancelOk
     });
   }
 

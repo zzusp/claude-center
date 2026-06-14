@@ -17,11 +17,27 @@ import {
   type DirectCommand,
   type Task
 } from "@claude-center/db";
+import type { ChildProcess } from "node:child_process";
 import type { WorkerConfig } from "./config.js";
 import { runCommand, runPowerShell, type CommandResult } from "./shell.js";
 import { ensureWorktree, removeWorktree, worktreePathFor } from "./worktree.js";
 
 const CLAUDE_TIMEOUT_MS = 60 * 60_000;
+
+// runner 注入的执行钩子:onClaudeSpawn 暴露 Claude 子进程供取消时杀进程树;
+// claudeAvailable 来自启动能力自检,false 时任务在跑 Claude 前就以清晰错误失败。
+export type ExecHooks = {
+  onClaudeSpawn?: (child: ChildProcess) => void;
+  claudeAvailable?: boolean;
+};
+
+function ensureClaudeAvailable(hooks?: ExecHooks): void {
+  if (hooks && hooks.claudeAvailable === false) {
+    throw new Error(
+      "claude CLI not found on this worker. Install Claude Code and ensure `claude` is on PATH (or set CLAUDE_CODE_COMMAND)."
+    );
+  }
+}
 
 // Claude 在 headless 模式下没有内建「需要提问」信号，约定这个哨兵：需要用户确认时
 // Claude 在回复末尾输出该串 + 问题后停止，Worker 解析后落为评论并等待回复。
@@ -37,7 +53,13 @@ type ClaudeTurn = { sessionId: string | null; result: string; raw: CommandResult
 // id 是 UUID，无 shell 元字符，可安全内联进脚本。
 function runClaudeJson(
   config: WorkerConfig,
-  opts: { prompt: string; cwd?: string; resumeSessionId?: string; model?: string }
+  opts: {
+    prompt: string;
+    cwd?: string;
+    resumeSessionId?: string;
+    model?: string;
+    onSpawn?: (child: ChildProcess) => void;
+  }
 ): Promise<ClaudeTurn> {
   // 任务级模型：'default' / 空表示不指定（不传 --model，跟随 claude 自身默认）；其余为白名单别名
   // （opus/sonnet/haiku），无 shell 元字符，可安全内联进脚本（同 resumeSessionId UUID 的论证）。
@@ -53,6 +75,7 @@ function runClaudeJson(
         {
           cwd: opts.cwd,
           timeoutMs: CLAUDE_TIMEOUT_MS,
+          onSpawn: opts.onSpawn,
           env: {
             ...process.env,
             CLAUDE_CENTER_CLAUDE_CMD: config.claudeCommand,
@@ -79,7 +102,7 @@ function runClaudeJson(
           "--output-format",
           "json"
         ],
-        { cwd: opts.cwd, timeoutMs: CLAUDE_TIMEOUT_MS }
+        { cwd: opts.cwd, timeoutMs: CLAUDE_TIMEOUT_MS, onSpawn: opts.onSpawn }
       );
 
   return run.then((raw) => {
@@ -254,6 +277,9 @@ async function finalizeTask(
   await runCommand("git", ["-C", wtPath, "commit", "-m", `ClaudeCenter task: ${task.title}`], {
     timeoutMs: 5 * 60_000
   });
+  await addTaskEvent(pool, task.id, config.workerId, "committed", "Changes committed on work branch", {
+    workBranch: task.work_branch
+  });
   if (task.submit_mode === "push") {
     // 直接把工作分支的提交推送到目标分支，不开 PR——落地即 merged（无需后续合并轮询/清理）。
     const push = await runCommand(
@@ -261,6 +287,9 @@ async function finalizeTask(
       ["-C", wtPath, "push", "origin", `${task.work_branch}:${task.target_branch}`],
       { timeoutMs: 15 * 60_000 }
     );
+    await addTaskEvent(pool, task.id, config.workerId, "pushed", "Pushed directly to target branch", {
+      targetBranch: task.target_branch
+    });
     await markTaskMerged(pool, task.id, config.workerId, {
       workdir: wtPath,
       submitMode: "push",
@@ -277,6 +306,9 @@ async function finalizeTask(
 
   await runCommand("git", ["-C", wtPath, "push", "-u", "origin", task.work_branch], {
     timeoutMs: 15 * 60_000
+  });
+  await addTaskEvent(pool, task.id, config.workerId, "pushed", "Pushed work branch to origin", {
+    workBranch: task.work_branch
   });
 
   // 打回重跑时 PR 已存在：push 已自动更新该 PR，跳过 `gh pr create`（否则非零退出会把
@@ -309,6 +341,7 @@ async function finalizeTask(
     { cwd: wtPath, timeoutMs: 10 * 60_000 }
   );
   const prUrl = extractPrUrl(`${pr.stdout}\n${pr.stderr}`);
+  await addTaskEvent(pool, task.id, config.workerId, "pr_created", "Pull request created", { prUrl });
 
   // 自动合并 PR（仅 auto_merge_pr 开启且拿到 PR URL 时）：创建后立即 gh pr merge --merge。
   // best-effort：合并失败不影响任务成功（PR 已建好，可人工合）；成败都落 task event。
@@ -351,12 +384,13 @@ async function finalizeTask(
 }
 
 // 新任务：工作类建分支后跑第一轮 Claude；问答类跳过 git，只读对话。
-export async function executeTask(config: WorkerConfig, task: Task): Promise<void> {
+export async function executeTask(config: WorkerConfig, task: Task, hooks?: ExecHooks): Promise<void> {
   const pool = getPool();
   await markTaskRunning(pool, task.id, config.workerId);
 
   let localPath: string | null = null;
   try {
+    ensureClaudeAvailable(hooks);
     localPath = await getTaskLocalPath(pool, task.id, config.workerId);
     if (!localPath) {
       throw new Error(`No local path linked for task ${task.id}`);
@@ -364,7 +398,12 @@ export async function executeTask(config: WorkerConfig, task: Task): Promise<voi
 
     if (task.task_type === "qa") {
       // 问答类只读对话，不改文件、不需工作树隔离，仍在主仓只读地回答。
-      const turn = await runClaudeJson(config, { prompt: qaPrompt(task), cwd: localPath, model: task.model });
+      const turn = await runClaudeJson(config, {
+        prompt: qaPrompt(task),
+        cwd: localPath,
+        model: task.model,
+        onSpawn: hooks?.onClaudeSpawn
+      });
       await handleQaTurn(config, task, turn);
       return;
     }
@@ -378,7 +417,12 @@ export async function executeTask(config: WorkerConfig, task: Task): Promise<voi
       fresh: true
     });
 
-    const turn = await runClaudeJson(config, { prompt: taskPrompt(task), cwd: wtPath, model: task.model });
+    const turn = await runClaudeJson(config, {
+      prompt: taskPrompt(task),
+      cwd: wtPath,
+      model: task.model,
+      onSpawn: hooks?.onClaudeSpawn
+    });
     await handleClaudeTurn(config, task, localPath, wtPath, turn);
   } catch (error) {
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
@@ -391,11 +435,12 @@ export async function executeTask(config: WorkerConfig, task: Task): Promise<voi
 }
 
 // 续接：用户已回复，续接同一 Claude 会话继续执行。复用任务工作树（持有上一轮未提交改动）。
-export async function resumeTask(config: WorkerConfig, task: Task): Promise<void> {
+export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecHooks): Promise<void> {
   const pool = getPool();
 
   let localPath: string | null = null;
   try {
+    ensureClaudeAvailable(hooks);
     localPath = await getTaskLocalPath(pool, task.id, config.workerId);
     if (!localPath) {
       throw new Error(`No local path linked for task ${task.id}`);
@@ -416,7 +461,8 @@ export async function resumeTask(config: WorkerConfig, task: Task): Promise<void
         prompt: qaResumePrompt(reply),
         cwd: localPath,
         resumeSessionId: task.claude_session_id,
-        model: task.model
+        model: task.model,
+        onSpawn: hooks?.onClaudeSpawn
       });
       await handleQaTurn(config, task, turn);
       return;
@@ -429,7 +475,8 @@ export async function resumeTask(config: WorkerConfig, task: Task): Promise<void
       prompt: resumePrompt(reply),
       cwd: wtPath,
       resumeSessionId: task.claude_session_id,
-      model: task.model
+      model: task.model,
+      onSpawn: hooks?.onClaudeSpawn
     });
     await handleClaudeTurn(config, task, localPath, wtPath, turn);
   } catch (error) {
@@ -444,11 +491,12 @@ export async function resumeTask(config: WorkerConfig, task: Task): Promise<void
 
 // 打回重跑：用户验收不通过并填了打回意见。复用/重建任务工作树（不再切主仓分支），续接同一
 // Claude 会话带着打回意见修订。finalizeTask 会因 pr_url 已存在跳过建 PR、复用原 PR。
-export async function rerunRejectedTask(config: WorkerConfig, task: Task): Promise<void> {
+export async function rerunRejectedTask(config: WorkerConfig, task: Task, hooks?: ExecHooks): Promise<void> {
   const pool = getPool();
 
   let localPath: string | null = null;
   try {
+    ensureClaudeAvailable(hooks);
     localPath = await getTaskLocalPath(pool, task.id, config.workerId);
     if (!localPath) {
       throw new Error(`No local path linked for task ${task.id}`);
@@ -470,7 +518,8 @@ export async function rerunRejectedTask(config: WorkerConfig, task: Task): Promi
       prompt: rejectionPrompt(feedback),
       cwd: wtPath,
       resumeSessionId: task.claude_session_id,
-      model: task.model
+      model: task.model,
+      onSpawn: hooks?.onClaudeSpawn
     });
     await handleClaudeTurn(config, task, localPath, wtPath, turn);
   } catch (error) {

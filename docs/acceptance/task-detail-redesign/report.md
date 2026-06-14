@@ -1,6 +1,8 @@
 # 验收报告 — 任务详情页重新设计（四 Tab → 状态总览 + 双栏）
 
-状态：**全绿**（matrix.csv 13/13 PASS，round-1）。
+状态：**全绿**（matrix.csv 14/14 PASS；round-1 初验 + round-2 merge 复验）。
+
+> round-2：merge main 的 PR #25（取消在途任务）后复验。冲突仅 `task-detail.tsx`，已按「动作前置」将取消动作集成进 Hero（`hero-cancel` 块，在途态出现）。详见 `round-2.md`。
 
 ## 改了什么
 仅 2 个文件，无后端 / 数据 / 接口变更，逻辑全部沿用。

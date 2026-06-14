@@ -2156,14 +2156,16 @@ select:focus {
   border-top: 1px solid var(--border);
 }
 
-.hero-publish {
+.hero-publish,
+.hero-cancel {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
 }
-.hero-publish-hint {
+.hero-publish-hint,
+.hero-cancel-hint {
   font-size: 13px;
   color: var(--text-3);
 }
