@@ -2349,6 +2349,11 @@ a.dep-item:hover {
   font-size: 11px;
   color: var(--text-4);
 }
+.chat-li-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
 .chat-tag {
   padding: 1px 7px;
   border-radius: 999px;
@@ -2361,6 +2366,21 @@ a.dep-item:hover {
 .chat-tag.closed {
   background: var(--surface-2);
   color: var(--text-4);
+}
+.chat-tag.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(22, 163, 74, 0.12);
+  color: var(--success);
+}
+.chat-tag.live::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: cc-blink 1s steps(2, start) infinite;
 }
 .chat-main {
   display: flex;
@@ -2391,6 +2411,38 @@ a.dep-item:hover {
 .chat-thread-title strong {
   font-size: 15px;
   color: var(--text-1);
+}
+.chat-title-show {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.chat-title-pen {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.chat-thread-head:hover .chat-title-pen {
+  opacity: 1;
+}
+.chat-title-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.chat-title-edit input {
+  font-size: 14px;
+  font-weight: 600;
+  padding: 4px 8px;
+  min-width: 220px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  color: var(--text-1);
+}
+.chat-title-edit input:focus {
+  outline: none;
+  border-color: var(--running);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 .chat-thread-sub {
   display: inline-flex;
@@ -2473,6 +2525,38 @@ a.dep-item:hover {
 @keyframes cc-blink {
   to {
     visibility: hidden;
+  }
+}
+.bubble-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+.bubble-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--text-3);
+  display: inline-block;
+  animation: cc-dot 1.2s ease-in-out infinite;
+}
+.bubble-dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.bubble-dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes cc-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
   }
 }
 .chat-composer {

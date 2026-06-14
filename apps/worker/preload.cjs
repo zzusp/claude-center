@@ -21,5 +21,7 @@ contextBridge.exposeInMainWorld("workerApi", {
   getTaskDetail: (taskId) => ipcRenderer.invoke("worker:getTaskDetail", taskId),
   replyToTask: (taskId, body) => ipcRenderer.invoke("worker:replyToTask", taskId, body),
   rejectMyTask: (taskId, feedback) => ipcRenderer.invoke("worker:rejectMyTask", taskId, feedback),
-  acceptMyTask: (taskId) => ipcRenderer.invoke("worker:acceptMyTask", taskId)
+  acceptMyTask: (taskId) => ipcRenderer.invoke("worker:acceptMyTask", taskId),
+  listMyConversations: () => ipcRenderer.invoke("worker:listMyConversations"),
+  getConversationDetail: (conversationId) => ipcRenderer.invoke("worker:getConversationDetail", conversationId)
 });

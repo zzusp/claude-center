@@ -10,14 +10,17 @@ import {
   claimNextTask,
   failConversationTurn,
   getConversation,
+  getConversationChunks,
   getPool,
   getWorkerRuntime,
   heartbeatWorker,
   listActiveTaskIdsForWorker,
   listCancelRequestedTaskIds,
+  listConversationMessages,
   listProjects,
   listTaskComments,
   listTaskEvents,
+  listWorkerConversations,
   listWorkerProjectLinks,
   listWorkerTasks,
   markTaskCancelled,
@@ -28,6 +31,8 @@ import {
   setWorkerWorkingState,
   updateWorkerInfo,
   upsertWorkerProjectLink,
+  type Conversation,
+  type ConversationMessage,
   type Task,
   type TaskComment,
   type TaskEvent,
@@ -362,6 +367,29 @@ export class ClaudeCenterWorker {
     } finally {
       client.release();
     }
+  }
+
+  // —— 桌面端「对话」面板（只读）：本 worker 承接的远程实时对话总览 + 消息线回放 —— //
+
+  // 本 worker 的全部会话（含 generating / last_message_at 派生），供桌面端按状态分组展示。
+  async listMyConversations(): Promise<Conversation[]> {
+    return listWorkerConversations(getPool(), this.config.workerId);
+  }
+
+  // 某会话的消息线；流式中的 assistant 消息 body 尚空，从 chunks 拼实时增量，让桌面端轮询也见逐字进度。
+  async getConversationDetail(conversationId: string): Promise<{ messages: ConversationMessage[] }> {
+    const pool = getPool();
+    const messages = await listConversationMessages(pool, conversationId);
+    const live = await Promise.all(
+      messages.map(async (m) => {
+        if (m.role === "assistant" && m.status === "streaming") {
+          const chunks = await getConversationChunks(pool, m.id);
+          return { ...m, body: chunks.map((c) => c.delta).join("") };
+        }
+        return m;
+      })
+    );
+    return { messages: live };
   }
 
   async getStatusSnapshot(): Promise<WorkerStatusSnapshot> {
