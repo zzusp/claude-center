@@ -13,6 +13,9 @@ export type WorkerUsage = {
   five_hour?: UsageWindow;
   seven_day?: UsageWindow;
   fetched_at?: string;
+  // 采集失败原因（直连被 GFW 挡返回 forbidden、token 失效、接口非预期结构等）。
+  // 套餐账号却拿不到窗口时由它解释，避免静默吞成空对象后 UI 只能空着、无法定位。
+  error?: string;
 };
 
 export type ClaudeInspect = {
@@ -176,8 +179,24 @@ function parseWindow(value: unknown): UsageWindow | undefined {
   return undefined;
 }
 
+// 接口返回的 error 对象 → 一句话原因。直连被 GFW 挡时是 {error:{type:"forbidden"}}，
+// token 失效是 authentication_error 等。能解析出就用接口给的，否则给原始片段，便于定位。
+function describeUsageError(parsed: Record<string, unknown>): string | null {
+  const err = parsed.error;
+  if (err && typeof err === "object") {
+    const e = err as { type?: unknown; message?: unknown };
+    const type = typeof e.type === "string" ? e.type : "error";
+    const message = typeof e.message === "string" ? e.message : "";
+    return message ? `${type}: ${message}` : type;
+  }
+  if (typeof parsed.error === "string") return parsed.error;
+  return null;
+}
+
 // 套餐用量：undocumented oauth/usage 接口。用 curl（跨平台、可靠认 -x 代理）；
-// shell:false 防 Windows 把含空格的 Authorization 头重解析。失败/非套餐 → 空对象。
+// shell:false 防 Windows 把含空格的 Authorization 头重解析。
+// 失败不静默吞：拿不到窗口时回填 error 说明原因（网络/代理被挡、token 失效、接口结构变化），
+// 让 worker 日志与 Console 能看出「为何套餐账号却没用量」，而非永远空着无从排查。
 async function fetchUsage(accessToken: string, proxy: string | null): Promise<WorkerUsage> {
   const curl = process.platform === "win32" ? "curl.exe" : "curl";
   const args = [
@@ -192,18 +211,34 @@ async function fetchUsage(accessToken: string, proxy: string | null): Promise<Wo
     "https://api.anthropic.com/api/oauth/usage"
   ];
 
+  const fetchedAt = new Date().toISOString();
+  let result;
   try {
-    const result = await runCommand(curl, args, { timeoutMs: 25_000, shell: false });
-    const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
-    const usage: WorkerUsage = { fetched_at: new Date().toISOString() };
-    const fiveHour = parseWindow(parsed.five_hour);
-    const sevenDay = parseWindow(parsed.seven_day);
-    if (fiveHour) usage.five_hour = fiveHour;
-    if (sevenDay) usage.seven_day = sevenDay;
-    return usage;
-  } catch {
-    return {};
+    result = await runCommand(curl, args, { timeoutMs: 25_000, shell: false });
+  } catch (error) {
+    // curl 本身失败（代理拒连 / 超时 / DNS）：退出非 0 或抛错。
+    return { fetched_at: fetchedAt, error: `请求失败：${error instanceof Error ? error.message : String(error)}` };
   }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+  } catch {
+    const snippet = result.stdout.trim().slice(0, 120);
+    return { fetched_at: fetchedAt, error: `响应非 JSON：${snippet || "(空)"}` };
+  }
+
+  const usage: WorkerUsage = { fetched_at: fetchedAt };
+  const fiveHour = parseWindow(parsed.five_hour);
+  const sevenDay = parseWindow(parsed.seven_day);
+  if (fiveHour) usage.five_hour = fiveHour;
+  if (sevenDay) usage.seven_day = sevenDay;
+
+  if (!fiveHour && !sevenDay) {
+    // 能解析成 JSON 但没有窗口：多半是接口返回了 error（如直连被挡的 forbidden），或结构变化。
+    usage.error = describeUsageError(parsed) ?? "接口未返回 5h/7d 用量窗口（结构可能已变化）";
+  }
+  return usage;
 }
 
 // 一次性采集全部：版本 + 订阅 + （仅套餐账号才查）用量。

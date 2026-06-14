@@ -226,16 +226,24 @@ function WorkersView({
               <KvRow k="订阅类型" v={subscriptionLabel(selected.subscription_type)} />
             </div>
 
-            {isPlanSubscription(selected.subscription_type) &&
-            (selected.usage.five_hour || selected.usage.seven_day) ? (
+            {isPlanSubscription(selected.subscription_type) ? (
               <>
                 <div className="detail-subhead">套餐用量</div>
-                {selected.usage.five_hour ? (
-                  <UsageBlock label="5 小时窗口" win={selected.usage.five_hour} />
-                ) : null}
-                {selected.usage.seven_day ? (
-                  <UsageBlock label="7 天窗口" win={selected.usage.seven_day} />
-                ) : null}
+                {selected.usage.five_hour || selected.usage.seven_day ? (
+                  <>
+                    {selected.usage.five_hour ? (
+                      <UsageBlock label="5 小时窗口" win={selected.usage.five_hour} />
+                    ) : null}
+                    {selected.usage.seven_day ? (
+                      <UsageBlock label="7 天窗口" win={selected.usage.seven_day} />
+                    ) : null}
+                  </>
+                ) : (
+                  // 套餐账号却没拿到用量窗口：显示失败原因，而非一片空白（曾因静默而反复修不好）。
+                  <div className="remote-hint">
+                    用量采集失败：{selected.usage.error ?? "Worker 暂未上报用量"}
+                  </div>
+                )}
               </>
             ) : null}
 
