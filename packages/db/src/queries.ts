@@ -373,6 +373,26 @@ export async function listTaskEvents(client: pg.Pool | pg.PoolClient, taskId: st
   return result.rows;
 }
 
+// 本 worker 认领过的全部任务（join projects 取 project_name），按 updated_at 倒序。
+// worker 桌面端 Agent-View 式任务面板用：本机视角，只看 claimed_by=本 worker 的任务
+// （pending/scheduled/draft 等未认领任务 claimed_by 为 null，天然不在此列表）。
+export async function listWorkerTasks(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string,
+  limit = 200
+): Promise<Task[]> {
+  const result = await client.query<Task>(
+    `SELECT tasks.*, projects.name AS project_name
+       FROM tasks
+       JOIN projects ON projects.id = tasks.project_id
+      WHERE tasks.claimed_by = $1
+      ORDER BY tasks.updated_at DESC
+      LIMIT $2`,
+    [workerId, limit]
+  );
+  return result.rows;
+}
+
 export async function listWorkers(client: pg.Pool | pg.PoolClient): Promise<Worker[]> {
   const result = await client.query<Worker>(
     `SELECT workers.*,

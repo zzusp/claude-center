@@ -1,5 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import {
+  acceptTask,
+  addTaskComment,
   claimNextCleanupCandidate,
   claimNextDirectCommand,
   claimNextRejectedTask,
@@ -11,14 +13,21 @@ import {
   listActiveTaskIdsForWorker,
   listCancelRequestedTaskIds,
   listProjects,
+  listTaskComments,
+  listTaskEvents,
   listWorkerProjectLinks,
+  listWorkerTasks,
   markTaskCancelled,
   registerWorker,
+  rejectTask,
   removeWorkerProjectLink,
   requestTaskCancellation,
   setWorkerWorkingState,
   updateWorkerInfo,
   upsertWorkerProjectLink,
+  type Task,
+  type TaskComment,
+  type TaskEvent,
   type WorkerProjectLinkView
 } from "@claude-center/db";
 import {
@@ -246,6 +255,76 @@ export class ClaudeCenterWorker {
     const task = await requestTaskCancellation(getPool(), taskId);
     await this.handleCancellations();
     return Boolean(task);
+  }
+
+  // —— 桌面端任务面板（Agent-View 式）：仅本 worker（claimed_by=workerId）的任务总览 + 本机回复/打回/验收 —— //
+
+  // 本 worker 认领过的全部任务，供桌面端按状态分组展示。
+  async listMyTasks(): Promise<Task[]> {
+    return listWorkerTasks(getPool(), this.config.workerId);
+  }
+
+  // 某任务的评论 + 事件流，供桌面端 peek 展开。
+  async getTaskDetail(taskId: string): Promise<{ comments: TaskComment[]; events: TaskEvent[] }> {
+    const pool = getPool();
+    const [comments, events] = await Promise.all([listTaskComments(pool, taskId), listTaskEvents(pool, taskId)]);
+    return { comments, events };
+  }
+
+  // 对等待中（waiting）任务回复：落一条 user 评论，下一轮认领循环经 getPendingReply 续接同一会话。
+  async replyToTask(taskId: string, body: string): Promise<void> {
+    const text = body.trim();
+    if (!text) {
+      return;
+    }
+    await addTaskComment(getPool(), { taskId, author: "user", workerId: null, body: text });
+    void this.tick();
+  }
+
+  // 打回待审（success）任务重跑：事务内落打回意见 + 翻 rejected（与 Console review 同路径），
+  // 下一轮 claimNextRejectedTask 续接重跑。返回 false = 任务已不在 success 态（被并发验收/合并）。
+  async rejectMyTask(taskId: string, feedback: string): Promise<boolean> {
+    const text = feedback.trim();
+    if (!text) {
+      return false;
+    }
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      const task = await rejectTask(client, taskId, text);
+      if (!task) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      await client.query("COMMIT");
+      void this.tick();
+      return true;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  // 验收通过待审（success）任务：事务内翻为终态 accepted。返回 false = 任务已不在 success 态。
+  async acceptMyTask(taskId: string): Promise<boolean> {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      const task = await acceptTask(client, taskId);
+      if (!task) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      await client.query("COMMIT");
+      return true;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async getStatusSnapshot(): Promise<WorkerStatusSnapshot> {
