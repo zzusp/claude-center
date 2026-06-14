@@ -161,6 +161,7 @@ SELECT 出一个会话：其 worker_id = $1、status='active'，
 | `/api/conversations` | `POST` | 建会话 `{projectId, branch, workerId, model}` |
 | `/api/conversations` | `GET`  | 列会话（按 RBAC 项目可见性过滤） |
 | `/api/conversations/[id]` | `GET` | 会话 + 历史消息 |
+| `/api/conversations/[id]` | `PATCH` | 改名 `{title}`（复用 `command.create`，后续增强） |
 | `/api/conversations/[id]/messages` | `POST` | 发用户消息（插 `role='user'` 触发 worker） |
 | `/api/conversations/[id]/stream` | `GET` | SSE 流式 assistant token |
 | `/api/conversations/[id]/close` | `POST` | 结束会话（status='closed' + 清 worktree 信号） |

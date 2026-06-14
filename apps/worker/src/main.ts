@@ -219,6 +219,23 @@ function windowHtml(): string {
             font-family: inherit; font-size: 12.5px; outline: none;
           }
           .reply-input:focus { border-color: var(--running); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+
+          /* Conversations panel (read-only) */
+          .conv-item { border-top: 1px solid var(--border); }
+          .conv-item:first-child { border-top: 0; }
+          .conv-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; cursor: pointer; }
+          .conv-row:hover { background: var(--surface-3); }
+          .conv-row .li-main { flex: 1; }
+          .conv-live { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--success); white-space: nowrap; }
+          .conv-live::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: currentColor; animation: cc-breathe 1.4s ease-in-out infinite; }
+          .conv-detail { padding: 6px 0 12px; border-top: 1px dashed var(--border); }
+          .conv-msgs { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow: auto; padding: 4px 2px; }
+          .cbub { max-width: 86%; padding: 7px 11px; border-radius: 10px; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+          .cbub.user { align-self: flex-end; background: var(--running); color: #fff; border-bottom-right-radius: 3px; }
+          .cbub.asst { align-self: flex-start; background: var(--surface-2); color: var(--text-1); border-bottom-left-radius: 3px; }
+          .cbub.failed { align-self: flex-start; background: rgba(220,38,38,.08); color: var(--text-1); }
+          .cbub-caret { display: inline-block; width: 6px; height: 12px; margin-left: 2px; background: currentColor; vertical-align: -1px; opacity: .6; animation: cc-blink 1s steps(2,start) infinite; }
+          @keyframes cc-blink { to { visibility: hidden; } }
 .card-title{display:flex;align-items:center;gap:7px;}
           .card-title .ico{display:inline-flex;color:var(--text-3);flex-shrink:0;}
           .live-dot{display:inline-block;width:7px;height:7px;border-radius:999px;background:var(--success);margin-right:7px;position:relative;}
@@ -310,6 +327,14 @@ function windowHtml(): string {
             <button id="tasksRefresh" class="btn btn-sm" type="button">刷新</button>
           </div>
           <div class="card-body"><div id="tasks"><span class="empty">加载中…</span></div></div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z"/></svg></span>对话</h2>
+            <button id="convRefresh" class="btn btn-sm" type="button">刷新</button>
+          </div>
+          <div class="card-body"><div id="conversations"><span class="empty">加载中…</span></div></div>
         </section>
 
         <section class="card">
@@ -501,6 +526,56 @@ function windowHtml(): string {
             }
           }
 
+          // —— 对话面板（只读：本 worker 承接的远程实时对话，展开见消息线 + 流式实时增量）——
+          var expandedConvId = null;
+          var convCache = [];
+          function convRow(c) {
+            const right = c.generating
+              ? '<span class="conv-live">回复中</span>'
+              : '<span class="badge" data-tone="' + (c.status === "active" ? "running" : "cancelled") + '"><span class="glyph">' +
+                (c.status === "active" ? "▷" : "✓") + '</span>' + (c.status === "active" ? "进行中" : "已结束") + '</span>';
+            const head =
+              '<div class="conv-row" data-conv-row="' + esc(c.id) + '">' +
+                '<span class="li-main"><span class="li-title">' + esc(c.title || "未命名对话") + '</span>' +
+                '<span class="li-sub">' + esc(c.project_name || "") + (c.branch ? " · " + esc(c.branch) : "") + '</span></span>' +
+                right +
+                '<span class="task-time">' + (c.last_message_at ? elapsed(c.last_message_at) : "") + '</span>' +
+              '</div>';
+            const detail = expandedConvId === c.id
+              ? '<div class="conv-detail" id="conv-detail-' + esc(c.id) + '"><span class="empty">加载中…</span></div>' : "";
+            return '<div class="conv-item">' + head + detail + '</div>';
+          }
+          function renderConversations(list) {
+            convCache = list || [];
+            if (!convCache.length) { $("conversations").innerHTML = '<span class="empty">本机暂无对话</span>'; return; }
+            $("conversations").innerHTML = convCache.map(convRow).join("");
+            if (expandedConvId) loadConvDetail(expandedConvId);
+          }
+          async function reloadConversations() {
+            let list = [];
+            try { list = await window.workerApi.listMyConversations(); } catch (e) { return; }
+            renderConversations(list);
+          }
+          async function loadConvDetail(convId) {
+            const box = document.getElementById("conv-detail-" + convId);
+            if (!box) return;
+            let d;
+            try { d = await window.workerApi.getConversationDetail(convId); }
+            catch (e) { box.innerHTML = '<span class="empty">加载失败</span>'; return; }
+            const msgs = d.messages || [];
+            if (!msgs.length) { box.innerHTML = '<span class="empty">无消息</span>'; return; }
+            box.innerHTML = '<div class="conv-msgs" id="conv-msgs-' + esc(convId) + '">' + msgs.map((m) => {
+              const cls = m.role === "user" ? "user" : "asst";
+              const streaming = m.role === "assistant" && m.status === "streaming";
+              const failed = m.status === "failed";
+              const body = failed ? "执行失败：" + esc(m.error_message || "") : esc(m.body || (streaming ? "…" : ""));
+              return '<div class="cbub ' + cls + (failed ? " failed" : "") + '">' + body +
+                (streaming ? '<span class="cbub-caret"></span>' : "") + '</div>';
+            }).join("") + '</div>';
+            const ml = document.getElementById("conv-msgs-" + convId);
+            if (ml) ml.scrollTop = ml.scrollHeight;
+          }
+
           async function refresh() {
             let s;
             try { s = await window.workerApi.getState(); } catch (e) { return; }
@@ -603,6 +678,7 @@ function windowHtml(): string {
             finally { $("addBtn").disabled = false; }
           });
           $("tasksRefresh").addEventListener("click", reloadTasks);
+          $("convRefresh").addEventListener("click", reloadConversations);
           $("logsClear").addEventListener("click", async () => { await window.workerApi.clearLogs(); refresh(); });
 
           document.addEventListener("click", async (e) => {
@@ -623,13 +699,22 @@ function windowHtml(): string {
               const id = row.getAttribute("data-row");
               expandedTaskId = expandedTaskId === id ? null : id;
               renderTasks(tasksCache);
+              return;
+            }
+            const convRowEl = e.target.closest && e.target.closest("[data-conv-row]");
+            if (convRowEl) {
+              const cid = convRowEl.getAttribute("data-conv-row");
+              expandedConvId = expandedConvId === cid ? null : cid;
+              renderConversations(convCache);
             }
           });
 
-          refresh(); loadProjects(); reloadTasks(); loadTerminals();
+          refresh(); loadProjects(); reloadTasks(); reloadConversations(); loadTerminals();
           setInterval(refresh, 3000);
           setInterval(loadProjects, 15000);
           setInterval(() => { if (!isEditingTask()) reloadTasks(); }, 4000);
+          setInterval(reloadConversations, 3000);
+          setInterval(() => { if (expandedConvId) loadConvDetail(expandedConvId); }, 1500);
         </script>
       </body>
     </html>
@@ -688,6 +773,12 @@ app.whenReady().then(async () => {
     worker?.rejectMyTask(taskId, feedback) ?? false
   );
   ipcMain.handle("worker:acceptMyTask", (_event, taskId: string) => worker?.acceptMyTask(taskId) ?? false);
+
+  // 桌面端对话面板（只读）：本 worker 承接的远程实时对话总览 + 消息线（含流式实时增量）。
+  ipcMain.handle("worker:listMyConversations", () => worker?.listMyConversations() ?? []);
+  ipcMain.handle("worker:getConversationDetail", (_event, conversationId: string) =>
+    worker?.getConversationDetail(conversationId) ?? { messages: [] }
+  );
 
   // 选择本地项目文件夹（关联项目用）。返回所选目录路径，取消返回 null。
   ipcMain.handle("worker:pickFolder", async () => {

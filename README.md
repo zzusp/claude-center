@@ -238,7 +238,10 @@ Worker 桌面窗口的「任务」面板汇总**本机**（`claimed_by` = 本 Wo
 - **派发**：照搬 `direct_commands` 的「按 `worker_id` 领专属队列」。Worker tick 里独立一支 `claimNextConversationTurn`——**不受工作态门控、不占任务并发槽、≤1 轮在途**（idle 也应答，用户显式点名了这个 Worker）。
 - **流式**：Worker 用 `claude --output-format stream-json` 在 `origin/<branch>` 的**只读 worktree**里跑（全程不 commit / 不 PR），token 增量逐片落 `conversation_message_chunks` + `pg_notify('cc_conversation')`。Console 单条专用连接 `LISTEN`，按 `conversationId` 扇出给各 SSE 连接（`GET /api/conversations/:id/stream`），浏览器 `EventSource` 逐字渲染；2s 慢轮询兜底防丢、跨实例靠 NOTIFY 广播。
 - **代理/环境**：流式用**直接 spawn** claude（不走桌面端「终端 / 前置命令」形态，避免污染 NDJSON），故对话所需代理须在 **Worker 进程 env**（如 `HTTP_PROXY` / `HTTPS_PROXY`）。
-- **权限**：创建 / 发消息复用 `command.create`（与定向指挥同级，仅 admin）；列表 / 查看登录即可、按项目范围过滤。
+- **权限**：创建 / 发消息复用 `command.create`（与定向指挥同级，仅 admin）；列表 / 查看登录即可、按项目范围过滤。会话改名（`PATCH /api/conversations/:id`）同样复用 `command.create`。
+- **会话改名**：Console 对话标题处内联编辑（铅笔 → 输入 → 保存），`renameConversation` 仅改标题不 bump `updated_at`（不打乱列表按活跃排序）。
+- **「回复中」可见性**：会话列表对有在途 assistant 轮（pending/streaming）的会话显示「回复中」标（`listConversations` 派生 `generating`）；消息线在「已发出但 Worker 尚未吐首字」（fetch / 建只读 worktree 中）期补一个思考气泡，让等待全程可见，不只靠首 token 后的打字机。
+- **Worker 端对话回显**：远程对话实际跑在 Worker，桌面端「对话」面板（只读）按 `listWorkerConversations` 列本机承接的会话，展开见消息线；流式中的 assistant 从 `conversation_message_chunks` 拼实时增量（轮询 1.5s），与 Web 端同步可见。
 - 升级后先跑 `npm run db:migrate` 应用 `017_conversations.sql`。
 
 ## 任务完成后清理（merged 终态）

@@ -1438,7 +1438,10 @@ export async function listConversations(
     `SELECT conversations.*,
             projects.name AS project_name,
             workers.name AS worker_name,
-            (SELECT max(created_at) FROM conversation_messages m WHERE m.conversation_id = conversations.id) AS last_message_at
+            (SELECT max(created_at) FROM conversation_messages m WHERE m.conversation_id = conversations.id) AS last_message_at,
+            EXISTS (SELECT 1 FROM conversation_messages g
+                     WHERE g.conversation_id = conversations.id
+                       AND g.role = 'assistant' AND g.status IN ('pending', 'streaming')) AS generating
        FROM conversations
        JOIN projects ON projects.id = conversations.project_id
        JOIN workers ON workers.id = conversations.worker_id
@@ -1446,6 +1449,32 @@ export async function listConversations(
       ORDER BY conversations.updated_at DESC
       LIMIT $2`,
     [options.projectIds, options.limit ?? 100]
+  );
+  return result.rows;
+}
+
+// 列某 worker 的全部会话（含派生 generating / last_message_at），供桌面端「对话」面板按状态分组展示。
+// 远程 web 对话实际跑在该 worker，桌面端据此回显对话进度。
+export async function listWorkerConversations(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string,
+  limit = 100
+): Promise<Conversation[]> {
+  const result = await client.query<Conversation>(
+    `SELECT conversations.*,
+            projects.name AS project_name,
+            workers.name AS worker_name,
+            (SELECT max(created_at) FROM conversation_messages m WHERE m.conversation_id = conversations.id) AS last_message_at,
+            EXISTS (SELECT 1 FROM conversation_messages g
+                     WHERE g.conversation_id = conversations.id
+                       AND g.role = 'assistant' AND g.status IN ('pending', 'streaming')) AS generating
+       FROM conversations
+       JOIN projects ON projects.id = conversations.project_id
+       JOIN workers ON workers.id = conversations.worker_id
+      WHERE conversations.worker_id = $1
+      ORDER BY conversations.updated_at DESC
+      LIMIT $2`,
+    [workerId, limit]
   );
   return result.rows;
 }
@@ -1643,6 +1672,15 @@ export async function closeConversation(
     `UPDATE conversations SET status = 'closed', updated_at = now() WHERE id = $1`,
     [conversationId]
   );
+}
+
+// 重命名会话：仅改标题（不 bump updated_at，避免改名打乱列表按活跃排序）。
+export async function renameConversation(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string,
+  title: string
+): Promise<void> {
+  await client.query(`UPDATE conversations SET title = $2 WHERE id = $1`, [conversationId, title]);
 }
 
 // 通知 console 的 SSE 端点：某 assistant 消息有新分片（seq>=0）或本轮结束（seq=-1）。

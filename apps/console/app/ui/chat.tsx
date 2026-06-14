@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, ConversationMessage } from "@claude-center/db";
-import { Bot, GitBranch, MessageSquare, Plus, Send, Server, X } from "lucide-react";
+import { Bot, Check, GitBranch, MessageSquare, Pencil, Plus, Send, Server, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Empty, postJson } from "./shared";
 import type { Overview } from "./dashboard-shared";
@@ -63,7 +63,10 @@ export function ChatView({ overview, canCommand }: { overview: Overview; canComm
                 </span>
                 <span className="chat-li-foot">
                   <span className="mono">{c.project_name}</span>
-                  <span className={`chat-tag ${c.status}`}>{c.status === "active" ? "进行中" : "已结束"}</span>
+                  <span className="chat-li-tags">
+                    {c.generating ? <span className="chat-tag live">回复中</span> : null}
+                    <span className={`chat-tag ${c.status}`}>{c.status === "active" ? "进行中" : "已结束"}</span>
+                  </span>
                 </span>
               </button>
             ))
@@ -109,8 +112,38 @@ function ChatThread({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState("");
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(conversation.title);
   const scrollRef = useRef<HTMLDivElement>(null);
   const id = conversation.id;
+
+  // 会话切换 / 标题被外部刷新时，重置改名草稿与编辑态。
+  useEffect(() => {
+    setTitleDraft(conversation.title);
+    setEditingTitle(false);
+  }, [conversation.title, id]);
+
+  async function saveTitle(): Promise<void> {
+    const t = titleDraft.trim();
+    setEditingTitle(false);
+    if (t === conversation.title) {
+      return;
+    }
+    try {
+      const r = await fetch(`/api/conversations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: t })
+      });
+      if (!r.ok) {
+        throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "改名失败");
+      }
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "改名失败");
+      setTitleDraft(conversation.title);
+    }
+  }
 
   async function loadDetail(): Promise<void> {
     const r = await fetch(`/api/conversations/${id}`, { cache: "no-store" });
@@ -153,6 +186,9 @@ function ChatThread({
 
   const committedIds = new Set(messages.map((m) => m.id));
   const liveIds = Object.keys(streaming).filter((mid) => !committedIds.has(mid));
+  const lastMsg = messages[messages.length - 1];
+  // 已发出但 worker 尚未吐首字（fetch / 建只读 worktree 中）：补一个「回复中」思考气泡，让等待可见。
+  const awaitingReply = conversation.status === "active" && liveIds.length === 0 && lastMsg?.role === "user";
 
   async function send(): Promise<void> {
     const text = input.trim();
@@ -187,7 +223,49 @@ function ChatThread({
     <div className="chat-thread">
       <header className="chat-thread-head">
         <div className="chat-thread-title">
-          <strong>{conversation.title || "未命名对话"}</strong>
+          {editingTitle ? (
+            <div className="chat-title-edit">
+              <input
+                autoFocus
+                value={titleDraft}
+                maxLength={200}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void saveTitle();
+                  } else if (e.key === "Escape") {
+                    setEditingTitle(false);
+                    setTitleDraft(conversation.title);
+                  }
+                }}
+                placeholder="对话标题"
+              />
+              <button className="icon-btn" type="button" title="保存" onClick={() => void saveTitle()}>
+                <Check size={15} />
+              </button>
+              <button
+                className="icon-btn"
+                type="button"
+                title="取消"
+                onClick={() => {
+                  setEditingTitle(false);
+                  setTitleDraft(conversation.title);
+                }}
+              >
+                <X size={15} />
+              </button>
+            </div>
+          ) : (
+            <div className="chat-title-show">
+              <strong>{conversation.title || "未命名对话"}</strong>
+              {canCommand ? (
+                <button className="icon-btn chat-title-pen" type="button" title="重命名" onClick={() => setEditingTitle(true)}>
+                  <Pencil size={13} />
+                </button>
+              ) : null}
+            </div>
+          )}
           <span className="chat-thread-sub">
             <Server size={12} /> {conversation.worker_name} <GitBranch size={12} /> {conversation.branch} ·{" "}
             {conversation.project_name}
@@ -207,6 +285,7 @@ function ChatThread({
         {liveIds.map((mid) => (
           <Bubble key={mid} role="assistant" body={streaming[mid] ?? ""} status="streaming" error={null} />
         ))}
+        {awaitingReply ? <Bubble key="awaiting" role="assistant" body="" status="thinking" error={null} /> : null}
       </div>
 
       {err ? <div className="chat-error">{err}</div> : null}
@@ -249,8 +328,18 @@ function Bubble({ role, body, status, error }: { role: string; body: string; sta
       ) : null}
       <div className={`bubble ${isUser ? "user" : "asst"}${status === "failed" ? " failed" : ""}`}>
         {status === "failed" ? <span className="bubble-err">执行失败：{error}</span> : null}
-        <span className="bubble-body">{body || (status === "streaming" ? "…" : "")}</span>
-        {status === "streaming" ? <span className="bubble-caret" /> : null}
+        {status === "thinking" ? (
+          <span className="bubble-dots" aria-label="回复中">
+            <i />
+            <i />
+            <i />
+          </span>
+        ) : (
+          <>
+            <span className="bubble-body">{body || (status === "streaming" ? "…" : "")}</span>
+            {status === "streaming" ? <span className="bubble-caret" /> : null}
+          </>
+        )}
       </div>
     </div>
   );

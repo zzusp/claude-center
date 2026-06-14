@@ -1,27 +1,33 @@
-case_id,phase,description,round-1,round-2,round-3
-DL-01,P0,createConversation 建 active 会话指向指定 worker,PASS,-,-
-DL-02,P0,addConversationMessage(user) seq 递增 + status done,PASS,-,-
-DL-03,P0,getConversationPrompt 拼接本轮 user 提问,PASS,-,-
-DL-04,P0,claimNextConversationTurn 按 worker_id 隔离(别的 worker 领不到),PASS,-,-
-DL-05,P0,claimNextConversationTurn 原子插入 assistant streaming,PASS,-,-
-DL-06,P0,已有在途 assistant 时重复领取返回 null(防并发重复应答),PASS,-,-
-DL-07,P0,appendConversationChunk + getConversationChunks 流式分片拼回,PASS,-,-
-DL-08,P0,getConversationChunks(afterSeq) 断线续传,PASS,-,-
-DL-09,P0,finalizeConversationTurn 落全文 done + 首轮回写 claude_session_id,PASS,-,-
-DL-10,P0,已答完无未答轮 → 领取 null,PASS,-,-
-DL-11,P0,第二轮 prompt 只含新问题(不含已答旧问题),PASS,-,-
-DL-12,P0,failConversationTurn 置 failed + error_message,PASS,-,-
-DL-13,P0,失败轮终态不自动重试 + 用户再发消息后可领新轮,PASS,-,-
-DL-14,P0,listConversations RBAC 项目白名单过滤(有权/空/admin-null),PASS,-,-
-DL-15,P0,getConversationLocalPath 经 worker_project_links 解析检出路径,PASS,-,-
-DL-16,P0,closeConversation 置 closed + 关闭后不再可领,PASS,-,-
-WS-01,P1,claude stream-json 事件 schema 真跑校验(2.1.177),PASS,-,-
-WS-02,P1,worker 增量解析 → 流式分片落库(真 claude 5+ 片),PENDING,PASS,-
-WS-03,P1,executeConversationTurn 只读 worktree 不产生 git 改动(origin 无新提交),PENDING,PASS,-
-WS-04,P1,分片拼接=最终 body + 收尾 status done + session_id 回写,PENDING,PASS,-
-SSE-01,P2,SSE 全链路：worker 写分片+NOTIFY → console LISTEN → SSE → 客户端收 delta+done,PENDING,PENDING,PASS
-API-01,P2,登录鉴权 + 建对话/worker 关联校验(400)/列表/未登录 401,PENDING,PENDING,PASS
-API-02,P2,发用户消息(201) + 结束对话(closed),PENDING,PENDING,PASS
-UI-01,P3,chat 视图 typecheck + next build + console boot 绿,PENDING,PENDING,PASS
-UI-02,P3,浏览器交互流式渲染(打字机)手测,PENDING,PENDING,MANUAL
-SSE-02,P2,跨实例 NOTIFY 广播 + Last-Event-ID 重连续传(未自动化),PENDING,PENDING,PENDING
+case_id,phase,description,round-1,round-2,round-3,round-4
+DL-01,P0,createConversation 建 active 会话指向指定 worker,PASS,-,-,-
+DL-02,P0,addConversationMessage(user) seq 递增 + status done,PASS,-,-,-
+DL-03,P0,getConversationPrompt 拼接本轮 user 提问,PASS,-,-,-
+DL-04,P0,claimNextConversationTurn 按 worker_id 隔离(别的 worker 领不到),PASS,-,-,-
+DL-05,P0,claimNextConversationTurn 原子插入 assistant streaming,PASS,-,-,-
+DL-06,P0,已有在途 assistant 时重复领取返回 null(防并发重复应答),PASS,-,-,-
+DL-07,P0,appendConversationChunk + getConversationChunks 流式分片拼回,PASS,-,-,-
+DL-08,P0,getConversationChunks(afterSeq) 断线续传,PASS,-,-,-
+DL-09,P0,finalizeConversationTurn 落全文 done + 首轮回写 claude_session_id,PASS,-,-,-
+DL-10,P0,已答完无未答轮 → 领取 null,PASS,-,-,-
+DL-11,P0,第二轮 prompt 只含新问题(不含已答旧问题),PASS,-,-,-
+DL-12,P0,failConversationTurn 置 failed + error_message,PASS,-,-,-
+DL-13,P0,失败轮终态不自动重试 + 用户再发消息后可领新轮,PASS,-,-,-
+DL-14,P0,listConversations RBAC 项目白名单过滤(有权/空/admin-null),PASS,-,-,-
+DL-15,P0,getConversationLocalPath 经 worker_project_links 解析检出路径,PASS,-,-,-
+DL-16,P0,closeConversation 置 closed + 关闭后不再可领,PASS,-,-,-
+WS-01,P1,claude stream-json 事件 schema 真跑校验(2.1.177),PASS,-,-,-
+WS-02,P1,worker 增量解析 → 流式分片落库(真 claude 5+ 片),PENDING,PASS,-,-
+WS-03,P1,executeConversationTurn 只读 worktree 不产生 git 改动(origin 无新提交),PENDING,PASS,-,-
+WS-04,P1,分片拼接=最终 body + 收尾 status done + session_id 回写,PENDING,PASS,-,-
+SSE-01,P2,SSE 全链路：worker 写分片+NOTIFY → console LISTEN → SSE → 客户端收 delta+done,PENDING,PENDING,PASS,-
+API-01,P2,登录鉴权 + 建对话/worker 关联校验(400)/列表/未登录 401,PENDING,PENDING,PASS,-
+API-02,P2,发用户消息(201) + 结束对话(closed),PENDING,PENDING,PASS,-
+UI-01,P3,chat 视图 typecheck + next build + console boot 绿,PENDING,PENDING,PASS,-
+UI-02,P3,浏览器交互流式渲染(打字机)手测,PENDING,PENDING,MANUAL,-
+SSE-02,P2,跨实例 NOTIFY 广播 + Last-Event-ID 重连续传(未自动化),PENDING,PENDING,PENDING,-
+RN-01,P4,renameConversation 改名/清空标题 round-trip,-,-,-,PASS
+LV-01,P4,listConversations generating 派生标(streaming→true / done→false),-,-,-,PASS
+LV-02,P4,listWorkerConversations 仅本 worker + generating + last_message_at + join 名,-,-,-,PASS
+WV-01,P4,worker getConversationDetail 流式 assistant 从 chunks 拼实时增量,-,-,-,PASS
+UI-03,P4,改名/思考气泡/回复中标 + worker 对话面板 typecheck+build+console boot 绿,-,-,-,PASS
+UI-04,P4,worker Electron 对话面板渲染 + web/worker 流式同步(手测),-,-,-,MANUAL

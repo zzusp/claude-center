@@ -217,6 +217,8 @@ export type Conversation = {
   updated_at: string;
   // listConversations 派生：最后一条消息时间，列表排序/预览用。
   last_message_at?: string | null;
+  // listConversations/listWorkerConversations 派生：是否有在途 assistant 轮（pending/streaming），列表「回复中」标用。
+  generating?: boolean;
 };
 
 export type ConversationMessage = {
