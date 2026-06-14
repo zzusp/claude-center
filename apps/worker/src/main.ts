@@ -21,7 +21,7 @@ function windowHtml(): string {
             --border:#e7e5e4; --border-strong:#d6d3d1;
             --text-1:#1c1917; --text-2:#44403c; --text-3:#78716c; --text-4:#a8a29e;
             --success:#16a34a; --running:#2563eb; --pending:#f59e0b;
-            --failed:#dc2626; --cancelled:#6b7280; --waiting:#0891b2;
+            --failed:#dc2626; --cancelled:#6b7280; --waiting:#0891b2; --merged:#7c3aed;
             --r-sm:8px; --r-md:10px; --r-lg:12px;
             --shadow-1:0 1px 2px rgba(28,25,23,.04);
             --shadow-2:0 4px 16px rgba(28,25,23,.08);
@@ -37,6 +37,9 @@ function windowHtml(): string {
 
           /* Header / brand */
           .app-head { margin: 0 0 18px; }
+          .layout { display: grid; grid-template-columns: minmax(300px, 360px) 1fr; gap: 16px; align-items: start; }
+          .col { min-width: 0; }
+          .col > .card:last-child { margin-bottom: 0; }
           .brand { display: flex; align-items: center; gap: 11px; }
           .brand-mark {
             display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0;
@@ -90,6 +93,8 @@ function windowHtml(): string {
           .badge[data-tone=running] { color: var(--running); background: rgba(37,99,235,.10); }
           .badge[data-tone=failed]  { color: var(--failed);  background: rgba(220,38,38,.10); }
           .badge[data-tone=cancelled] { color: var(--cancelled); background: rgba(107,114,128,.12); }
+          .badge[data-tone=waiting] { color: var(--waiting); background: rgba(8,145,178,.10); }
+          .badge[data-tone=merged] { color: var(--merged); background: rgba(124,58,237,.10); }
 
           /* Capability dots */
           .cap-row { display: flex; flex-wrap: wrap; gap: 8px 18px; }
@@ -166,6 +171,40 @@ function windowHtml(): string {
 
           /* Empty state */
           .empty { color: var(--text-4); font-size: 12.5px; padding: 6px 0; }
+
+          /* Task panel (Agent-View style) */
+          .task-group { margin-bottom: 14px; }
+          .task-group:last-child { margin-bottom: 0; }
+          .task-group-head { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--text-3); margin-bottom: 4px; }
+          .task-count { color: var(--text-4); font-weight: 500; }
+          .task-item { border-top: 1px solid var(--border); }
+          .task-item:first-child { border-top: 0; }
+          .task-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; cursor: pointer; }
+          .task-row:hover { background: var(--surface-3); }
+          .task-row .li-main { flex: 1; }
+          .task-time { font-size: 11.5px; color: var(--text-4); font-variant-numeric: tabular-nums; white-space: nowrap; }
+          .task-actions { display: flex; gap: 6px; }
+          .badge.pr { text-decoration: none; cursor: pointer; }
+          .task-detail { padding: 2px 0 12px; border-top: 1px dashed var(--border); }
+          .qbox { background: rgba(8,145,178,.07); border: 1px solid rgba(8,145,178,.2); border-radius: var(--r-sm); padding: 8px 10px; margin: 10px 0; font-size: 12.5px; }
+          .qbox b { display: block; margin-bottom: 3px; font-size: 11.5px; color: var(--waiting); }
+          .qbox div { white-space: pre-wrap; overflow-wrap: anywhere; }
+          .detail-section { margin-bottom: 10px; }
+          .detail-label { font-size: 11px; font-weight: 600; color: var(--text-4); margin-bottom: 4px; }
+          .cmt { padding: 6px 0; }
+          .cmt-who { font-size: 11.5px; font-weight: 600; color: var(--text-2); }
+          .cmt.user .cmt-who { color: var(--running); }
+          .cmt-time { font-size: 11px; color: var(--text-4); margin-left: 6px; }
+          .cmt-body { margin-top: 2px; font-size: 12.5px; color: var(--text-1); white-space: pre-wrap; overflow-wrap: anywhere; }
+          .ev-list { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-3); }
+          .ev { padding: 1px 0; overflow-wrap: anywhere; }
+          .detail-act { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; }
+          .reply-input {
+            flex: 1; min-height: 52px; resize: vertical; padding: 7px 9px; border: 1px solid var(--border);
+            border-radius: var(--r-sm); background: var(--surface-1); color: var(--text-1);
+            font-family: inherit; font-size: 12.5px; outline: none;
+          }
+          .reply-input:focus { border-color: var(--running); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
         </style>
       </head>
       <body>
@@ -179,6 +218,8 @@ function windowHtml(): string {
           </div>
         </header>
 
+        <div class="layout">
+        <div class="col">
         <section class="card">
           <div class="card-head">
             <h2 class="card-title">状态与设置</h2>
@@ -224,16 +265,23 @@ function windowHtml(): string {
             </div>
           </div>
         </section>
+        </div>
 
+        <div class="col">
         <section class="card">
-          <div class="card-head"><h2 class="card-title">在途任务</h2></div>
-          <div class="card-body"><div id="active"><span class="empty">无在途任务</span></div></div>
+          <div class="card-head">
+            <h2 class="card-title">任务</h2>
+            <button id="tasksRefresh" class="btn btn-sm" type="button">刷新</button>
+          </div>
+          <div class="card-body"><div id="tasks"><span class="empty">加载中…</span></div></div>
         </section>
 
         <section class="card">
           <div class="card-head"><h2 class="card-title">日志</h2></div>
           <div class="card-body"><div id="logs" class="logs"></div></div>
         </section>
+        </div>
+        </div>
 
         <script>
           const $ = (id) => document.getElementById(id);
@@ -264,6 +312,138 @@ function windowHtml(): string {
               '<div class="usage-track"><div class="usage-fill" data-tone="' + tone + '" style="width:' + pct + '%"></div></div></div>';
           }
 
+          // —— 任务面板（Agent-View 式：仅本 worker，分组 + peek + 回复/打回/验收）——
+          var TASK_STATUS_META = {
+            waiting:   { group: "needs",   label: "需输入",   tone: "waiting" },
+            success:   { group: "review",  label: "待审",     tone: "success" },
+            claimed:   { group: "working", label: "已认领",   tone: "running" },
+            running:   { group: "working", label: "执行中",   tone: "running" },
+            rejected:  { group: "working", label: "打回重跑", tone: "pending" },
+            merged:    { group: "done",    label: "已合并",   tone: "merged" },
+            accepted:  { group: "done",    label: "已验收",   tone: "success" },
+            failed:    { group: "done",    label: "失败",     tone: "failed" },
+            cancelled: { group: "done",    label: "已取消",   tone: "cancelled" }
+          };
+          var TASK_GROUPS = [
+            { key: "needs",   title: "需输入" },
+            { key: "review",  title: "待审" },
+            { key: "working", title: "进行中" },
+            { key: "done",    title: "已完成" }
+          ];
+          var expandedTaskId = null;
+          var tasksCache = [];
+
+          function statusMeta(status) {
+            return TASK_STATUS_META[status] || { group: "done", label: status, tone: "cancelled" };
+          }
+          function prTag(t) {
+            if (t.submit_mode === "push" || !t.pr_url) return "";
+            const tone = (t.status === "merged" || t.merge_status === "merged") ? "merged"
+              : t.status === "success" ? "success" : "pending";
+            return '<a class="badge pr" data-tone="' + tone + '" data-task-action="pr" href="' + esc(t.pr_url) + '" target="_blank">PR</a>';
+          }
+          function taskSummary(t) {
+            if (t.status === "waiting") return "⚠ 等待你的回复";
+            if (t.status === "failed" && t.error_message) return esc(t.error_message);
+            return esc(t.project_name || "") + (t.work_branch ? " · " + esc(t.work_branch) : "");
+          }
+          function taskRow(t) {
+            const m = statusMeta(t.status);
+            const actions = (t.status === "claimed" || t.status === "running")
+              ? '<button class="btn btn-sm danger" data-task-action="cancel" data-task-id="' + esc(t.id) + '">取消</button>' : "";
+            const head =
+              '<div class="task-row" data-row="' + esc(t.id) + '">' +
+                '<span class="badge" data-tone="' + m.tone + '"><span class="glyph">●</span>' + m.label + '</span>' +
+                '<span class="li-main"><span class="li-title">' + esc(t.title) + '</span>' +
+                '<span class="li-sub">' + taskSummary(t) + '</span></span>' +
+                prTag(t) +
+                '<span class="task-time">' + elapsed(t.updated_at) + '</span>' +
+                '<span class="task-actions">' + actions + '</span>' +
+              '</div>';
+            const detail = expandedTaskId === t.id
+              ? '<div class="task-detail" id="detail-' + esc(t.id) + '"><span class="empty">加载中…</span></div>' : "";
+            return '<div class="task-item">' + head + detail + '</div>';
+          }
+          function renderTasks(tasks) {
+            tasksCache = tasks || [];
+            if (!tasksCache.length) { $("tasks").innerHTML = '<span class="empty">本机暂无任务</span>'; return; }
+            const byGroup = {};
+            tasksCache.forEach((t) => { const g = statusMeta(t.status).group; (byGroup[g] = byGroup[g] || []).push(t); });
+            let html = "";
+            TASK_GROUPS.forEach((g) => {
+              const list = byGroup[g.key];
+              if (!list || !list.length) return;
+              html += '<div class="task-group"><div class="task-group-head">' + g.title +
+                ' <span class="task-count">' + list.length + '</span></div>' + list.map(taskRow).join("") + "</div>";
+            });
+            $("tasks").innerHTML = html;
+            if (expandedTaskId) loadDetail(expandedTaskId);
+          }
+          async function reloadTasks() {
+            let tasks = [];
+            try { tasks = await window.workerApi.listMyTasks(); } catch (e) { return; }
+            renderTasks(tasks);
+          }
+          async function loadDetail(taskId) {
+            const box = document.getElementById("detail-" + taskId);
+            if (!box) return;
+            let d;
+            try { d = await window.workerApi.getTaskDetail(taskId); }
+            catch (e) { box.innerHTML = '<span class="empty">加载失败</span>'; return; }
+            const t = tasksCache.find((x) => x.id === taskId);
+            const comments = d.comments || [], events = d.events || [];
+            let html = "";
+            if (t && t.status === "waiting") {
+              const q = comments.slice().reverse().find((c) => c.author === "worker");
+              if (q) html += '<div class="qbox"><b>待答问题</b><div>' + esc(q.body) + "</div></div>";
+            }
+            html += '<div class="detail-section"><div class="detail-label">评论</div>' +
+              (comments.length ? comments.map((c) =>
+                '<div class="cmt ' + (c.author === "user" ? "user" : "wk") + '"><span class="cmt-who">' +
+                (c.author === "user" ? "我" : "worker") + '</span><span class="cmt-time">' +
+                esc(String(c.created_at).slice(5, 16).replace("T", " ")) + '</span>' +
+                '<div class="cmt-body">' + esc(c.body) + "</div></div>").join("")
+                : '<span class="empty">无评论</span>') + "</div>";
+            html += '<div class="detail-section"><div class="detail-label">事件</div>' +
+              (events.length ? '<div class="ev-list">' + events.map((e) =>
+                '<div class="ev"><span class="log-time">' + esc(String(e.created_at).slice(11, 19)) + "</span> " +
+                esc(e.event_type) + " · " + esc(e.message) + "</div>").join("") + "</div>"
+                : '<span class="empty">无事件</span>') + "</div>";
+            if (t && t.status === "waiting") {
+              html += '<div class="detail-act"><textarea class="reply-input" id="reply-' + esc(taskId) + '" placeholder="回复以续接会话…"></textarea>' +
+                '<button class="btn btn-sm btn-primary" data-task-action="reply-send" data-task-id="' + esc(taskId) + '">发送</button></div>';
+            }
+            if (t && t.status === "success") {
+              html += '<div class="detail-act"><textarea class="reply-input" id="reject-' + esc(taskId) + '" placeholder="打回意见（打回时必填）…"></textarea>' +
+                '<button class="btn btn-sm" data-task-action="accept" data-task-id="' + esc(taskId) + '">验收通过</button>' +
+                '<button class="btn btn-sm danger" data-task-action="reject-send" data-task-id="' + esc(taskId) + '">打回</button></div>';
+            }
+            box.innerHTML = html;
+          }
+          function isEditingTask() {
+            const a = document.activeElement;
+            return !!(a && a.classList && a.classList.contains("reply-input"));
+          }
+          async function handleTaskAction(action, id, el) {
+            if (action === "pr") return;
+            if (action === "cancel") { el.disabled = true; await window.workerApi.cancelTask(id); await reloadTasks(); return; }
+            if (action === "reply-send") {
+              const ta = document.getElementById("reply-" + id); const body = ta && ta.value.trim();
+              if (!body) return;
+              el.disabled = true; await window.workerApi.replyToTask(id, body); expandedTaskId = null; await reloadTasks(); return;
+            }
+            if (action === "accept") {
+              el.disabled = true; const ok = await window.workerApi.acceptMyTask(id);
+              if (!ok) alert("任务已不在待审状态"); expandedTaskId = null; await reloadTasks(); return;
+            }
+            if (action === "reject-send") {
+              const ta = document.getElementById("reject-" + id); const fb = ta && ta.value.trim();
+              if (!fb) { alert("打回必须填写意见"); return; }
+              el.disabled = true; const ok = await window.workerApi.rejectMyTask(id, fb);
+              if (!ok) alert("任务已不在待审状态"); expandedTaskId = null; await reloadTasks(); return;
+            }
+          }
+
           async function refresh() {
             let s;
             try { s = await window.workerApi.getState(); } catch (e) { return; }
@@ -286,14 +466,6 @@ function windowHtml(): string {
             const bars = usageBar("5 小时窗口", u.five_hour) + usageBar("7 天窗口", u.seven_day);
             $("usageSection").style.display = bars ? "block" : "none";
             $("usage").innerHTML = bars;
-
-            const tasks = s.activeTasks || [];
-            $("active").innerHTML = tasks.length ? tasks.map((t) =>
-              '<div class="list-item"><span class="li-main"><span class="li-title">' + esc(t.title) + '</span><span class="li-sub">' +
-              t.kind + " · " + elapsed(t.startedAt) + (t.cancelled ? " · 取消中" : "") + "</span></span>" +
-              (t.kind === "task" && t.taskId && !t.cancelled
-                ? '<button class="btn btn-sm danger" data-cancel="' + esc(t.taskId) + '">取消</button>' : "") +
-              "</div>").join("") : '<span class="empty">无在途任务</span>';
 
             const logs = s.logs || [];
             const box = $("logs");
@@ -334,19 +506,33 @@ function windowHtml(): string {
             try { await window.workerApi.addProjectLink({ projectName, localPath }); $("localPath").value = ""; await loadProjects(); }
             finally { $("addBtn").disabled = false; }
           });
+          $("tasksRefresh").addEventListener("click", reloadTasks);
+
           document.addEventListener("click", async (e) => {
-            const cancel = e.target.getAttribute && e.target.getAttribute("data-cancel");
-            if (cancel) { e.target.disabled = true; await window.workerApi.cancelTask(cancel); refresh(); return; }
-            const unlink = e.target.getAttribute && e.target.getAttribute("data-unlink");
-            if (unlink) {
-              const [projectName, localPath] = unlink.split("|||");
+            const actionEl = e.target.closest && e.target.closest("[data-task-action]");
+            if (actionEl) {
+              await handleTaskAction(actionEl.getAttribute("data-task-action"),
+                actionEl.getAttribute("data-task-id"), actionEl);
+              return;
+            }
+            const unlinkEl = e.target.closest && e.target.closest("[data-unlink]");
+            if (unlinkEl) {
+              const [projectName, localPath] = unlinkEl.getAttribute("data-unlink").split("|||");
               await window.workerApi.removeProjectLink({ projectName, localPath }); await loadProjects();
+              return;
+            }
+            const row = e.target.closest && e.target.closest("[data-row]");
+            if (row) {
+              const id = row.getAttribute("data-row");
+              expandedTaskId = expandedTaskId === id ? null : id;
+              renderTasks(tasksCache);
             }
           });
 
-          refresh(); loadProjects();
+          refresh(); loadProjects(); reloadTasks();
           setInterval(refresh, 3000);
           setInterval(loadProjects, 15000);
+          setInterval(() => { if (!isEditingTask()) reloadTasks(); }, 4000);
         </script>
       </body>
     </html>
@@ -357,8 +543,8 @@ function createWindow(): void {
   // preload 与资产同样按 ../ 解析到 apps/worker 下，dist(electron) 与 src(tsx) 两种运行方式路径一致。
   const appDir = path.dirname(fileURLToPath(import.meta.url));
   const window = new BrowserWindow({
-    width: 560,
-    height: 820,
+    width: 1040,
+    height: 860,
     title: "ClaudeCenter Worker",
     webPreferences: {
       preload: path.resolve(appDir, "../preload.cjs"),
@@ -390,6 +576,17 @@ app.whenReady().then(async () => {
     worker?.removeProjectLink(input)
   );
   ipcMain.handle("worker:cancelTask", (_event, taskId: string) => worker?.cancelTask(taskId) ?? false);
+
+  // 桌面端任务面板（仅本 worker）：总览 / peek 详情 / 本机回复 / 打回 / 验收。
+  ipcMain.handle("worker:listMyTasks", () => worker?.listMyTasks() ?? []);
+  ipcMain.handle("worker:getTaskDetail", (_event, taskId: string) =>
+    worker?.getTaskDetail(taskId) ?? { comments: [], events: [] }
+  );
+  ipcMain.handle("worker:replyToTask", (_event, taskId: string, body: string) => worker?.replyToTask(taskId, body));
+  ipcMain.handle("worker:rejectMyTask", (_event, taskId: string, feedback: string) =>
+    worker?.rejectMyTask(taskId, feedback) ?? false
+  );
+  ipcMain.handle("worker:acceptMyTask", (_event, taskId: string) => worker?.acceptMyTask(taskId) ?? false);
 
   // 选择本地项目文件夹（关联项目用）。返回所选目录路径，取消返回 null。
   ipcMain.handle("worker:pickFolder", async () => {
