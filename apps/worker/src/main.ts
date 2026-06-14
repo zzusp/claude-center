@@ -112,6 +112,20 @@ function windowHtml(): string {
           .usage-fill { height: 100%; border-radius: 4px; background: var(--success); }
           .usage-fill[data-tone=pending] { background: var(--pending); }
           .usage-fill[data-tone=failed]  { background: var(--failed); }
+          .usage-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 5px; font-size: 11px; color: var(--text-4); }
+          .usage-at { font-variant-numeric: tabular-nums; }
+
+          /* Terminal config */
+          .term-form { display: flex; flex-direction: column; gap: 9px; }
+          .term-label { font-size: 11.5px; color: var(--text-4); }
+          .term-area {
+            min-height: 46px; resize: vertical; padding: 7px 9px; border: 1px solid var(--border);
+            border-radius: var(--r-sm); background: var(--surface-1); color: var(--text-1);
+            font-family: var(--font-mono); font-size: 12px; outline: none;
+          }
+          .term-area:focus { border-color: var(--running); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+          .term-save { align-self: flex-start; }
+          .term-hint { font-size: 11px; color: var(--text-4); }
 
           /* List items (projects / active tasks) */
           .list-item {
@@ -253,6 +267,21 @@ function windowHtml(): string {
           <div class="card-body"><div id="caps" class="cap-row">—</div></div>
         </section>
 
+        <section class="card">
+          <div class="card-head"><h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><line x1="13" y1="15" x2="17" y2="15"/></svg></span>运行终端</h2></div>
+          <div class="card-body">
+            <div class="term-form">
+              <span class="term-label">运行 claude 的终端（本机检测，或选「手动输入」自填路径）</span>
+              <select id="terminalSelect" class="cloud-select"></select>
+              <input id="terminalPath" class="path-input" placeholder="终端可执行文件全路径" />
+              <span class="term-label">前置命令（运行 claude 前在该终端先执行，如 VPN / 代理 / 账号登录；按所选终端语法书写）</span>
+              <textarea id="preCommand" class="term-area" placeholder="留空 = 不执行；示例(PowerShell)：& 'C:\\path\\vpn.exe' connect"></textarea>
+              <button id="saveTerminal" class="btn btn-sm btn-primary term-save" type="button">保存</button>
+              <span class="term-hint" id="terminalHint"></span>
+            </div>
+          </div>
+        </section>
+
         <section class="card" id="usageSection" style="display:none">
           <div class="card-head"><h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 16a7 7 0 1 1 14 0"/><path d="M12 16l3.5-3.5"/></svg></span>套餐用量</h2></div>
           <div class="card-body" id="usage"></div>
@@ -311,12 +340,33 @@ function windowHtml(): string {
               name + (ok && cap.version ? " " + esc(cap.version) : ok ? "" : " 未检出") + "</span>";
           }
 
+          // 距 resets_at 还剩多久（每次刷新重算，呈倒计时）。
+          function resetRemain(iso) {
+            const ms = new Date(iso).getTime() - Date.now();
+            if (!isFinite(ms) || ms <= 0) return "即将重置";
+            const totalMin = Math.floor(ms / 60000);
+            const d = Math.floor(totalMin / 1440), h = Math.floor((totalMin % 1440) / 60), m = totalMin % 60;
+            if (d > 0) return "重置剩余 " + d + "天" + h + "小时";
+            if (h > 0) return "重置剩余 " + h + "小时" + m + "分";
+            return "重置剩余 " + m + "分";
+          }
+          function resetClock(iso) {
+            const dt = new Date(iso);
+            if (isNaN(dt.getTime())) return "";
+            const p = (n) => String(n).padStart(2, "0");
+            return p(dt.getMonth() + 1) + "/" + p(dt.getDate()) + " " + p(dt.getHours()) + ":" + p(dt.getMinutes());
+          }
+
+          // API 只给 utilization 百分比（无绝对 token 数），「已用/总」以百分比表达；脚注补重置倒计时 + 时刻。
           function usageBar(label, win) {
             if (!win) return "";
             const pct = Math.max(0, Math.min(100, Math.round(win.utilization)));
             const tone = pct >= 90 ? "failed" : pct >= 70 ? "pending" : "success";
-            return '<div class="usage-block"><div class="usage-head"><span>' + label + '</span><span class="pct">已用 ' + pct + '%</span></div>' +
-              '<div class="usage-track"><div class="usage-fill" data-tone="' + tone + '" style="width:' + pct + '%"></div></div></div>';
+            const foot = win.resets_at
+              ? '<div class="usage-foot"><span>' + esc(resetRemain(win.resets_at)) + '</span><span class="usage-at">' + esc(resetClock(win.resets_at)) + ' 重置</span></div>'
+              : "";
+            return '<div class="usage-block"><div class="usage-head"><span>' + label + '</span><span class="pct">已用 ' + pct + '% / 100%</span></div>' +
+              '<div class="usage-track"><div class="usage-fill" data-tone="' + tone + '" style="width:' + pct + '%"></div></div>' + foot + '</div>';
           }
 
           // —— 任务面板（Agent-View 式：仅本 worker，分组 + peek + 回复/打回/验收）——
@@ -457,7 +507,7 @@ function windowHtml(): string {
             if (!s) return;
             const working = s.workingState === "working";
             $("meta").textContent =
-              (s.workerName || "worker") + " · claude " + (s.claudeVersion || "—") + " · " +
+              (s.workerName || "worker") + " · " + ((s.os && s.os.label) || "—") + " · claude " + (s.claudeVersion || "—") + " · " +
               s.subscriptionType + " · 在途 " + s.activeCount + "/" + s.maxParallel;
             const state = $("state");
             state.setAttribute("data-tone", working ? "success" : "pending");
@@ -498,6 +548,45 @@ function windowHtml(): string {
               : '<option value="">（无云端项目）</option>';
           }
 
+          var MANUAL_TERMINAL = "__manual__";
+          // 检测本机终端填充下拉，并按当前配置回显（匹配则选中、否则切「手动输入」并填路径）。
+          async function loadTerminals() {
+            let list = [], s = null;
+            try { list = await window.workerApi.listTerminals(); } catch (e) {}
+            try { s = await window.workerApi.getState(); } catch (e) {}
+            const cur = (s && s.terminalCommand) || "";
+            const sel = $("terminalSelect");
+            const opts = (list || []).map((t) =>
+              '<option value="' + esc(t.command) + '">' + esc(t.name) + " — " + esc(t.command) + "</option>");
+            opts.push('<option value="' + MANUAL_TERMINAL + '">手动输入路径…</option>');
+            opts.unshift('<option value="">默认（' + (s && s.os && s.os.platform === "win32" ? "powershell" : "直接运行 claude") + "）</option>");
+            sel.innerHTML = opts.join("");
+            const path = $("terminalPath");
+            const matched = (list || []).some((t) => t.command === cur);
+            if (!cur) { sel.value = ""; path.value = ""; path.readOnly = true; }
+            else if (matched) { sel.value = cur; path.value = cur; path.readOnly = true; }
+            else { sel.value = MANUAL_TERMINAL; path.value = cur; path.readOnly = false; }
+            if (s && document.activeElement !== $("preCommand")) $("preCommand").value = s.claudePreCommand || "";
+          }
+
+          $("terminalSelect").addEventListener("change", () => {
+            const v = $("terminalSelect").value, path = $("terminalPath");
+            if (v === MANUAL_TERMINAL) { path.readOnly = false; path.value = ""; path.focus(); }
+            else { path.readOnly = true; path.value = v; }
+          });
+
+          $("saveTerminal").addEventListener("click", async () => {
+            const btn = $("saveTerminal"), hint = $("terminalHint");
+            btn.disabled = true; hint.textContent = "保存中…";
+            try {
+              await window.workerApi.setTerminal($("terminalPath").value.trim());
+              await window.workerApi.setPreCommand($("preCommand").value);
+              hint.textContent = "已保存，下一个任务生效";
+              await loadTerminals();
+            } catch (e) { hint.textContent = "保存失败：" + (e && e.message ? e.message : e); }
+            finally { btn.disabled = false; }
+          });
+
           $("workingToggle").addEventListener("change", async (e) => { await window.workerApi.setWorking(e.target.checked); refresh(); });
           $("remoteToggle").addEventListener("change", async (e) => { await window.workerApi.setAllowRemote(e.target.checked); refresh(); });
           $("maxParallel").addEventListener("change", async (e) => {
@@ -536,7 +625,7 @@ function windowHtml(): string {
             }
           });
 
-          refresh(); loadProjects(); reloadTasks();
+          refresh(); loadProjects(); reloadTasks(); loadTerminals();
           setInterval(refresh, 3000);
           setInterval(loadProjects, 15000);
           setInterval(() => { if (!isEditingTask()) reloadTasks(); }, 4000);
@@ -574,6 +663,9 @@ app.whenReady().then(async () => {
   );
   ipcMain.handle("worker:setAllowRemote", (_event, allow: boolean) => worker?.setAllowRemoteControl(allow));
   ipcMain.handle("worker:setMaxParallel", (_event, value: number) => worker?.setMaxParallel(value));
+  ipcMain.handle("worker:listTerminals", () => worker?.listTerminals() ?? []);
+  ipcMain.handle("worker:setTerminal", (_event, command: string) => worker?.setTerminalCommand(command));
+  ipcMain.handle("worker:setPreCommand", (_event, command: string) => worker?.setPreCommand(command));
   ipcMain.handle("worker:listCloudProjects", () => worker?.listCloudProjects() ?? []);
   ipcMain.handle("worker:listProjectLinks", () => worker?.listProjectLinks() ?? []);
   ipcMain.handle("worker:addProjectLink", (_event, input: { projectName: string; localPath: string }) =>

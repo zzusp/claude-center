@@ -1,0 +1,16 @@
+case_id,description,round-1
+TC01,三包 typecheck 通过,PASS
+TC02,worker dist 构建产出 terminal.js,PASS
+TC03,shellFamily 正确区分 powershell/cmd/bash/wsl,PASS
+TC04,buildClaudeScript powershell 全量(前置命令+env引用+安全字面量),PASS
+TC05,buildClaudeScript bash 用 "$VAR" 引用,PASS
+TC06,buildClaudeScript cmd 用 %VAR% + & 分隔,PASS
+TC07,buildClaudeScript full=false 仅 -p 不带安全姿态/json,PASS
+TC08,terminalLaunch ps/cmd/bash/wsl 参数正确,PASS
+TC09,inspectOs 返回正确 platform + 非空 label,PASS
+TC10,detectTerminals 检出本机终端(含 Git Bash 从 git 位置反推),PASS
+TC11,config terminalCommand/claudePreCommand env 兜底,PASS
+TC12,config 持久化值覆盖 env 且合并保留其他字段,PASS
+TC13,真 spawn:恶劣多行 prompt 经 powershell $env: round-trip 还原,PASS
+TC14,真 spawn:恶劣多行 prompt 经 git-bash "$VAR" round-trip 还原,PASS
+TC15,UI 内联脚本语法可解析,PASS

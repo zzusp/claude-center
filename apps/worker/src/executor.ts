@@ -20,6 +20,14 @@ import {
 import type { ChildProcess } from "node:child_process";
 import type { WorkerConfig } from "./config.js";
 import { runCommand, runPowerShell, type CommandResult } from "./shell.js";
+import {
+  buildClaudeScript,
+  CLAUDE_ENV,
+  defaultTerminalCommand,
+  isWsl,
+  shellFamily,
+  terminalLaunch
+} from "./terminal.js";
 import { ensureWorktree, removeWorktree, worktreePathFor } from "./worktree.js";
 
 const CLAUDE_TIMEOUT_MS = 60 * 60_000;
@@ -45,12 +53,90 @@ const NEEDS_INPUT_SENTINEL = "<<CLAUDE_CENTER_NEEDS_INPUT>>";
 
 type ClaudeTurn = { sessionId: string | null; result: string; raw: CommandResult };
 
-// 运行 `claude -p <prompt> --output-format json`，可选 `--resume <session_id>` 续接已有
-// 会话。统一附带任务执行的安全姿态：`--permission-mode bypassPermissions`（headless 自主跑、
-// 不为权限停）+ `--settings`（deny 写类 git，交还 Worker）+ `--append-system-prompt-file`
-// （中控协议规则）。配置了前置命令（代理 / VPN）时在同一 PowerShell 会话内先执行，使其设置
-// 的环境变量被 claude 继承；prompt 与路径经环境变量传入，空格 / 引号 / 换行不被破坏。session
-// id 是 UUID，无 shell 元字符，可安全内联进脚本。
+type ClaudeCallOpts = {
+  prompt: string;
+  cwd?: string;
+  resumeSessionId?: string;
+  model?: string;
+  onSpawn?: (child: ChildProcess) => void;
+  // true=任务执行（带 --settings / --append-system-prompt-file / --permission-mode / --output-format json）；
+  // false=定向 claude 指令（仅 `-p <prompt>`，跟随 claude 默认）。
+  full: boolean;
+};
+
+// 统一的 claude 调用：按运行终端配置选执行形态。
+// - 直接形态（默认终端 + 无前置命令）：spawn(claude, argv)，无 shell 解析，最稳，等同旧行为。
+// - 终端形态（配了前置命令 或 自定义终端）：在所选终端的一个会话里跑 `<前置命令> <sep> <claude 调用>`，
+//   使前置命令（VPN/代理/登录）设置的环境被 claude 继承。prompt/路径/claude 路径经 env 传入并按终端
+//   家族安全引用（空格/引号/换行不破坏）；model/session-id(UUID)/permission-mode/output-format 为
+//   无 shell 元字符的安全字面量，内联。终端可执行文件 shell:false spawn（含空格全路径安全）。
+function spawnClaude(config: WorkerConfig, opts: ClaudeCallOpts): Promise<CommandResult> {
+  // 'default' / 空 表示不指定 --model；其余为白名单别名（opus/sonnet/haiku），可安全内联。
+  const modelArg = opts.model && opts.model !== "default" ? opts.model : null;
+  const usesTerminal = config.claudePreCommand !== "" || config.terminalCommand !== "";
+
+  if (!usesTerminal) {
+    const args = [
+      "-p",
+      opts.prompt,
+      ...(modelArg ? ["--model", modelArg] : []),
+      ...(opts.resumeSessionId ? ["--resume", opts.resumeSessionId] : [])
+    ];
+    if (opts.full) {
+      args.push(
+        "--permission-mode",
+        config.permissionMode,
+        "--settings",
+        config.claudeSettingsPath,
+        "--append-system-prompt-file",
+        config.claudeRulesPath,
+        "--output-format",
+        "json"
+      );
+    }
+    return runCommand(config.claudeCommand, args, {
+      cwd: opts.cwd,
+      timeoutMs: CLAUDE_TIMEOUT_MS,
+      onSpawn: opts.onSpawn
+    });
+  }
+
+  const terminalCommand = config.terminalCommand || defaultTerminalCommand();
+  const family = shellFamily(terminalCommand);
+  const script = buildClaudeScript({
+    family,
+    full: opts.full,
+    modelArg,
+    resumeSessionId: opts.resumeSessionId,
+    permissionMode: config.permissionMode,
+    preCommand: config.claudePreCommand
+  });
+
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    [CLAUDE_ENV.CMD]: config.claudeCommand,
+    [CLAUDE_ENV.PROMPT]: opts.prompt,
+    [CLAUDE_ENV.SETTINGS]: config.claudeSettingsPath,
+    [CLAUDE_ENV.RULES]: config.claudeRulesPath
+  };
+  // WSL 不继承 Windows 进程 env，需在 WSLENV 声明转发的变量名（冒号分隔）。
+  if (isWsl(terminalCommand)) {
+    const names = [CLAUDE_ENV.CMD, CLAUDE_ENV.PROMPT, CLAUDE_ENV.SETTINGS, CLAUDE_ENV.RULES].join(":");
+    env.WSLENV = process.env.WSLENV ? `${process.env.WSLENV}:${names}` : names;
+  }
+
+  const launch = terminalLaunch(terminalCommand, script);
+  // shell:false：终端含空格全路径作 argv[0] 安全，且脚本作单参不被 cmd.exe 二次解析。
+  return runCommand(launch.cmd, launch.args, {
+    cwd: opts.cwd,
+    timeoutMs: CLAUDE_TIMEOUT_MS,
+    onSpawn: opts.onSpawn,
+    shell: false,
+    env
+  });
+}
+
+// 任务执行用：`claude -p ... --output-format json`（+ 可选 --resume），解析 json 取 session/result。
 function runClaudeJson(
   config: WorkerConfig,
   opts: {
@@ -61,51 +147,7 @@ function runClaudeJson(
     onSpawn?: (child: ChildProcess) => void;
   }
 ): Promise<ClaudeTurn> {
-  // 任务级模型：'default' / 空表示不指定（不传 --model，跟随 claude 自身默认）；其余为白名单别名
-  // （opus/sonnet/haiku），无 shell 元字符，可安全内联进脚本（同 resumeSessionId UUID 的论证）。
-  const modelArg = opts.model && opts.model !== "default" ? opts.model : null;
-  const run = config.claudePreCommand
-    ? runPowerShell(
-        // 路径经环境变量传入：PowerShell 在实参位展开 $env: 变量不做分词，含空格的路径仍是单个实参。
-        `${config.claudePreCommand}; & $env:CLAUDE_CENTER_CLAUDE_CMD -p $env:CLAUDE_CENTER_PROMPT --permission-mode $env:CLAUDE_CENTER_PERMISSION_MODE --settings $env:CLAUDE_CENTER_SETTINGS_PATH --append-system-prompt-file $env:CLAUDE_CENTER_RULES_PATH --output-format json${
-          modelArg ? ` --model ${modelArg}` : ""
-        }${
-          opts.resumeSessionId ? ` --resume ${opts.resumeSessionId}` : ""
-        }`,
-        {
-          cwd: opts.cwd,
-          timeoutMs: CLAUDE_TIMEOUT_MS,
-          onSpawn: opts.onSpawn,
-          env: {
-            ...process.env,
-            CLAUDE_CENTER_CLAUDE_CMD: config.claudeCommand,
-            CLAUDE_CENTER_PROMPT: opts.prompt,
-            CLAUDE_CENTER_PERMISSION_MODE: config.permissionMode,
-            CLAUDE_CENTER_SETTINGS_PATH: config.claudeSettingsPath,
-            CLAUDE_CENTER_RULES_PATH: config.claudeRulesPath
-          }
-        }
-      )
-    : runCommand(
-        config.claudeCommand,
-        [
-          "-p",
-          opts.prompt,
-          ...(modelArg ? ["--model", modelArg] : []),
-          ...(opts.resumeSessionId ? ["--resume", opts.resumeSessionId] : []),
-          "--permission-mode",
-          config.permissionMode,
-          "--settings",
-          config.claudeSettingsPath,
-          "--append-system-prompt-file",
-          config.claudeRulesPath,
-          "--output-format",
-          "json"
-        ],
-        { cwd: opts.cwd, timeoutMs: CLAUDE_TIMEOUT_MS, onSpawn: opts.onSpawn }
-      );
-
-  return run.then((raw) => {
+  return spawnClaude(config, { ...opts, full: true }).then((raw) => {
     const parsed = parseClaudeJson(raw);
     return { sessionId: parsed.session_id ?? null, result: parsed.result ?? "", raw };
   });
@@ -608,22 +650,9 @@ function payloadCwd(command: DirectCommand): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-// 定向指令仍用文本模式调用 claude（无需会话续接），与任务执行解耦。
+// 定向指令用文本模式调用 claude（仅 -p，无会话续接 / 安全姿态），与任务执行解耦；走同一终端配置。
 function runClaude(config: WorkerConfig, prompt: string, cwd?: string): Promise<CommandResult> {
-  if (!config.claudePreCommand) {
-    return runCommand(config.claudeCommand, ["-p", prompt], { cwd, timeoutMs: CLAUDE_TIMEOUT_MS });
-  }
-
-  const script = `${config.claudePreCommand}; & $env:CLAUDE_CENTER_CLAUDE_CMD -p $env:CLAUDE_CENTER_PROMPT`;
-  return runPowerShell(script, {
-    cwd,
-    timeoutMs: CLAUDE_TIMEOUT_MS,
-    env: {
-      ...process.env,
-      CLAUDE_CENTER_CLAUDE_CMD: config.claudeCommand,
-      CLAUDE_CENTER_PROMPT: prompt
-    }
-  });
+  return spawnClaude(config, { prompt, cwd, full: false });
 }
 
 export async function executeDirectCommand(config: WorkerConfig, command: DirectCommand): Promise<void> {

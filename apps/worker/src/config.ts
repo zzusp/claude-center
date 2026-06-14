@@ -22,7 +22,10 @@ export type WorkerConfig = {
   pollIntervalMs: number;
   heartbeatIntervalMs: number;
   claudeCommand: string;
+  // 运行 claude 前在同一终端会话先执行的命令（VPN/代理/账号登录等），按运行终端语法书写；空=不执行。
   claudePreCommand: string;
+  // 运行 claude 的终端可执行文件全路径；空=默认（Windows: powershell / 其余: 直接 spawn claude）。
+  terminalCommand: string;
   ghCommand: string;
   // 任务执行内核的安全姿态：headless 下自主跑，不为权限停（deny 规则仍硬生效）。
   permissionMode: string;
@@ -49,6 +52,9 @@ export type WorkerState = {
   allowRemoteControl?: boolean;
   maxParallel?: number;
   projects?: WorkerProjectConfig[];
+  // 桌面端配置的运行终端与前置命令，跨重启保留。
+  terminalCommand?: string;
+  claudePreCommand?: string;
 };
 
 function dataDirOf(): string {
@@ -165,7 +171,9 @@ export function readWorkerConfig(): WorkerConfig {
     pollIntervalMs: readNumber("CLAUDE_CENTER_POLL_INTERVAL_MS", 10_000),
     heartbeatIntervalMs: readNumber("CLAUDE_CENTER_HEARTBEAT_INTERVAL_MS", 15_000),
     claudeCommand: process.env.CLAUDE_CODE_COMMAND || "claude",
-    claudePreCommand: process.env.CLAUDE_CENTER_CLAUDE_PRE_COMMAND?.trim() || "",
+    // 桌面端持久化优先，其次 env，最后空。
+    claudePreCommand: state.claudePreCommand ?? (process.env.CLAUDE_CENTER_CLAUDE_PRE_COMMAND?.trim() || ""),
+    terminalCommand: state.terminalCommand ?? (process.env.CLAUDE_CENTER_TERMINAL?.trim() || ""),
     ghCommand: process.env.GH_COMMAND || "gh",
     permissionMode: process.env.CLAUDE_CENTER_PERMISSION_MODE || "bypassPermissions",
     claudeSettingsPath:
