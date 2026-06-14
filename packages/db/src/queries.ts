@@ -14,7 +14,6 @@ import type {
   TaskEvent,
   TaskModel,
   TaskSubmitMode,
-  TaskType,
   User,
   UserWithProjects,
   Worker,
@@ -112,7 +111,6 @@ export async function createTask(
   client: pg.Pool | pg.PoolClient,
   input: {
     projectId: string;
-    taskType: TaskType;
     title: string;
     description: string;
     baseBranch: string;
@@ -130,12 +128,11 @@ export async function createTask(
   const scheduledAt = input.scheduledAt ?? null;
   const status = scheduledAt ? "scheduled" : "draft";
   const result = await client.query<Task>(
-    `INSERT INTO tasks (project_id, task_type, title, description, base_branch, work_branch, target_branch, submit_mode, model, auto_merge_pr, status, scheduled_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    `INSERT INTO tasks (project_id, title, description, base_branch, work_branch, target_branch, submit_mode, model, auto_merge_pr, status, scheduled_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING *`,
     [
       input.projectId,
-      input.taskType,
       input.title,
       input.description,
       input.baseBranch,
@@ -873,7 +870,7 @@ export async function setTaskMergeChecked(
 // 候选附带项目 repo_url，供 Console 检测助手做 gh / git 远程判定。
 export type MergeCheckCandidate = Task & { repo_url: string };
 
-// Console 合并检查候选：success 待验收的工作类任务（有 work/target 分支），按 merge_status_checked_at
+// Console 合并检查候选：success 待验收且有 work/target 分支的任务，按 merge_status_checked_at
 // 轮转取最久未查的一个（NULL 优先）。只读，不翻状态——是否合并由检测助手判定后回写。
 export async function claimNextMergeCheckCandidate(
   client: pg.Pool | pg.PoolClient
@@ -883,7 +880,6 @@ export async function claimNextMergeCheckCandidate(
        FROM tasks
        JOIN projects ON projects.id = tasks.project_id
       WHERE tasks.status = 'success'
-        AND tasks.task_type = 'work'
         AND tasks.work_branch <> ''
         AND tasks.target_branch <> ''
       ORDER BY tasks.merge_status_checked_at ASC NULLS FIRST
@@ -922,25 +918,6 @@ export async function setTaskMergeUnmerged(client: pg.Pool | pg.PoolClient, task
       WHERE id = $1 AND status = 'success'`,
     [taskId]
   );
-}
-
-// 用户在对话区点「结束对话」：把问答类任务收口为 success。仅作用于 task_type='qa'，
-// 避免误关工作类任务（工作类的收尾由 Worker 按 git 改动驱动）。
-export async function completeQaTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
-  const result = await client.query<Task>(
-    `UPDATE tasks
-        SET status = 'success',
-            finished_at = now(),
-            result = result || '{"closedByUser": true}'::jsonb,
-            error_message = NULL,
-            updated_at = now()
-      WHERE id = $1
-        AND task_type = 'qa'
-        AND status IN ('pending', 'claimed', 'running', 'waiting', 'failed')
-      RETURNING *`,
-    [taskId]
-  );
-  return result.rows[0] ?? null;
 }
 
 // 续接：认领本 Worker 自己的、已收到新用户回复的等待中任务（原子翻转为 running）。

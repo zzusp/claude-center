@@ -22,7 +22,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
-  Empty, KvRow, MergeStatusBadge, StatusBadge, StatusDot, TaskTypeBadge,
+  Empty, KvRow, MergeStatusBadge, StatusBadge, StatusDot,
   fmtDateTime, fmtTime, metaOf, postJson, type Tone
 } from "./shared";
 import {
@@ -120,7 +120,6 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
     try {
       await postJson("/api/tasks", {
         projectId: selectedProjectId,
-        taskType: data.get("taskType"),
         title: data.get("title"),
         description: data.get("description"),
         baseBranch: data.get("baseBranch"),
