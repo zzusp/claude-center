@@ -8,6 +8,7 @@ import type {
   TaskComment,
   TaskCommentAuthor,
   TaskEvent,
+  TaskModel,
   TaskSubmitMode,
   TaskType,
   User,
@@ -79,6 +80,8 @@ export async function createTask(
     workBranch: string;
     targetBranch: string;
     submitMode: TaskSubmitMode;
+    // 任务级 Claude 执行模型；'default' 表示 Worker 执行时不传 --model。
+    model: TaskModel;
     // 指定发布时间则落 'scheduled' 定时态，到点由调度器转 pending；为空走默认 'draft'。
     scheduledAt?: string | null;
   }
@@ -86,8 +89,8 @@ export async function createTask(
   const scheduledAt = input.scheduledAt ?? null;
   const status = scheduledAt ? "scheduled" : "draft";
   const result = await client.query<Task>(
-    `INSERT INTO tasks (project_id, task_type, title, description, base_branch, work_branch, target_branch, submit_mode, status, scheduled_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO tasks (project_id, task_type, title, description, base_branch, work_branch, target_branch, submit_mode, model, status, scheduled_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING *`,
     [
       input.projectId,
@@ -98,6 +101,7 @@ export async function createTask(
       input.workBranch,
       input.targetBranch,
       input.submitMode,
+      input.model,
       status,
       scheduledAt
     ]

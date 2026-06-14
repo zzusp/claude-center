@@ -248,6 +248,10 @@ export default function TaskDetailPage({
                     <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
                   </>
                 )}
+                <KvRow
+                  k="执行模型"
+                  v={{ default: "默认（跟随 Worker）", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" }[task.model]}
+                />
                 <KvRow k="Session ID" v={task.claude_session_id ?? "—"} mono />
                 {depIds.length > 0 ? (
                   <KvRow
