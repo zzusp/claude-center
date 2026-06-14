@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import {
   claimNextCleanupCandidate,
   claimNextDirectCommand,
@@ -8,64 +9,146 @@ import {
   getWorkerRuntime,
   heartbeatWorker,
   listActiveTaskIdsForWorker,
+  listCancelRequestedTaskIds,
+  listProjects,
+  listWorkerProjectLinks,
+  markTaskCancelled,
   registerWorker,
+  removeWorkerProjectLink,
+  requestTaskCancellation,
   setWorkerWorkingState,
   updateWorkerInfo,
-  upsertWorkerProjectLink
+  upsertWorkerProjectLink,
+  type WorkerProjectLinkView
 } from "@claude-center/db";
-import { persistAllowRemoteControl, readWorkerConfig, type WorkerConfig } from "./config.js";
-import { cleanupMergedTask, executeDirectCommand, executeTask, rerunRejectedTask, resumeTask } from "./executor.js";
-import { inspectClaude, type ClaudeInspect } from "./inspect.js";
+import {
+  persistWorkerState,
+  projectLinkKey,
+  readWorkerConfig,
+  readWorkerState,
+  type WorkerConfig,
+  type WorkerProjectConfig
+} from "./config.js";
+import {
+  cleanupMergedTask,
+  executeDirectCommand,
+  executeTask,
+  rerunRejectedTask,
+  resumeTask,
+  type ExecHooks
+} from "./executor.js";
+import {
+  detectCapabilities,
+  inspectClaude,
+  type Capabilities,
+  type ClaudeInspect,
+  type WorkerUsage
+} from "./inspect.js";
+import { killProcessTree } from "./shell.js";
 import { gcWorktrees } from "./worktree.js";
+
+// 取消请求扫描间隔(ms):独立于工作态门控与认领循环,确保在执行中也能及时响应取消。
+const CANCEL_INTERVAL_MS = 3_000;
+// 桌面日志面板的内存日志环容量。
+const LOG_RING_CAPACITY = 200;
+
+// 桌面端展示用:单条在途执行的摘要(兼做取消的索引来源)。
+export type ActiveTaskView = {
+  key: string;
+  taskId: string | null;
+  kind: "task" | "command" | "cleanup";
+  title: string;
+  startedAt: string;
+  cancelled: boolean;
+};
+
+export type LogLine = { ts: string; level: "info" | "error"; message: string };
+
+// 一条在途执行的内部跟踪:promise + 元信息 + Claude 子进程句柄(供取消杀进程)+ 取消标记。
+type ActiveEntry = {
+  promise: Promise<void>;
+  taskId: string | null;
+  kind: "task" | "command" | "cleanup";
+  title: string;
+  startedAt: string;
+  child: ChildProcess | null;
+  cancelled: boolean;
+};
 
 // 暴露给桌面端（Electron）展示与开关用的状态快照。
 export type WorkerStatusSnapshot = {
   workerName: string;
+  hostName: string;
   workingState: "idle" | "working";
   allowRemoteControl: boolean;
   maxParallel: number;
   activeCount: number;
   claudeVersion: string | null;
   subscriptionType: string;
+  usage: WorkerUsage;
+  capabilities: Capabilities;
+  activeTasks: ActiveTaskView[];
+  logs: LogLine[];
 };
+
+const UNKNOWN_CAPABILITY = { ok: false, version: null };
 
 export class ClaudeCenterWorker {
   private readonly config: WorkerConfig;
   private pollTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private infoTimer: NodeJS.Timeout | null = null;
+  private cancelTimer: NodeJS.Timeout | null = null;
   // 仅护住「认领循环」，不护执行：执行 fire-and-forget 进 active 跟踪，实现真并发。
   private claiming = false;
-  private readonly active = new Map<string, Promise<void>>();
+  private readonly active = new Map<string, ActiveEntry>();
   private lastInspect: ClaudeInspect = { claudeVersion: null, subscriptionType: "unknown", usage: {} };
+  // 启动时一次性自检的外部命令可用性;register/快照/任务预检都用它。
+  private capabilities: Capabilities = {
+    git: UNKNOWN_CAPABILITY,
+    gh: UNKNOWN_CAPABILITY,
+    claude: UNKNOWN_CAPABILITY
+  };
+  private readonly logs: LogLine[] = [];
 
   constructor(config = readWorkerConfig()) {
     this.config = config;
   }
 
   async start(): Promise<void> {
+    this.capabilities = await detectCapabilities(this.config);
+    this.log("info", `Capabilities — git:${this.cap("git")} gh:${this.cap("gh")} claude:${this.cap("claude")}`);
+    if (!this.capabilities.claude.ok) {
+      this.log("error", "claude CLI not detected on this worker — tasks will fail until it is installed / on PATH");
+    }
+
     await this.register();
     await this.gcOrphanWorktrees();
     await this.refreshInfo();
     await this.tick();
 
     this.heartbeatTimer = setInterval(() => {
-      heartbeatWorker(getPool(), this.config.workerId).catch((error) => console.error(error));
+      heartbeatWorker(getPool(), this.config.workerId).catch((error) => this.log("error", `heartbeat: ${error}`));
     }, this.config.heartbeatIntervalMs);
 
     this.infoTimer = setInterval(() => {
-      this.refreshInfo().catch((error) => console.error(error));
+      this.refreshInfo().catch((error) => this.log("error", `refreshInfo: ${error}`));
     }, this.config.infoIntervalMs);
 
     this.pollTimer = setInterval(() => {
-      this.tick().catch((error) => console.error(error));
+      this.tick().catch((error) => this.log("error", `tick: ${error}`));
     }, this.config.pollIntervalMs);
+
+    this.cancelTimer = setInterval(() => {
+      this.handleCancellations().catch((error) => this.log("error", `cancel: ${error}`));
+    }, CANCEL_INTERVAL_MS);
   }
 
   async stop(): Promise<void> {
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.infoTimer) clearInterval(this.infoTimer);
+    if (this.cancelTimer) clearInterval(this.cancelTimer);
   }
 
   // —— 桌面端开关 —— //
@@ -81,24 +164,134 @@ export class ClaudeCenterWorker {
   // 客户端策略开关：是否允许 web 远程控制。改内存 + 持久化 worker.json + 立即上报 DB。
   async setAllowRemoteControl(allow: boolean): Promise<void> {
     this.config.allowRemoteControl = allow;
-    persistAllowRemoteControl(this.config.dataDir, this.config.workerId, allow);
-    await this.refreshInfo();
+    persistWorkerState(this.config.dataDir, { allowRemoteControl: allow });
+    await this.reportInfo();
+  }
+
+  // 调整真并发上限：内存 + 持久化 + 立即上报 DB（tick 每轮读 DB 的 max_parallel，故即时生效）。
+  async setMaxParallel(value: number): Promise<void> {
+    const next = Math.max(1, Math.floor(value));
+    this.config.maxParallel = next;
+    persistWorkerState(this.config.dataDir, { maxParallel: next });
+    await this.reportInfo();
+    void this.tick();
+  }
+
+  // —— 桌面端项目关联 —— //
+
+  // 云端项目清单（供桌面端下拉选择关联目标）。
+  async listCloudProjects(): Promise<{ id: string; name: string; repo_url: string; default_branch: string }[]> {
+    const projects = await listProjects(getPool());
+    return projects.map((project) => ({
+      id: project.id,
+      name: project.name,
+      repo_url: project.repo_url,
+      default_branch: project.default_branch
+    }));
+  }
+
+  // 本 worker 当前的项目关联（含项目展示信息）。
+  async listProjectLinks(): Promise<WorkerProjectLinkView[]> {
+    return listWorkerProjectLinks(getPool(), this.config.workerId);
+  }
+
+  // 桌面端添加一条本地项目关联：持久化进 worker.json（source=local）+ 内存 + 注册到 DB。
+  async addProjectLink(input: { projectName: string; localPath: string }): Promise<void> {
+    const project: WorkerProjectConfig = {
+      projectName: input.projectName,
+      localPath: input.localPath,
+      source: "local"
+    };
+    const key = projectLinkKey(project);
+
+    const persisted = readWorkerState(this.config.dataDir).projects ?? [];
+    if (!persisted.some((item) => projectLinkKey(item) === key)) {
+      persistWorkerState(this.config.dataDir, {
+        projects: [...persisted, { projectName: input.projectName, localPath: input.localPath }]
+      });
+    }
+    if (!this.config.projects.some((item) => projectLinkKey(item) === key)) {
+      this.config.projects.push(project);
+    }
+
+    await upsertWorkerProjectLink(getPool(), {
+      workerId: this.config.workerId,
+      projectName: input.projectName,
+      localPath: input.localPath
+    });
+    this.log("info", `Linked project ${input.projectName} → ${input.localPath}`);
+    void this.tick();
+  }
+
+  // 桌面端移除一条本地项目关联：从 worker.json + 内存 + DB 同步删除。
+  async removeProjectLink(input: { projectName: string; localPath: string }): Promise<void> {
+    const key = projectLinkKey({ projectName: input.projectName, localPath: input.localPath });
+
+    const persisted = readWorkerState(this.config.dataDir).projects ?? [];
+    persistWorkerState(this.config.dataDir, {
+      projects: persisted.filter((item) => projectLinkKey(item) !== key)
+    });
+    this.config.projects = this.config.projects.filter((item) => projectLinkKey(item) !== key);
+
+    await removeWorkerProjectLink(getPool(), {
+      workerId: this.config.workerId,
+      projectName: input.projectName,
+      localPath: input.localPath
+    });
+    this.log("info", `Unlinked project ${input.projectName} → ${input.localPath}`);
+  }
+
+  // 桌面端取消一个在途任务：打取消请求戳 + 立即扫描处理一轮（杀进程并翻终态）。返回是否为可取消的在途任务。
+  async cancelTask(taskId: string): Promise<boolean> {
+    const task = await requestTaskCancellation(getPool(), taskId);
+    await this.handleCancellations();
+    return Boolean(task);
   }
 
   async getStatusSnapshot(): Promise<WorkerStatusSnapshot> {
-    const runtime = await getWorkerRuntime(getPool(), this.config.workerId);
+    const runtime = await getWorkerRuntime(getPool(), this.config.workerId).catch(() => null);
     return {
       workerName: this.config.workerName,
+      hostName: this.config.hostName,
       workingState: runtime?.working_state ?? "idle",
       allowRemoteControl: this.config.allowRemoteControl,
       maxParallel: runtime?.max_parallel ?? this.config.maxParallel,
       activeCount: this.active.size,
       claudeVersion: this.lastInspect.claudeVersion,
-      subscriptionType: this.lastInspect.subscriptionType
+      subscriptionType: this.lastInspect.subscriptionType,
+      usage: this.lastInspect.usage,
+      capabilities: this.capabilities,
+      activeTasks: [...this.active.entries()].map(([key, entry]) => ({
+        key,
+        taskId: entry.taskId,
+        kind: entry.kind,
+        title: entry.title,
+        startedAt: entry.startedAt,
+        cancelled: entry.cancelled
+      })),
+      logs: this.logs
     };
   }
 
   // —— 内部 —— //
+
+  private cap(name: keyof Capabilities): string {
+    const capability = this.capabilities[name];
+    return capability.ok ? capability.version ?? "ok" : "missing";
+  }
+
+  private log(level: "info" | "error", message: string): void {
+    const line: LogLine = { ts: new Date().toISOString(), level, message };
+    this.logs.push(line);
+    if (this.logs.length > LOG_RING_CAPACITY) {
+      this.logs.shift();
+    }
+    if (level === "error") {
+      console.error(message);
+    } else {
+      console.log(message);
+    }
+  }
 
   private async register(): Promise<void> {
     const pool = getPool();
@@ -108,9 +301,9 @@ export class ClaudeCenterWorker {
       hostName: this.config.hostName,
       appVersion: this.config.appVersion,
       capabilities: {
-        git: true,
-        claudeCode: true,
-        githubCli: true
+        git: this.capabilities.git,
+        gh: this.capabilities.gh,
+        claude: this.capabilities.claude
       },
       metadata: {
         projectCount: this.config.projects.length
@@ -138,13 +331,18 @@ export class ClaudeCenterWorker {
         await gcWorktrees(this.config, project.localPath, keep);
       }
     } catch (error) {
-      console.error(error);
+      this.log("error", `gcOrphanWorktrees: ${error}`);
     }
   }
 
   // 采集 claude 版本/订阅/用量 + 当前客户端策略，写入 DB 供 Console 展示。
   private async refreshInfo(): Promise<void> {
     this.lastInspect = await inspectClaude(this.config);
+    await this.reportInfo();
+  }
+
+  // 仅上报当前已知的动态信息 + 客户端策略（不重新采集 claude）。开关/并发改动后即时落库用。
+  private async reportInfo(): Promise<void> {
     await updateWorkerInfo(getPool(), this.config.workerId, {
       claudeVersion: this.lastInspect.claudeVersion,
       subscriptionType: this.lastInspect.subscriptionType,
@@ -183,48 +381,108 @@ export class ClaudeCenterWorker {
 
     const command = await claimNextDirectCommand(pool, this.config.workerId);
     if (command) {
-      this.track(`cmd:${command.id}`, executeDirectCommand(this.config, command));
+      this.startActive(
+        { key: `cmd:${command.id}`, taskId: null, kind: "command", title: `指令 ${command.command}` },
+        () => executeDirectCommand(this.config, command)
+      );
       return true;
     }
 
     // 先续接已收到回复的等待中任务，再处理打回重跑，最后才领全新任务。
     const resumable = await claimNextResumableTask(pool, this.config.workerId);
     if (resumable) {
-      this.track(`task:${resumable.id}`, resumeTask(this.config, resumable));
+      this.startActive(
+        { key: `task:${resumable.id}`, taskId: resumable.id, kind: "task", title: resumable.title },
+        (hooks) => resumeTask(this.config, resumable, hooks)
+      );
       return true;
     }
 
     const rejected = await claimNextRejectedTask(pool, this.config.workerId);
     if (rejected) {
-      this.track(`task:${rejected.id}`, rerunRejectedTask(this.config, rejected));
+      this.startActive(
+        { key: `task:${rejected.id}`, taskId: rejected.id, kind: "task", title: rejected.title },
+        (hooks) => rerunRejectedTask(this.config, rejected, hooks)
+      );
       return true;
     }
 
     const task = await claimNextTask(pool, this.config.workerId);
     if (task) {
-      this.track(`task:${task.id}`, executeTask(this.config, task));
+      this.startActive(
+        { key: `task:${task.id}`, taskId: task.id, kind: "task", title: task.title },
+        (hooks) => executeTask(this.config, task, hooks)
+      );
       return true;
     }
 
     // 最低优先级：轮转检查一个已建 PR 的 success 任务是否已合并，合并则清理工作树/分支并转 merged。
     const cleanup = await claimNextCleanupCandidate(pool, this.config.workerId);
     if (cleanup) {
-      this.track(`cleanup:${cleanup.id}`, cleanupMergedTask(this.config, cleanup));
+      this.startActive(
+        { key: `cleanup:${cleanup.id}`, taskId: cleanup.id, kind: "cleanup", title: cleanup.title },
+        () => cleanupMergedTask(this.config, cleanup)
+      );
       return true;
     }
 
     return false;
   }
 
-  // fire-and-forget 跟踪一个在途执行；完成后从 active 移除并催一次 tick（腾出的并行槽立刻再认领）。
-  private track(key: string, promise: Promise<void>): void {
-    const tracked = promise
-      .catch((error) => console.error(error))
+  // fire-and-forget 启动一个在途执行：建跟踪条目（含 Claude 子进程句柄回填 + 能力预检），完成后从 active 移除并催一次 tick。
+  private startActive(
+    meta: { key: string; taskId: string | null; kind: ActiveEntry["kind"]; title: string },
+    run: (hooks: ExecHooks) => Promise<void>
+  ): void {
+    const entry: ActiveEntry = {
+      promise: Promise.resolve(),
+      taskId: meta.taskId,
+      kind: meta.kind,
+      title: meta.title,
+      startedAt: new Date().toISOString(),
+      child: null,
+      cancelled: false
+    };
+    const hooks: ExecHooks = {
+      claudeAvailable: this.capabilities.claude.ok,
+      onClaudeSpawn: (child) => {
+        entry.child = child;
+      }
+    };
+    entry.promise = run(hooks)
+      .catch((error) => this.log("error", `${meta.key}: ${error instanceof Error ? error.message : String(error)}`))
       .finally(() => {
-        this.active.delete(key);
+        this.active.delete(meta.key);
         void this.tick();
       });
-    this.active.set(key, tracked);
+    this.active.set(meta.key, entry);
+  }
+
+  // 周期扫描:本 worker 名下被请求取消的在途任务 → 先抢占 cancelled 终态(防执行链 catch 的 markTaskFailed 覆盖)→ 再杀 Claude 进程树。
+  private async handleCancellations(): Promise<void> {
+    const ids = await listCancelRequestedTaskIds(getPool(), this.config.workerId);
+    if (!ids.length) {
+      return;
+    }
+    const wanted = new Set(ids);
+    for (const entry of this.active.values()) {
+      if (entry.kind !== "task" || !entry.taskId || entry.cancelled || !wanted.has(entry.taskId)) {
+        continue;
+      }
+      entry.cancelled = true;
+      try {
+        const ok = await markTaskCancelled(getPool(), entry.taskId, this.config.workerId, {
+          cancelledAt: new Date().toISOString(),
+          reason: "user requested"
+        });
+        if (entry.child) {
+          killProcessTree(entry.child);
+        }
+        this.log("info", `Task ${entry.taskId} cancelled (${ok ? "marked" : "already terminal"})`);
+      } catch (error) {
+        this.log("error", `cancel ${entry.taskId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   }
 }
 

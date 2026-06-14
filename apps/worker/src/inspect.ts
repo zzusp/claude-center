@@ -20,6 +20,11 @@ export type ClaudeInspect = {
   usage: WorkerUsage;
 };
 
+// 单个外部依赖的可用性自检结果:能否调用 + 解析出的版本号。
+export type Capability = { ok: boolean; version: string | null };
+// worker 执行任务依赖的三个外部命令的自检结果。registerWorker 用其替换原硬编码 capabilities。
+export type Capabilities = { git: Capability; gh: Capability; claude: Capability };
+
 // `claude --version` → "2.1.177 (Claude Code)"，取前导语义版本号。
 export async function getClaudeVersion(config: WorkerConfig): Promise<string | null> {
   try {
@@ -29,6 +34,27 @@ export async function getClaudeVersion(config: WorkerConfig): Promise<string | n
   } catch {
     return null;
   }
+}
+
+// 跑 `<cmd> --version` 自检单个命令:成功(退出 0)即 ok,顺带解析版本号。容错:命令不存在/报错 → {ok:false}。
+async function probeCommand(command: string, versionRe = /(\d+\.\d+\.\d+(?:[-.\w]*)?)/): Promise<Capability> {
+  try {
+    const result = await runCommand(command, ["--version"], { timeoutMs: 15_000 });
+    const match = result.stdout.match(versionRe) ?? result.stderr.match(versionRe);
+    return { ok: true, version: match?.[1] ?? null };
+  } catch {
+    return { ok: false, version: null };
+  }
+}
+
+// 启动时自检 worker 执行任务所需的三个外部命令是否可用。结果上报 DB(Console 可见)+ 桌面 UI 红绿点展示。
+export async function detectCapabilities(config: WorkerConfig): Promise<Capabilities> {
+  const [git, gh, claude] = await Promise.all([
+    probeCommand("git"),
+    probeCommand(config.ghCommand),
+    probeCommand(config.claudeCommand)
+  ]);
+  return { git, gh, claude };
 }
 
 // Claude Code 配置目录：CLAUDE_CONFIG_DIR 覆盖，否则 ~/.claude。凭据在其下 .credentials.json。

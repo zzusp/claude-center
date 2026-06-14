@@ -13,7 +13,8 @@ import type {
   TaskType,
   User,
   UserWithProjects,
-  Worker
+  Worker,
+  WorkerProjectLinkView
 } from "./types.js";
 
 export type WorkerRegistration = {
@@ -492,6 +493,50 @@ export async function upsertWorkerProjectLink(
   );
 }
 
+// worker 桌面端「关联项目」面板用:列出该 worker 当前所有项目关联(join 项目取展示信息)。
+export async function listWorkerProjectLinks(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<WorkerProjectLinkView[]> {
+  const result = await client.query<WorkerProjectLinkView>(
+    `SELECT worker_project_links.project_id,
+            worker_project_links.local_path,
+            worker_project_links.enabled,
+            projects.name AS project_name,
+            projects.repo_url,
+            projects.default_branch
+       FROM worker_project_links
+       JOIN projects ON projects.id = worker_project_links.project_id
+      WHERE worker_project_links.worker_id = $1
+      ORDER BY projects.name ASC`,
+    [workerId]
+  );
+  return result.rows;
+}
+
+// worker 桌面端删除一条本地添加的项目关联。按 projectName|repoUrl 解析 project 后删除该 (worker, project, localPath) 行。
+export async function removeWorkerProjectLink(
+  client: pg.Pool | pg.PoolClient,
+  input: ProjectLinkInput
+): Promise<void> {
+  const match = await client.query<{ id: string }>(
+    `SELECT id FROM projects
+      WHERE ($1::text IS NOT NULL AND name = $1)
+         OR ($2::text IS NOT NULL AND repo_url = $2)
+      LIMIT 1`,
+    [input.projectName ?? null, input.repoUrl ?? null]
+  );
+  const project = match.rows[0];
+  if (!project) {
+    return;
+  }
+  await client.query(
+    `DELETE FROM worker_project_links
+      WHERE worker_id = $1 AND project_id = $2 AND local_path = $3`,
+    [input.workerId, project.id, input.localPath]
+  );
+}
+
 export async function claimNextTask(client: pg.Pool | pg.PoolClient, workerId: string): Promise<Task | null> {
   const result = await client.query<Task>(
     `WITH candidate AS (
@@ -590,16 +635,78 @@ export async function markTaskFailed(
   resultPayload: Record<string, unknown>
 ): Promise<void> {
   await client.query(
+    // status <> 'cancelled' 守卫:取消在途任务时 runner 先把任务抢占为 cancelled 再杀 Claude 进程,
+    // 进程被杀导致执行链 reject 走到这里的 markTaskFailed 不能把 cancelled 覆盖回 failed。现有调用点
+    // 任务都处于 claimed/running/waiting,该守卫对正常失败路径零影响。
     `UPDATE tasks
         SET status = 'failed',
             finished_at = now(),
             error_message = $3,
             result = $4,
             updated_at = now()
-      WHERE id = $1 AND claimed_by = $2`,
+      WHERE id = $1 AND claimed_by = $2 AND status <> 'cancelled'`,
     [taskId, workerId, errorMessage, resultPayload]
   );
   await addTaskEvent(client, taskId, workerId, "failed", errorMessage, resultPayload);
+}
+
+// Console 请求取消在途任务:仅 claimed/running/waiting 可取消,打 cancel_requested_at 时间戳供 Worker 扫描。
+// 返回更新后的任务;非在途态(已终态/draft/pending 等)返回 null,Console 据此提示「不可取消」。
+export async function requestTaskCancellation(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string
+): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET cancel_requested_at = now(), updated_at = now()
+      WHERE id = $1 AND status IN ('claimed', 'running', 'waiting')
+      RETURNING *`,
+    [taskId]
+  );
+  const task = result.rows[0];
+  if (!task) {
+    return null;
+  }
+  await addTaskEvent(client, taskId, task.claimed_by, "cancel_requested", "Cancellation requested by user", {});
+  return task;
+}
+
+// Worker tick 扫描:该 worker 名下、仍在途、已被请求取消的任务 id。命中则 Worker 杀进程并翻 cancelled。
+export async function listCancelRequestedTaskIds(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<string[]> {
+  const result = await client.query<{ id: string }>(
+    `SELECT id FROM tasks
+      WHERE claimed_by = $1
+        AND cancel_requested_at IS NOT NULL
+        AND status IN ('claimed', 'running', 'waiting')`,
+    [workerId]
+  );
+  return result.rows.map((row) => row.id);
+}
+
+// Worker 取消落终态:仅在途态可翻为 cancelled(守卫防覆盖已成功完成的任务)。返回是否成功翻转。
+export async function markTaskCancelled(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  workerId: string,
+  resultPayload: Record<string, unknown>
+): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE tasks
+        SET status = 'cancelled',
+            finished_at = now(),
+            result = $3,
+            updated_at = now()
+      WHERE id = $1 AND claimed_by = $2 AND status IN ('claimed', 'running', 'waiting')`,
+    [taskId, workerId, resultPayload]
+  );
+  const cancelled = (result.rowCount ?? 0) > 0;
+  if (cancelled) {
+    await addTaskEvent(client, taskId, workerId, "cancelled", "Task cancelled by worker", resultPayload);
+  }
+  return cancelled;
 }
 
 // 人工验收通过：仅 success 可验收，翻为终态 accepted。返回 null 表示任务不在待验收态。
