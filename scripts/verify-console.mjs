@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,6 +18,12 @@ const baseUrl = `http://${host}:${port}`;
 
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL is required");
+}
+
+// 清 .next：next build 与 dev server 同写 .next 会假报错，验证前清一次保证 hermetic（尤其 worktree 内）。
+const dotNext = path.join(consoleDir, ".next");
+if (existsSync(dotNext)) {
+  rmSync(dotNext, { recursive: true, force: true });
 }
 
 const child = spawn(process.execPath, [nextBin, "dev", "--hostname", host, "--port", port], {

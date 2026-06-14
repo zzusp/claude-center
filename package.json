@@ -12,7 +12,10 @@
     "dev:worker": "npm -w @claude-center/worker run dev",
     "verify:console": "npm -w @claude-center/db run build && node scripts/verify-console.mjs",
     "build": "npm -w @claude-center/db run build && npm -w @claude-center/console run build && npm -w @claude-center/worker run build",
-    "typecheck": "npm -w @claude-center/db run typecheck && npm -w @claude-center/console run typecheck && npm -w @claude-center/worker run typecheck"
+    "typecheck": "npm -w @claude-center/db run typecheck && npm -w @claude-center/console run typecheck && npm -w @claude-center/worker run typecheck",
+    "clean:next": "node scripts/clean-next.mjs",
+    "setup:worktree": "node scripts/setup-worktree.mjs",
+    "db:ephemeral": "node scripts/ephemeral-db.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
