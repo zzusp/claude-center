@@ -276,6 +276,7 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
         workBranch: data.get("workBranch"),
         targetBranch: data.get("targetBranch"),
         submitMode: data.get("submitMode"),
+        autoMergePr: data.get("autoMergePr") === "on",
         model: data.get("model"),
         dependsOn: data.getAll("dependsOn").map(String),
         scheduledAt
@@ -901,6 +902,7 @@ function ComposeTaskForm({
   const [branchState, setBranchState] = useState<"idle" | "loading" | "error">("idle");
   const [taskType, setTaskType] = useState<"work" | "qa">("work");
   const [submitMode, setSubmitMode] = useState<"pr" | "push">("pr");
+  const [autoMergePr, setAutoMergePr] = useState(false);
   const [model, setModel] = useState<"default" | "opus" | "sonnet" | "haiku">("default");
   const isQa = taskType === "qa";
 
@@ -1026,6 +1028,23 @@ function ComposeTaskForm({
               />
             </div>
           </div>
+          {submitMode === "pr" ? (
+            <div className="field">
+              <label className="field-label">
+                自动合并 PR <span className="field-hint">PR 创建后由 Worker 自动 gh pr merge --merge</span>
+              </label>
+              <Select
+                name="autoMergePr"
+                value={autoMergePr ? "on" : "off"}
+                onChange={(value) => setAutoMergePr(value === "on")}
+                options={[
+                  { value: "off", label: "否 · 仅创建 PR" },
+                  { value: "on", label: "是 · 创建后自动合并" }
+                ]}
+                ariaLabel="自动合并 PR"
+              />
+            </div>
+          ) : null}
         </>
       )}
       <div className="field">

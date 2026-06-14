@@ -80,6 +80,8 @@ export async function createTask(
     workBranch: string;
     targetBranch: string;
     submitMode: TaskSubmitMode;
+    // 自动合并 PR：仅 PR 模式有意义，Worker 建 PR 后自动 gh pr merge --merge。
+    autoMergePr: boolean;
     // 任务级 Claude 执行模型；'default' 表示 Worker 执行时不传 --model。
     model: TaskModel;
     // 指定发布时间则落 'scheduled' 定时态，到点由调度器转 pending；为空走默认 'draft'。
@@ -89,8 +91,8 @@ export async function createTask(
   const scheduledAt = input.scheduledAt ?? null;
   const status = scheduledAt ? "scheduled" : "draft";
   const result = await client.query<Task>(
-    `INSERT INTO tasks (project_id, task_type, title, description, base_branch, work_branch, target_branch, submit_mode, model, status, scheduled_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    `INSERT INTO tasks (project_id, task_type, title, description, base_branch, work_branch, target_branch, submit_mode, model, auto_merge_pr, status, scheduled_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING *`,
     [
       input.projectId,
@@ -102,6 +104,7 @@ export async function createTask(
       input.targetBranch,
       input.submitMode,
       input.model,
+      input.autoMergePr,
       status,
       scheduledAt
     ]

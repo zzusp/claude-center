@@ -246,6 +246,9 @@ export default function TaskDetailPage({
                     <KvRow k="工作分支" v={task.work_branch} mono />
                     <KvRow k="目标分支" v={task.target_branch} mono />
                     <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
+                    {task.submit_mode === "pr" ? (
+                      <KvRow k="自动合并 PR" v={task.auto_merge_pr ? "是 · 创建后自动合并" : "否"} />
+                    ) : null}
                   </>
                 )}
                 <KvRow
