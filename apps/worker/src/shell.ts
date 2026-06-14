@@ -57,8 +57,14 @@ export function runCommand(
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
+      // 默认 shell:false（直接 CreateProcess，不经 cmd.exe）。Windows 下 shell:true 会把 args
+      // 用空格拼成命令行交给 cmd.exe 且不给含空格的参数加引号，commit message / PR 标题等被按空格
+      // 拆成多个 token（曾导致 `git commit -m "ClaudeCenter task: ..."` 报 pathspec 不匹配）；
+      // PR body 含换行更无法经 cmd 承载。本 worker 调用的 git / gh / claude 在标准安装下均为真 .exe，
+      // shell:false 可直接 spawn 且 args 原样作为独立 argv 传入。.cmd/.bat 形态需走终端形态（在终端
+      // shell 内执行），不依赖此默认。
       cwd: options.cwd,
-      shell: options.shell ?? process.platform === "win32",
+      shell: options.shell ?? false,
       windowsHide: true,
       env: options.env ?? process.env
     });

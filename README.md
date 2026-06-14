@@ -156,7 +156,9 @@ Worker 桌面窗口除两个开关外，还提供**并发上限**数字输入（
 
 ## 真并发执行（git worktree 隔离）
 
-Worker 可**同时执行多个任务**，上限由 `CLAUDE_CENTER_MAX_PARALLEL`（默认 1）控制。每个任务在**独立的 git worktree**（`~/.claude-center/worktrees/<taskId>`，从 `origin/<base>` 起工作分支）里跑，互不踩主仓与彼此，故**同项目也能并发**。worktree 生命周期跨 waiting/resume/rejected 持有，进终态（merged/failed）即拆；启动时 GC 清理终态任务的残留 worktree。实现见 `apps/worker/src/worktree.ts`、`runner.ts`。
+Worker 可**同时执行多个任务**，上限由 `CLAUDE_CENTER_MAX_PARALLEL`（默认 1）控制。每个任务在**独立的 git worktree**（项目主仓内 `<localPath>/.claude/worktrees/worktree-<taskId>`，从 `origin/<base>` 起工作分支）里跑，互不踩主仓与彼此，故**同项目也能并发**。worktree 建在项目目录内（与 Claude Code 原生 `.claude/worktrees/` 约定一致）而非全局数据目录——cwd 落在项目路径前缀下，Claude Code 的 session 记录因而紧邻项目普通 session；主仓由本地 `.git/info/exclude` 忽略该目录保持干净。worktree 生命周期跨 waiting/resume/rejected 持有，进终态（merged/failed）即拆；启动时 GC 仅清理 `worktree-<UUID>` 任务树（不碰同目录下 Claude Code dev 树）。实现见 `apps/worker/src/worktree.ts`、`runner.ts`。
+
+任务执行期间，Worker 周期性（约 20s）把当前任务对应的 Claude Code session transcript（`.jsonl` 全文）同步到 `task_sessions` 表，进终态（成功/失败/超时/取消）再强制同步一次；Console 任务详情页「执行会话」区读取解析后回放整段会话。实现见 `apps/worker/src/session.ts`、`apps/console/app/ui/task-detail.tsx`。
 
 ## 取消在途任务
 

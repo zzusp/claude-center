@@ -480,7 +480,7 @@ export class ClaudeCenterWorker {
       const activeIds = await listActiveTaskIdsForWorker(getPool(), this.config.workerId);
       const keep = new Set(activeIds);
       for (const project of this.config.projects) {
-        await gcWorktrees(this.config, project.localPath, keep);
+        await gcWorktrees(project.localPath, keep);
       }
     } catch (error) {
       this.log("error", `gcOrphanWorktrees: ${error}`);

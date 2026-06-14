@@ -1,0 +1,17 @@
+case,priority,desc,round-1,note
+TYPECHECK,P0,三包 tsc --noEmit,PASS,db/console/worker 全绿
+BUILD,P0,三包构建(含 next build),PASS,/api/tasks/[id]/session 已注册
+A-SHELL,P0,含空格 commit message 不被拆(复现并修复原 bug),PASS,git log -1 %s == 完整 message
+B1-WT-PATH,P0,worktreePathFor 落在 <repo>/.claude/worktrees/worktree-<id>,PASS,
+B2-WT-BUILD,P0,ensureWorktree 建出任务工作树,PASS,
+B3-MAIN-CLEAN,P0,主仓 git status 干净(info/exclude 忽略),PASS,
+B4-WT-COMMIT,P0,工作树内含空格 commit 成功,PASS,镜像 finalizeTask
+B5-GC-KEEP,P0,GC 保留 keep 集任务树,PASS,
+B6-GC-DROP,P0,GC 删除非 keep 任务树,PASS,
+B7-GC-SAFE,P0,GC 不碰 dev slug 树,PASS,防误删 Claude Code dev worktree
+C1-SESS-READ,P0,readSessionJsonl 取目录内最新 .jsonl 全文,PASS,encode(cwd) 实证吻合
+C2-SESS-NULL,P1,无 transcript 目录返回 null,PASS,
+D1-UPSERT,P0,upsertTaskSession+getTaskSession 首写,PASS,
+D2-OVERWRITE,P0,upsert 覆盖更新,PASS,
+D3-SYNC-STOP,P0,startTaskSessionSync.stop() 强制同步完整入库,PASS,覆盖终态同步
+VERIFY-CONSOLE,P0,401→登录→200(临时库含018),PASS,db health ok

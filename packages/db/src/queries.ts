@@ -1002,6 +1002,33 @@ export async function setTaskWaiting(
   );
 }
 
+// 任务执行会话记录（Claude Code session transcript 全文）的同步落库。Worker 执行期间周期 + 终态调用，
+// 1:1 侧表 upsert，避免大字段进 tasks.* 读路径。
+export async function upsertTaskSession(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  jsonl: string
+): Promise<void> {
+  await client.query(
+    `INSERT INTO task_sessions (task_id, jsonl, synced_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (task_id) DO UPDATE SET jsonl = EXCLUDED.jsonl, synced_at = now()`,
+    [taskId, jsonl]
+  );
+}
+
+// 读取任务的会话 transcript（供 Console 渲染）。无则返回 null。
+export async function getTaskSession(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string
+): Promise<{ jsonl: string; synced_at: string } | null> {
+  const result = await client.query<{ jsonl: string; synced_at: string }>(
+    `SELECT jsonl, synced_at FROM task_sessions WHERE task_id = $1 LIMIT 1`,
+    [taskId]
+  );
+  return result.rows[0] ?? null;
+}
+
 export async function setTaskClaudeSession(
   client: pg.Pool | pg.PoolClient,
   taskId: string,
