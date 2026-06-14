@@ -15,7 +15,7 @@ DL-13,P0,失败轮终态不自动重试 + 用户再发消息后可领新轮,PASS
 DL-14,P0,listConversations RBAC 项目白名单过滤(有权/空/admin-null),PASS
 DL-15,P0,getConversationLocalPath 经 worker_project_links 解析检出路径,PASS
 DL-16,P0,closeConversation 置 closed + 关闭后不再可领,PASS
-WS-01,P1,claude stream-json 事件 schema 真跑校验,PENDING
+WS-01,P1,claude stream-json 事件 schema 真跑校验(2.1.177),PASS
 WS-02,P1,worker 增量解析 → chunks 落库 + NOTIFY,PENDING
 WS-03,P1,executeConversationTurn 只读 worktree 不产生 git 改动,PENDING
 SSE-01,P2,SSE 端点首连补发已有 chunks + 后续 NOTIFY 推送,PENDING

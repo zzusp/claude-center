@@ -119,13 +119,15 @@ SELECT 出一个会话：其 worker_id = $1、status='active'，
 
 ### 5.1 Worker 侧：换流式输出格式
 
-现 `spawnClaude` 用 `--output-format json`（executor.ts:93）整段缓冲。新增**流式调用形态**：
+现 `spawnClaude` 用 `--output-format json`（executor.ts:93）整段缓冲。新增**流式调用形态**：`--output-format stream-json --verbose --include-partial-messages`。
 
-- `--output-format stream-json --verbose`（claude CLI 按行输出 NDJSON 事件流；assistant 文本增量来自 `type:"assistant"` / partial message 事件）。
-- 经 `onSpawn(child)` 拿 `child.stdout`，按行缓冲解析（split `\n`，逐行 `JSON.parse`），抽取文本增量与末尾 `type:"result"` 的 `session_id` / 终态。
-- `runCommand` 现仍 resolve 完整 `CommandResult`（兜底拿 stderr / 退出码）；增量在 `onSpawn` 流式产出，二者并存。
+**已真跑校验（claude 2.1.177，证据 `docs/acceptance/worker-direct-chat/round-1.md`）的 NDJSON 事件 schema**：
 
-> 实施时需对 `claude --output-format stream-json` 的实际事件 schema 做一次真跑校验（字段名以实测为准），这是本特性唯一的外部不确定点，**先验证再编码**。
+- **token 增量**：`type:"stream_event"` + `event.type:"content_block_delta"` + `event.delta.type:"text_delta"` → 取 `event.delta.text`。增量为**块级**（几个 token 一批、非严格逐字），仍呈打字机感。
+- **会话 id + 终态**：末行 `type:"result"` + `subtype:"success"`，带 `session_id` 与 `result`（完整全文，作 finalize `body` 的权威来源）。
+- **须容错跳过**：`system`(init/status) / `message_start` / `content_block_start|stop` / `message_delta` / `message_stop` / `rate_limit_event` 等忽略；**非 JSON 行也要跳过**（stderr 的 "no stdin data" 警告可能混入）。
+
+解析：`onSpawn(child)` 拿 `child.stdout`，按 `\n` 缓冲分行、逐行 `try JSON.parse`，命中 text_delta 即 `appendConversationChunk` + NOTIFY；`runCommand` 仍 resolve 完整 `CommandResult` 兜底退出码 / stderr。
 
 ### 5.2 Console 侧：SSE 端点 + 单连接 LISTEN 扇出
 
