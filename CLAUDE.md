@@ -42,15 +42,20 @@ npm run verify:console     # 起 console，断言 401→登录→200，自动关
 
 ## worktree 验证准备
 
-worktree 不继承主检出的 `node_modules` / `.env`（均 gitignore）。一条命令准备：
+worktree 是全新检出，不带主检出的 `node_modules` / `.env`（均 gitignore）。
+
+**`.env` 等 gitignore 配置**：Claude Code 建 worktree 时（`claude --worktree` / `EnterWorktree` / 子代理 / 桌面端）会按项目根 **`.worktreeinclude`**（.gitignore 语法）自动把「匹配且被忽略」的文件拷进去——本仓已配 `.env` / `.env.local`，无需手动复制。**例外**：手动 `git worktree add` 不走 `.worktreeinclude`，用下面的 setup 脚本补。
+
+**依赖 + 构建缓存**（Claude Code 无原生自动装依赖，仍要自己来）：
 
 ```powershell
-node scripts/setup-worktree.mjs            # 装依赖(暖缓存) + 从主检出复制 .env + 清 .next
+node scripts/setup-worktree.mjs            # 装依赖(暖缓存) + 复制 .env(仅手动建树时) + 清 .next
 node scripts/setup-worktree.mjs --check    # 只看计划
 ```
 
-- **不要整体 junction / symlink 主检出的 `node_modules`**：本仓是 npm workspaces，`node_modules/@claude-center/{console,db,worker}` 是指回 `apps/`、`packages/` 源码的 junction；整体复用会让 worktree 编译到**主检出的源码**而非本分支改动。用 `npm install --prefer-offline`（暖缓存，约 1 分钟）。
+- **不要整体 junction / symlink 主检出的 `node_modules`，也不要把 `node_modules` 写进 `.worktreeinclude`**：本仓是 npm workspaces，`node_modules/@claude-center/{console,db,worker}` 是指回 `apps/`、`packages/` 源码的 junction；整体复用会让 worktree 编译到**主检出的源码**而非本分支改动。用 `npm install --prefer-offline`（暖缓存，约 1 分钟）。
 - `next build` 与 dev server 同写 `apps/console/.next` 会在 "Collecting page data" 阶段假报错；build 前用 `npm run clean:next` 或 setup 脚本清。
+- worktree 基线默认 `origin/HEAD`（远程默认分支最新），与「起点要新」一致；如需基于本地未推送改动建树，在 `.claude/settings.json` 设 `worktree.baseRef: "head"`（仅 `"fresh"` / `"head"`）。
 
 ## UI（`apps/console/app/ui`）
 

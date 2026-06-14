@@ -1,0 +1,6 @@
+# Claude Code 建 worktree 时自动拷进去的 gitignore 文件（.gitignore 语法，只拷「匹配且被忽略」的）。
+# 见 https://code.claude.com/docs/en/worktrees#copy-gitignored-files-into-worktrees
+# 注意：手动 git worktree add 不走本文件，用 scripts/setup-worktree.mjs 补 .env。
+# 切勿把 node_modules 写进来：本仓是 npm workspaces，应在 worktree 内 npm install 重建本地 workspace 链。
+.env
+.env.local
