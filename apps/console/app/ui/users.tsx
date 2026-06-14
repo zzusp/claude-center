@@ -22,7 +22,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
-  Empty, KvRow, MergeStatusBadge, StatusBadge, StatusDot, TaskTypeBadge,
+  Empty, KvRow, MergeStatusBadge, StatusBadge, StatusDot,
   fmtDateTime, fmtTime, metaOf, postJson, type Tone
 } from "./shared";
 import {

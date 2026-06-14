@@ -22,7 +22,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
-  Empty, KvRow, MergeStatusBadge, StatusBadge, StatusDot, TaskTypeBadge,
+  Empty, KvRow, MergeStatusBadge, StatusBadge, StatusDot,
   fmtDateTime, fmtTime, metaOf, postJson, type Tone
 } from "./shared";
 import {
@@ -190,7 +190,6 @@ function TasksView({
                     <th>状态</th>
                     <th>任务</th>
                     <th>项目</th>
-                    <th>类型</th>
                     <th>分支</th>
                     <th>合并</th>
                     <th
@@ -216,11 +215,8 @@ function TasksView({
                         <span className="t-title">{task.title}</span>
                       </td>
                       <td className="t-meta">{task.project_name ?? task.project_id}</td>
-                      <td>
-                        <TaskTypeBadge type={task.task_type} />
-                      </td>
-                      <td className="mono">{task.task_type === "qa" ? "对话" : task.work_branch}</td>
-                      <td>{task.task_type === "qa" ? <span className="t-meta">—</span> : <MergeStatusBadge status={task.merge_status} />}</td>
+                      <td className="mono">{task.work_branch}</td>
+                      <td><MergeStatusBadge status={task.merge_status} /></td>
                       <td className="t-right t-num">{fmtDateTime(task.updated_at)}</td>
                     </tr>
                   ))}
@@ -284,11 +280,9 @@ function ComposeTaskForm({
 }) {
   const [branches, setBranches] = useState<string[]>([]);
   const [branchState, setBranchState] = useState<"idle" | "loading" | "error">("idle");
-  const [taskType, setTaskType] = useState<"work" | "qa">("work");
   const [submitMode, setSubmitMode] = useState<"pr" | "push">("pr");
   const [autoMergePr, setAutoMergePr] = useState(false);
   const [model, setModel] = useState<"default" | "opus" | "sonnet" | "haiku">("default");
-  const isQa = taskType === "qa";
 
   useEffect(() => {
     if (!selectedProjectId) {
@@ -335,19 +329,6 @@ function ComposeTaskForm({
   return (
     <form className="form" onSubmit={onSubmit}>
       <div className="field">
-        <label className="field-label">类型</label>
-        <Select
-          name="taskType"
-          value={taskType}
-          onChange={(value) => setTaskType(value as "work" | "qa")}
-          options={[
-            { value: "work", label: "工作类 · 改代码并开 PR" },
-            { value: "qa", label: "问答类 · 纯对话不碰 git" }
-          ]}
-          ariaLabel="任务类型"
-        />
-      </div>
-      <div className="field">
         <label className="field-label">项目</label>
         <Select
           value={selectedProjectId}
@@ -359,78 +340,74 @@ function ComposeTaskForm({
       </div>
       <div className="field">
         <label className="field-label">标题</label>
-        <input name="title" placeholder={isQa ? "心跳间隔是多少？" : "修复登录按钮状态"} required />
+        <input name="title" placeholder="修复登录按钮状态" required />
       </div>
       <div className="field">
-        <label className="field-label">{isQa ? "问题" : "目标"}</label>
+        <label className="field-label">目标</label>
         <textarea
           name="description"
           rows={4}
-          placeholder={isQa ? "向 Claude 提出关于该项目的问题" : "写清期望行为、约束和验收方式"}
+          placeholder="写清期望行为、约束和验收方式"
           required
         />
       </div>
-      {isQa ? null : (
-        <>
-          <div className="form-row">
-            <div className="field">
-              <label className="field-label">
-                签出分支 <span className="field-hint">{branchHint}</span>
-              </label>
-              <input name="baseBranch" list="cc-branch-list" defaultValue="main" placeholder="main" />
-            </div>
-            <div className="field">
-              <label className="field-label">
-                PR 目标分支 <span className="field-hint">留空同签出分支</span>
-              </label>
-              <input name="targetBranch" list="cc-branch-list" placeholder="main" />
-            </div>
-          </div>
-          <datalist id="cc-branch-list">
-            {branches.map((branch) => (
-              <option key={branch} value={branch} />
-            ))}
-          </datalist>
-          <div className="form-row">
-            <div className="field">
-              <label className="field-label">
-                工作分支 <span className="field-hint">留空自动生成</span>
-              </label>
-              <input name="workBranch" placeholder="cc/..." />
-            </div>
-            <div className="field">
-              <label className="field-label">提交模式</label>
-              <Select
-                name="submitMode"
-                value={submitMode}
-                onChange={(value) => setSubmitMode(value as "pr" | "push")}
-                options={[
-                  { value: "pr", label: "创建 PR" },
-                  { value: "push", label: "直接提交推送" }
-                ]}
-                ariaLabel="提交模式"
-              />
-            </div>
-          </div>
-          {submitMode === "pr" ? (
-            <div className="field">
-              <label className="field-label">
-                自动合并 PR <span className="field-hint">PR 创建后由 Worker 自动 gh pr merge --merge</span>
-              </label>
-              <Select
-                name="autoMergePr"
-                value={autoMergePr ? "on" : "off"}
-                onChange={(value) => setAutoMergePr(value === "on")}
-                options={[
-                  { value: "off", label: "否 · 仅创建 PR" },
-                  { value: "on", label: "是 · 创建后自动合并" }
-                ]}
-                ariaLabel="自动合并 PR"
-              />
-            </div>
-          ) : null}
-        </>
-      )}
+      <div className="form-row">
+        <div className="field">
+          <label className="field-label">
+            签出分支 <span className="field-hint">{branchHint}</span>
+          </label>
+          <input name="baseBranch" list="cc-branch-list" defaultValue="main" placeholder="main" />
+        </div>
+        <div className="field">
+          <label className="field-label">
+            PR 目标分支 <span className="field-hint">留空同签出分支</span>
+          </label>
+          <input name="targetBranch" list="cc-branch-list" placeholder="main" />
+        </div>
+      </div>
+      <datalist id="cc-branch-list">
+        {branches.map((branch) => (
+          <option key={branch} value={branch} />
+        ))}
+      </datalist>
+      <div className="form-row">
+        <div className="field">
+          <label className="field-label">
+            工作分支 <span className="field-hint">留空自动生成</span>
+          </label>
+          <input name="workBranch" placeholder="cc/..." />
+        </div>
+        <div className="field">
+          <label className="field-label">提交模式</label>
+          <Select
+            name="submitMode"
+            value={submitMode}
+            onChange={(value) => setSubmitMode(value as "pr" | "push")}
+            options={[
+              { value: "pr", label: "创建 PR" },
+              { value: "push", label: "直接提交推送" }
+            ]}
+            ariaLabel="提交模式"
+          />
+        </div>
+      </div>
+      {submitMode === "pr" ? (
+        <div className="field">
+          <label className="field-label">
+            自动合并 PR <span className="field-hint">PR 创建后由 Worker 自动 gh pr merge --merge</span>
+          </label>
+          <Select
+            name="autoMergePr"
+            value={autoMergePr ? "on" : "off"}
+            onChange={(value) => setAutoMergePr(value === "on")}
+            options={[
+              { value: "off", label: "否 · 仅创建 PR" },
+              { value: "on", label: "是 · 创建后自动合并" }
+            ]}
+            ariaLabel="自动合并 PR"
+          />
+        </div>
+      ) : null}
       <div className="field">
         <label className="field-label">
           执行模型 <span className="field-hint">该任务执行时用哪个 Claude 模型，默认跟随 Worker</span>
@@ -472,7 +449,7 @@ function ComposeTaskForm({
       </div>
       <button className="btn btn-primary" disabled={busy || overview.projects.length === 0} type="submit">
         <Send size={16} />
-        {isQa ? "发起问答" : "入队"}
+        入队
       </button>
     </form>
   );

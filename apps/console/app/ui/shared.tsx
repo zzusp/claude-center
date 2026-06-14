@@ -1,4 +1,3 @@
-import { GitBranch, MessageSquare } from "lucide-react";
 import type { ReactNode } from "react";
 
 // 跨 dashboard / 任务详情页复用的展示原子与格式化工具。无状态、可在任意 client 组件中使用。
@@ -91,16 +90,6 @@ export function MergeStatusBadge({ status }: { status: string }) {
     <span className="badge" data-tone={meta.tone}>
       <span className="glyph">{meta.glyph}</span>
       {meta.label}
-    </span>
-  );
-}
-
-export function TaskTypeBadge({ type }: { type: string }) {
-  const isQa = type === "qa";
-  return (
-    <span className="badge" data-tone={isQa ? "waiting" : "queued"}>
-      {isQa ? <MessageSquare size={12} /> : <GitBranch size={12} />}
-      {isQa ? "问答" : "工作"}
     </span>
   );
 }

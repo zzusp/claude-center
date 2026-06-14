@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { FormEvent, ReactNode, useMemo, useState } from "react";
-import { Empty, KvRow, StatusBadge, TaskTypeBadge, fmtTime, postJson } from "./shared";
+import { Empty, KvRow, StatusBadge, fmtTime, postJson } from "./shared";
 import { usePolling } from "../lib/use-polling";
 
 const EVENT_LABEL: Record<string, string> = {
@@ -138,7 +138,6 @@ export default function TaskDetailPage({
     }
   }
 
-  const isQa = task.task_type === "qa";
   const isBlocked = task.status === "pending" && (task.blocked ?? false);
   const canPublish = (task.status === "draft" || task.status === "scheduled") && canCreateTask;
   const canReview = task.status === "success" && canCreateTask;
@@ -201,19 +200,14 @@ export default function TaskDetailPage({
                 ⛔ 前置未完成·阻塞中
               </span>
             ) : null}
-            <TaskTypeBadge type={task.task_type} />
-            {isQa ? null : (
-              <>
-                <span className="tag">
-                  <GitBranch size={13} className="ico" />
-                  {task.base_branch} → {task.work_branch}
-                </span>
-                <span className="tag">
-                  {task.submit_mode === "push" ? `直推 ${task.target_branch}` : `PR → ${task.target_branch}`}
-                </span>
-              </>
-            )}
-            {!isQa && task.pr_url ? (
+            <span className="tag">
+              <GitBranch size={13} className="ico" />
+              {task.base_branch} → {task.work_branch}
+            </span>
+            <span className="tag">
+              {task.submit_mode === "push" ? `直推 ${task.target_branch}` : `PR → ${task.target_branch}`}
+            </span>
+            {task.pr_url ? (
               <a className="tag" href={task.pr_url} target="_blank" rel="noreferrer">
                 <ExternalLink size={13} className="ico" />
                 PR
@@ -275,13 +269,13 @@ export default function TaskDetailPage({
 
         <div className="detail-grid">
           <div className="detail-main">
-            <Section icon={<FileText size={15} />} title={isQa ? "问题" : "描述"}>
+            <Section icon={<FileText size={15} />} title="描述">
               <p className="detail-desc">{task.description || "（无描述）"}</p>
               {task.error_message ? <div className="error-box">{task.error_message}</div> : null}
             </Section>
 
             <Section icon={<MessageSquare size={15} />} title="对话">
-              <TaskConversation task={task} canComment={canComment} canCreateTask={canCreateTask} />
+              <TaskConversation task={task} canComment={canComment} />
             </Section>
 
             <Section icon={<Activity size={15} />} title="活动">
@@ -314,21 +308,16 @@ export default function TaskDetailPage({
             <Section icon={<Info size={15} />} title="信息">
               <div className="kv">
                 <KvRow k="项目" v={task.project_name ?? task.project_id} />
-                <KvRow k="类型" v={isQa ? "问答类 · 纯对话" : "工作类 · 改代码开 PR"} />
-                {isQa ? null : (
-                  <>
-                    <KvRow k="签出分支" v={task.base_branch} mono />
-                    <KvRow k="工作分支" v={task.work_branch} mono />
-                    <KvRow k="目标分支" v={task.target_branch} mono />
-                    <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
-                    {task.submit_mode === "pr" ? (
-                      <KvRow k="自动合并 PR" v={task.auto_merge_pr ? "是 · 创建后自动合并" : "否"} />
-                    ) : null}
-                  </>
-                )}
+                <KvRow k="签出分支" v={task.base_branch} mono />
+                <KvRow k="工作分支" v={task.work_branch} mono />
+                <KvRow k="目标分支" v={task.target_branch} mono />
+                <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
+                {task.submit_mode === "pr" ? (
+                  <KvRow k="自动合并 PR" v={task.auto_merge_pr ? "是 · 创建后自动合并" : "否"} />
+                ) : null}
                 <KvRow k="执行模型" v={modelLabel} />
                 <KvRow k="Session ID" v={task.claude_session_id ?? "—"} mono />
-                {!isQa && task.pr_url ? (
+                {task.pr_url ? (
                   <KvRow
                     k="PR"
                     v={
@@ -467,43 +456,17 @@ function TaskReviewActions({ task, onReviewed }: { task: Task; onReviewed: () =>
 
 function TaskConversation({
   task,
-  canComment,
-  canCreateTask
+  canComment
 }: {
   task: Task;
   canComment: boolean;
-  canCreateTask: boolean;
 }) {
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState(false);
-  const [closing, setClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const waiting = task.status === "waiting";
-  const isQa = task.task_type === "qa";
-  const closed = ["success", "failed", "cancelled"].includes(task.status);
   const canReply = waiting && canComment;
-
-  async function closeConversation() {
-    setClosing(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/tasks/${task.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "complete" })
-      });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error ?? `结束失败：${response.status}`);
-      }
-      // 状态翻转交给详情轮询刷新；这里不本地改 task。
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "结束失败");
-    } finally {
-      setClosing(false);
-    }
-  }
 
   usePolling(
     async (isActive) => {
@@ -549,7 +512,7 @@ function TaskConversation({
       {comments.length === 0 ? (
         <Empty
           icon={<MessageSquare size={28} />}
-          text={isQa ? "等待 Claude 回答…答案会显示在这里。" : "暂无对话。Worker 需要确认时会在此提问。"}
+          text="暂无对话。Worker 需要确认时会在此提问。"
         />
       ) : (
         <div className="chat-stream">
@@ -579,14 +542,8 @@ function TaskConversation({
             !canComment
               ? "你没有任务对话权限"
               : waiting
-                ? isQa
-                  ? "继续追问，提交后 Claude 会续接同一会话回答…"
-                  : "回复 Worker 的提问，提交后将续接执行…"
-                : isQa
-                  ? closed
-                    ? "对话已结束"
-                    : "等待 Claude 回答中…"
-                  : "仅在任务「等待回复」时可回复"
+                ? "回复 Worker 的提问，提交后将续接执行…"
+                : "仅在任务「等待回复」时可回复"
           }
           disabled={!canReply || busy}
         />
@@ -594,13 +551,8 @@ function TaskConversation({
         <div className="chat-actions">
           <button className="btn btn-primary" type="submit" disabled={!canReply || busy || !reply.trim()}>
             <Send size={16} />
-            {!canComment ? "无回复权限" : waiting ? (isQa ? "发送追问" : "回复并续接") : isQa ? "等待回答" : "等待 Worker 提问"}
+            {!canComment ? "无回复权限" : waiting ? "回复并续接" : "等待 Worker 提问"}
           </button>
-          {isQa && !closed && canCreateTask ? (
-            <button type="button" className="btn btn-sm" onClick={closeConversation} disabled={closing}>
-              结束对话
-            </button>
-          ) : null}
         </div>
       </form>
     </div>
