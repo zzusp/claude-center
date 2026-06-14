@@ -10,7 +10,7 @@ import { requirePermission, requireUser } from "../../../lib/session";
 
 export const dynamic = "force-dynamic";
 
-// 对话详情 + 历史消息。前端首屏渲染历史；流式中的 assistant 消息走 SSE。
+// 对话详情 + 历史消息。富展示（含工具调用 / 思考）走 /api/conversations/[id]/session 的 jsonl transcript。
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requireUser();
   if (gate instanceof NextResponse) {

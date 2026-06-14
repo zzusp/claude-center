@@ -1,9 +1,11 @@
 "use client";
 
-import type { Conversation, ConversationMessage } from "@claude-center/db";
-import { Bot, Check, GitBranch, MessageSquare, Pencil, Plus, Send, Server, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import type { Conversation } from "@claude-center/db";
+import { Check, GitBranch, MessageSquare, Pencil, Plus, Send, Server, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, postJson } from "./shared";
+import { TranscriptView, parseTranscript } from "./transcript";
+import { usePolling } from "../lib/use-polling";
 import type { Overview } from "./dashboard-shared";
 
 // 实时直连对话视图：左侧会话列表 + 新建（项目/分支/worker/模型），右侧消息线（SSE 流式打字机）+ 输入框。
@@ -107,21 +109,67 @@ function ChatThread({
   canCommand: boolean;
   onChanged: () => void;
 }) {
-  const [messages, setMessages] = useState<ConversationMessage[]>([]);
-  const [streaming, setStreaming] = useState<Record<string, string>>({});
+  const [jsonl, setJsonl] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [pending, setPending] = useState<string[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(conversation.title);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const doneRef = useRef(false);
   const id = conversation.id;
+  const closed = conversation.status !== "active";
 
   // 会话切换 / 标题被外部刷新时，重置改名草稿与编辑态。
   useEffect(() => {
     setTitleDraft(conversation.title);
     setEditingTitle(false);
   }, [conversation.title, id]);
+
+  // 切换会话：重置回放态。
+  useEffect(() => {
+    setJsonl(null);
+    setLoaded(false);
+    setPending([]);
+    doneRef.current = false;
+  }, [id]);
+
+  // 轮询对话 session transcript（active 持续；closed 取一次即停）。Worker 周期 3s + 终态把 jsonl 同步到库。
+  usePolling(
+    async (isActive) => {
+      if (doneRef.current) return;
+      try {
+        const r = await fetch(`/api/conversations/${id}/session`, { cache: "no-store" });
+        if (!r.ok) return;
+        const d = (await r.json()) as { jsonl: string | null };
+        if (!isActive()) return;
+        setJsonl(d.jsonl);
+        setLoaded(true);
+        if (closed) doneRef.current = true;
+      } catch {
+        /* 轮询失败静默，下次重试 */
+      }
+    },
+    [id, closed],
+    3000
+  );
+
+  // 乐观消息：发送后到 worker 把该轮写进 jsonl 之间有延迟窗，先本地显示；jsonl 收录后清掉避免重复。
+  useEffect(() => {
+    if (!jsonl) return;
+    setPending((p) => p.filter((t) => !jsonl.includes(t)));
+  }, [jsonl]);
+
+  const items = useMemo(() => (jsonl ? parseTranscript(jsonl) : []), [jsonl]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [items, pending]);
+
+  // 回复中：有待 worker 落库的乐观消息，或列表派生的 generating（worker 正在跑本轮）。
+  const busy = !closed && (pending.length > 0 || conversation.generating);
 
   async function saveTitle(): Promise<void> {
     const t = titleDraft.trim();
@@ -145,51 +193,6 @@ function ChatThread({
     }
   }
 
-  async function loadDetail(): Promise<void> {
-    const r = await fetch(`/api/conversations/${id}`, { cache: "no-store" });
-    if (r.ok) {
-      const d = (await r.json()) as { messages: ConversationMessage[] };
-      setMessages(d.messages);
-    }
-  }
-
-  useEffect(() => {
-    setMessages([]);
-    setStreaming({});
-    void loadDetail();
-  }, [id]);
-
-  // SSE：token 增量逐片到达 → 累加到 streaming[messageId]；done → 清流式态并拉一次最终消息。
-  useEffect(() => {
-    const es = new EventSource(`/api/conversations/${id}/stream`);
-    es.addEventListener("delta", (e) => {
-      const { messageId, delta } = JSON.parse((e as MessageEvent).data) as { messageId: string; delta: string };
-      setStreaming((p) => ({ ...p, [messageId]: (p[messageId] ?? "") + delta }));
-    });
-    es.addEventListener("done", (e) => {
-      const { messageId } = JSON.parse((e as MessageEvent).data) as { messageId: string };
-      setStreaming((p) => {
-        const n = { ...p };
-        delete n[messageId];
-        return n;
-      });
-      void loadDetail();
-      onChanged();
-    });
-    return () => es.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
-
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages, streaming]);
-
-  const committedIds = new Set(messages.map((m) => m.id));
-  const liveIds = Object.keys(streaming).filter((mid) => !committedIds.has(mid));
-  const lastMsg = messages[messages.length - 1];
-  // 已发出但 worker 尚未吐首字（fetch / 建只读 worktree 中）：补一个「回复中」思考气泡，让等待可见。
-  const awaitingReply = conversation.status === "active" && liveIds.length === 0 && lastMsg?.role === "user";
-
   async function send(): Promise<void> {
     const text = input.trim();
     if (!text || sending) {
@@ -200,7 +203,7 @@ function ChatThread({
     try {
       await postJson(`/api/conversations/${id}/messages`, { body: text });
       setInput("");
-      await loadDetail();
+      setPending((p) => [...p, text]);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "发送失败");
     } finally {
@@ -216,8 +219,6 @@ function ChatThread({
       setErr(e instanceof Error ? e.message : "结束失败");
     }
   }
-
-  const closed = conversation.status !== "active";
 
   return (
     <div className="chat-thread">
@@ -279,13 +280,31 @@ function ChatThread({
       </header>
 
       <div className="chat-msgs" ref={scrollRef}>
-        {messages.map((m) => (
-          <Bubble key={m.id} role={m.role} body={m.body} status={m.status} error={m.error_message} />
-        ))}
-        {liveIds.map((mid) => (
-          <Bubble key={mid} role="assistant" body={streaming[mid] ?? ""} status="streaming" error={null} />
-        ))}
-        {awaitingReply ? <Bubble key="awaiting" role="assistant" body="" status="thinking" error={null} /> : null}
+        {loaded && items.length === 0 && pending.length === 0 ? (
+          <Empty icon={<MessageSquare size={22} />} text="发送第一条消息开始对话" />
+        ) : (
+          <>
+            <TranscriptView items={items} />
+            {pending.map((t, i) => (
+              <div className="tx-row user" key={`p${i}`}>
+                <div className="tx-msg user">
+                  <div className="tx-text">{t}</div>
+                </div>
+              </div>
+            ))}
+            {busy ? (
+              <div className="tx-row asst">
+                <div className="tx-msg asst">
+                  <span className="bubble-dots" aria-label="回复中">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                </div>
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
 
       {err ? <div className="chat-error">{err}</div> : null}
@@ -313,34 +332,6 @@ function ChatThread({
       ) : (
         <div className="chat-closed">无发送权限（需 command.create）</div>
       )}
-    </div>
-  );
-}
-
-function Bubble({ role, body, status, error }: { role: string; body: string; status: string; error: string | null }) {
-  const isUser = role === "user";
-  return (
-    <div className={`bubble-row ${isUser ? "user" : "asst"}`}>
-      {!isUser ? (
-        <span className="bubble-ico">
-          <Bot size={15} />
-        </span>
-      ) : null}
-      <div className={`bubble ${isUser ? "user" : "asst"}${status === "failed" ? " failed" : ""}`}>
-        {status === "failed" ? <span className="bubble-err">执行失败：{error}</span> : null}
-        {status === "thinking" ? (
-          <span className="bubble-dots" aria-label="回复中">
-            <i />
-            <i />
-            <i />
-          </span>
-        ) : (
-          <>
-            <span className="bubble-body">{body || (status === "streaming" ? "…" : "")}</span>
-            {status === "streaming" ? <span className="bubble-caret" /> : null}
-          </>
-        )}
-      </div>
     </div>
   );
 }

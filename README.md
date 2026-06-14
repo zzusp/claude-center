@@ -232,19 +232,19 @@ Worker 桌面窗口的「任务」面板汇总**本机**（`claimed_by` = 本 Wo
 
 ## 实时直连对话（Worker Direct Chat）
 
-独立于任务流的实时问答通道：**独立菜单「对话」、独立数据模型、独立 SSE 流式传输**。在 Console 选**指定项目（分支）+ 指定 Worker** 直接多轮对话，助手回复逐字流式呈现（打字机）。与「问答类任务」不同——后者走任务认领队列、不能指定 Worker；本通道定向某个 Worker、实时流式。完整设计见 `docs/spec/worker-direct-chat.md`，验收见 `docs/acceptance/worker-direct-chat/`。
+独立于任务流的问答通道：**独立菜单「对话」、独立数据模型、与任务同款的 session jsonl 富展示**。在 Console 选**指定项目（分支）+ 指定 Worker** 直接多轮对话；助手回复以 Claude Code 完整执行会话（工具调用 / 思考 / diff 等）富展示，按 jsonl 周期轮询刷新。与「问答类任务」不同——后者走任务认领队列、不能指定 Worker；本通道定向某个 Worker。完整设计见 `docs/spec/worker-direct-chat.md`（首版）+ `docs/spec/conversation-session-jsonl.md`（jsonl 富展示改造），验收见 `docs/acceptance/`。
 
 实现要点：
 
-- **数据模型**（迁移 `017_conversations.sql`）：`conversations`（项目 + 分支 + worker + 模型 + claude 会话）、`conversation_messages`（user/assistant，seq 排序）、`conversation_message_chunks`（流式分片 append-only）。
+- **数据模型**：`conversations`（项目 + 分支 + worker + 模型 + claude 会话，迁移 `017`）、`conversation_messages`（user/assistant，seq 排序）、`conversation_sessions`（Claude Code session `.jsonl` 全文，1:1 侧表，迁移 `019`，与任务 `task_sessions` 同构）。会话记录不自动清理，仅项目 / 会话删除时 `ON DELETE CASCADE`。
 - **派发**：照搬 `direct_commands` 的「按 `worker_id` 领专属队列」。Worker tick 里独立一支 `claimNextConversationTurn`——**不受工作态门控、不占任务并发槽、≤1 轮在途**（idle 也应答，用户显式点名了这个 Worker）。
-- **流式**：Worker 用 `claude --output-format stream-json` 在 `origin/<branch>` 的**只读 worktree**里跑（全程不 commit / 不 PR），token 增量逐片落 `conversation_message_chunks` + `pg_notify('cc_conversation')`。Console 单条专用连接 `LISTEN`，按 `conversationId` 扇出给各 SSE 连接（`GET /api/conversations/:id/stream`），浏览器 `EventSource` 逐字渲染；2s 慢轮询兜底防丢、跨实例靠 NOTIFY 广播。
-- **代理/环境**：流式用**直接 spawn** claude（不走桌面端「终端 / 前置命令」形态，避免污染 NDJSON），故对话所需代理须在 **Worker 进程 env**（如 `HTTP_PROXY` / `HTTPS_PROXY`）。
+- **执行 + 记录**：Worker 用 `runClaudeJson`（`claude -p ... --output-format json`，与任务同款）在 `origin/<branch>` 的**只读 worktree**里跑（全程不 commit / 不 PR）；执行期间 `startConversationSessionSync` 周期 3s + 终态强制把该会话 session `.jsonl` 全文同步到 `conversation_sessions`，收尾把权威全文落 `conversation_messages.body` + 写回 `claude_session_id`（多轮 `--resume` 续接同一 session）。Console 按需轮询 `GET /api/conversations/:id/session` 取 jsonl，解析为富展示（与任务详情共用 `app/ui/transcript.tsx`：工具折叠 / diff 着色 / markdown / thinking）。
+- **代理/环境**：claude 调用走桌面端「终端 / 前置命令」形态（与任务一致），对话所需代理按 Worker 的 `claudePreCommand` / 进程 env 配置即可。
 - **权限**：创建 / 发消息复用 `command.create`（与定向指挥同级，仅 admin）；列表 / 查看登录即可、按项目范围过滤。会话改名（`PATCH /api/conversations/:id`）同样复用 `command.create`。
 - **会话改名**：Console 对话标题处内联编辑（铅笔 → 输入 → 保存），`renameConversation` 仅改标题不 bump `updated_at`（不打乱列表按活跃排序）。
-- **「回复中」可见性**：会话列表对有在途 assistant 轮（pending/streaming）的会话显示「回复中」标（`listConversations` 派生 `generating`）；消息线在「已发出但 Worker 尚未吐首字」（fetch / 建只读 worktree 中）期补一个思考气泡，让等待全程可见，不只靠首 token 后的打字机。
-- **Worker 端对话回显**：远程对话实际跑在 Worker，桌面端「对话」面板（只读）按 `listWorkerConversations` 列本机承接的会话，展开见消息线；流式中的 assistant 从 `conversation_message_chunks` 拼实时增量（轮询 1.5s），与 Web 端同步可见。
-- 升级后先跑 `npm run db:migrate` 应用 `017_conversations.sql`。
+- **「回复中」可见性**：会话列表对有在途 assistant 轮（pending/streaming）的会话显示「回复中」标（`listConversations` 派生 `generating`）；消息线在「已发出但 jsonl 尚未收录该轮」期用本地乐观气泡 + 思考点，让等待可见。
+- **Worker 端对话回显**：桌面端「对话」面板（只读）按 `listWorkerConversations` 列本机承接的会话，展开见消息线（完成的消息见 body 全文，回复中显示状态）。
+- 升级后先跑 `npm run db:migrate` 应用 `017` + `019`（`019` 同时删除弃用的 `conversation_message_chunks`）。
 
 ## 任务完成后清理（merged 终态）
 

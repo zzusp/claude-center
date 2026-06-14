@@ -10,7 +10,6 @@ import {
   claimNextTask,
   failConversationTurn,
   getConversation,
-  getConversationChunks,
   getPool,
   getWorkerRuntime,
   heartbeatWorker,
@@ -376,20 +375,11 @@ export class ClaudeCenterWorker {
     return listWorkerConversations(getPool(), this.config.workerId);
   }
 
-  // 某会话的消息线；流式中的 assistant 消息 body 尚空，从 chunks 拼实时增量，让桌面端轮询也见逐字进度。
+  // 某会话的消息线（桌面端只读回显）。回复中的 assistant body 尚空（终态才落最终全文），桌面端据 status 显示
+  // 「回复中」；富展示（工具调用/thinking）走 Console 的 conversation_sessions jsonl，本面板不重复实现。
   async getConversationDetail(conversationId: string): Promise<{ messages: ConversationMessage[] }> {
-    const pool = getPool();
-    const messages = await listConversationMessages(pool, conversationId);
-    const live = await Promise.all(
-      messages.map(async (m) => {
-        if (m.role === "assistant" && m.status === "streaming") {
-          const chunks = await getConversationChunks(pool, m.id);
-          return { ...m, body: chunks.map((c) => c.delta).join("") };
-        }
-        return m;
-      })
-    );
-    return { messages: live };
+    const messages = await listConversationMessages(getPool(), conversationId);
+    return { messages };
   }
 
   async getStatusSnapshot(): Promise<WorkerStatusSnapshot> {

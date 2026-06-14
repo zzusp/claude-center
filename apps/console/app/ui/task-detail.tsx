@@ -17,12 +17,12 @@ import {
   Send,
   Terminal,
   UserRound,
-  Wrench,
   X
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { FormEvent, ReactNode, useMemo, useRef, useState } from "react";
 import { Empty, KvRow, StatusBadge, fmtTime, postJson } from "./shared";
+import { TranscriptView, parseTranscript } from "./transcript";
 import { usePolling } from "../lib/use-polling";
 
 const EVENT_LABEL: Record<string, string> = {
@@ -567,103 +567,9 @@ function TaskConversation({
 
 // —— 执行会话（Claude Code session transcript）—— //
 
-type TranscriptBlock =
-  | { kind: "text"; text: string }
-  | { kind: "thinking"; text: string }
-  | { kind: "tool_use"; name: string; input: string }
-  | { kind: "tool_result"; text: string; isError: boolean };
-type TranscriptItem = { role: "user" | "assistant"; blocks: TranscriptBlock[] };
-
-const TRUNCATE = 1200;
-
-function clip(text: string): string {
-  return text.length > TRUNCATE ? `${text.slice(0, TRUNCATE)}\n… (已截断 ${text.length - TRUNCATE} 字)` : text;
-}
-
-function stringifyInput(input: unknown): string {
-  if (input == null) return "";
-  if (typeof input === "string") return input;
-  try {
-    return JSON.stringify(input, null, 2);
-  } catch {
-    return String(input);
-  }
-}
-
-// tool_result.content 可能是字符串或 [{type:'text',text}] 块数组。
-function toolResultText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((b) => (b && typeof b === "object" && typeof (b as { text?: unknown }).text === "string" ? (b as { text: string }).text : ""))
-      .filter(Boolean)
-      .join("\n");
-  }
-  return content == null ? "" : stringifyInput(content);
-}
-
-// 解析 Claude Code session .jsonl（NDJSON）：只取 user/assistant 且带 message 的行，content 归一化为可渲染
-// blocks（text/thinking/tool_use/tool_result）；ai-title/queue-operation/last-prompt/mode/attachment 等元数据行跳过。
-function parseTranscript(jsonl: string): TranscriptItem[] {
-  const items: TranscriptItem[] = [];
-  for (const line of jsonl.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let obj: { type?: string; message?: { content?: unknown } };
-    try {
-      obj = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-    if ((obj.type !== "user" && obj.type !== "assistant") || !obj.message) continue;
-    const content = obj.message.content;
-    const raw = typeof content === "string" ? [{ type: "text", text: content }] : Array.isArray(content) ? content : [];
-    const blocks: TranscriptBlock[] = [];
-    for (const b of raw as Array<Record<string, unknown>>) {
-      if (!b || typeof b !== "object") continue;
-      if (b.type === "text" && typeof b.text === "string" && b.text.trim()) {
-        blocks.push({ kind: "text", text: b.text });
-      } else if (b.type === "thinking" && typeof b.thinking === "string" && b.thinking.trim()) {
-        blocks.push({ kind: "thinking", text: b.thinking });
-      } else if (b.type === "tool_use") {
-        blocks.push({ kind: "tool_use", name: typeof b.name === "string" ? b.name : "tool", input: stringifyInput(b.input) });
-      } else if (b.type === "tool_result") {
-        blocks.push({ kind: "tool_result", text: toolResultText(b.content), isError: Boolean(b.is_error) });
-      }
-    }
-    if (blocks.length) items.push({ role: obj.type, blocks });
-  }
-  return items;
-}
-
-function TranscriptBlockView({ block }: { block: TranscriptBlock }) {
-  if (block.kind === "text") {
-    return <div className="chat-body">{block.text}</div>;
-  }
-  if (block.kind === "thinking") {
-    return <div className="session-thinking">💭 {clip(block.text)}</div>;
-  }
-  if (block.kind === "tool_use") {
-    return (
-      <div className="session-tool">
-        <div className="session-tool-head">
-          <Wrench size={12} className="ico" />
-          {block.name}
-        </div>
-        {block.input ? <pre className="session-tool-body">{clip(block.input)}</pre> : null}
-      </div>
-    );
-  }
-  return (
-    <div className="session-tool" data-error={block.isError ? "1" : undefined}>
-      <div className="session-tool-head">{block.isError ? "⚠ 工具结果" : "↳ 工具结果"}</div>
-      {block.text ? <pre className="session-tool-body">{clip(block.text)}</pre> : null}
-    </div>
-  );
-}
-
 // 任务执行会话回放：执行期间（claimed/running/waiting）每 5s 轮询，终态后再取数次拿到 Worker 最终强制同步的
 // 完整 transcript 即停拉（避免持续拖大 blob）。Worker 周期 + 终态把 session .jsonl 同步到 task_sessions。
+// 解析 + 富展示走共用 transcript.tsx（与对话页同款）。
 function SessionTranscript({ task }: { task: Task }) {
   const [jsonl, setJsonl] = useState<string | null>(null);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
@@ -705,24 +611,8 @@ function SessionTranscript({ task }: { task: Task }) {
     return <Empty icon={<ScrollText size={28} />} text="暂无执行会话记录（Worker 执行后会同步到此）" />;
   }
   return (
-    <div className="chat">
-      <div className="chat-stream">
-        {items.map((item, index) => (
-          <div className={`chat-msg ${item.role === "assistant" ? "worker" : "user"}`} key={index}>
-            <span className="chat-avatar" data-author={item.role === "assistant" ? "worker" : "user"}>
-              {item.role === "assistant" ? <Bot size={14} /> : <UserRound size={14} />}
-            </span>
-            <div className="chat-bubble">
-              <div className="chat-meta">
-                <span className="chat-author">{item.role === "assistant" ? "Claude" : "用户 / 工具结果"}</span>
-              </div>
-              {item.blocks.map((block, bi) => (
-                <TranscriptBlockView block={block} key={bi} />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
+    <div className="tx-wrap">
+      <TranscriptView items={items} />
       {syncedAt ? <div className="session-synced">最近同步：{fmtTime(syncedAt)}</div> : null}
     </div>
   );
