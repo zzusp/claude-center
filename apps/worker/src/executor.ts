@@ -1,7 +1,6 @@
 import {
   addTaskComment,
   addTaskEvent,
-  appendConversationChunk,
   failConversationTurn,
   finalizeConversationTurn,
   getConversationLocalPath,
@@ -16,7 +15,6 @@ import {
   markTaskMerged,
   markTaskRunning,
   markTaskSuccess,
-  notifyConversationChunk,
   setTaskClaudeSession,
   setTaskMergeChecked,
   setTaskWaiting,
@@ -39,7 +37,7 @@ import {
   terminalLaunch
 } from "./terminal.js";
 import { conversationWorktreePathFor, ensureWorktree, removeWorktree, worktreePathFor } from "./worktree.js";
-import { startTaskSessionSync } from "./session.js";
+import { startConversationSessionSync, startTaskSessionSync } from "./session.js";
 
 const CLAUDE_TIMEOUT_MS = 60 * 60_000;
 
@@ -191,82 +189,6 @@ function parseClaudeJson(raw: CommandResult): { session_id?: string; result?: st
       )}\nstderr:\n${raw.stderr.slice(-2000)}`
     );
   }
-}
-
-// 实时对话用：`claude -p ... --output-format stream-json --include-partial-messages`（+ 可选 --resume）。
-// 逐行解析 NDJSON，text_delta 即时回调 onDelta；末行 result 取 session_id + 全文（权威）。直接 spawn 形态
-// （不走终端/前置命令，避免包裹噪声污染 NDJSON）；解析容错跳过非 JSON 行与无关事件（schema 见 spec §5.1）。
-function streamClaude(
-  config: WorkerConfig,
-  opts: {
-    prompt: string;
-    cwd?: string;
-    resumeSessionId?: string;
-    model?: string;
-    onSpawn?: (child: ChildProcess) => void;
-    onDelta: (text: string) => void;
-  }
-): Promise<{ sessionId: string | null; text: string }> {
-  const modelArg = opts.model && opts.model !== "default" ? opts.model : null;
-  const args = [
-    "-p",
-    opts.prompt,
-    ...(modelArg ? ["--model", modelArg] : []),
-    ...(opts.resumeSessionId ? ["--resume", opts.resumeSessionId] : []),
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    "--include-partial-messages"
-  ];
-
-  let sessionId: string | null = null;
-  let text = "";
-  let buf = "";
-  const consume = (chunk: string): void => {
-    buf += chunk;
-    let nl: number;
-    while ((nl = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line) continue;
-      let evt: {
-        type?: string;
-        subtype?: string;
-        session_id?: string;
-        result?: string;
-        event?: { type?: string; delta?: { type?: string; text?: string } };
-      };
-      try {
-        evt = JSON.parse(line);
-      } catch {
-        continue; // 非 JSON 行（如 stderr 的 "no stdin data" 警告混入）
-      }
-      if (
-        evt.type === "stream_event" &&
-        evt.event?.type === "content_block_delta" &&
-        evt.event.delta?.type === "text_delta" &&
-        typeof evt.event.delta.text === "string" &&
-        evt.event.delta.text
-      ) {
-        text += evt.event.delta.text;
-        opts.onDelta(evt.event.delta.text);
-      } else if (evt.type === "result") {
-        if (typeof evt.session_id === "string") sessionId = evt.session_id;
-        if (typeof evt.result === "string") text = evt.result; // 权威全文，覆盖增量拼接
-      } else if (evt.type === "system" && evt.subtype === "init" && typeof evt.session_id === "string") {
-        sessionId = evt.session_id; // 兜底：init 也带 session_id
-      }
-    }
-  };
-
-  return runCommand(config.claudeCommand, args, {
-    cwd: opts.cwd,
-    timeoutMs: CLAUDE_TIMEOUT_MS,
-    onSpawn: (child) => {
-      opts.onSpawn?.(child);
-      child.stdout?.on("data", (data: Buffer) => consume(data.toString("utf8")));
-    }
-  }).then(() => ({ sessionId, text }));
 }
 
 function extractQuestion(result: string): string | null {
@@ -721,8 +643,9 @@ export async function executeDirectCommand(config: WorkerConfig, command: Direct
   }
 }
 
-// 实时对话一轮：在指定项目分支的「只读工作树」里跑 claude 流式，token 增量即时落 chunks + NOTIFY，
-// 收尾落最终全文 + session。全程不 commit / 不开 PR（与任务流彻底解耦）。turn 是已认领的 assistant streaming 消息。
+// 实时对话一轮：在指定项目分支的「只读工作树」里跑 claude（非流式 json，与任务同 runClaudeJson），执行期间
+// 周期 + 终态把 session .jsonl 同步到 conversation_sessions（Console 据此富展示）；收尾落最终全文 + session。
+// 全程不 commit / 不开 PR（与任务流彻底解耦）。turn 是已认领的 assistant streaming 消息。
 export async function executeConversationTurn(
   config: WorkerConfig,
   conv: Conversation,
@@ -750,31 +673,18 @@ export async function executeConversationTurn(
       fresh: !existsSync(path.join(wtPath, ".git"))
     });
 
-    // 流式：每片增量即时落库 + NOTIFY；收集 promise，收尾前等全部分片落定（保证 done 时 chunks 完整）。
-    let chunkSeq = 0;
-    const pending: Promise<void>[] = [];
-    const { sessionId, text } = await streamClaude(config, {
+    // 执行期间周期 + 终态把 session .jsonl 同步到 conversation_sessions；进程退出后强制最终同步一次保证完整。
+    const stopSync = startConversationSessionSync(conv.id, wtPath);
+    const { sessionId, result } = await runClaudeJson(config, {
       prompt,
       cwd: wtPath,
       resumeSessionId: conv.claude_session_id ?? undefined,
       model: conv.model,
-      onSpawn: hooks?.onClaudeSpawn,
-      onDelta: (delta) => {
-        const seq = chunkSeq++;
-        pending.push(
-          appendConversationChunk(pool, { messageId: turn.id, seq, delta })
-            .then(() => notifyConversationChunk(pool, { conversationId: conv.id, messageId: turn.id, seq }))
-            .catch(() => {})
-        );
-      }
-    });
-    await Promise.allSettled(pending);
+      onSpawn: hooks?.onClaudeSpawn
+    }).finally(() => stopSync());
 
-    await finalizeConversationTurn(pool, { conversationId: conv.id, messageId: turn.id, body: text, sessionId });
-    // seq=-1 约定为「本轮结束」信号，SSE 端据此关流。
-    await notifyConversationChunk(pool, { conversationId: conv.id, messageId: turn.id, seq: -1 });
+    await finalizeConversationTurn(pool, { conversationId: conv.id, messageId: turn.id, body: result, sessionId });
   } catch (error) {
     await failConversationTurn(pool, { messageId: turn.id, errorMessage: error instanceof Error ? error.message : String(error) });
-    await notifyConversationChunk(pool, { conversationId: conv.id, messageId: turn.id, seq: -1 }).catch(() => {});
   }
 }

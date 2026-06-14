@@ -1,7 +1,6 @@
 import type pg from "pg";
 import type {
   Conversation,
-  ConversationChunk,
   ConversationMessage,
   ConversationMessageRole,
   DirectCommand,
@@ -1634,30 +1633,31 @@ export async function getConversationLocalPath(
   return result.rows[0]?.local_path ?? null;
 }
 
-// 流式分片落库（append-only）。
-export async function appendConversationChunk(
+// 对话执行会话记录（Claude Code session transcript 全文）的同步落库。Worker 执行对话轮时周期 + 终态调用，
+// 与任务 task_sessions 同构：1:1 侧表 upsert，避免大字段进 conversations.* 读路径。
+export async function upsertConversationSession(
   client: pg.Pool | pg.PoolClient,
-  input: { messageId: string; seq: number; delta: string }
+  conversationId: string,
+  jsonl: string
 ): Promise<void> {
   await client.query(
-    `INSERT INTO conversation_message_chunks (message_id, seq, delta) VALUES ($1, $2, $3)`,
-    [input.messageId, input.seq, input.delta]
+    `INSERT INTO conversation_sessions (conversation_id, jsonl, synced_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (conversation_id) DO UPDATE SET jsonl = EXCLUDED.jsonl, synced_at = now()`,
+    [conversationId, jsonl]
   );
 }
 
-// 取某 assistant 消息 afterSeq 之后的分片，SSE 首连补发 / 断线重连续传用。
-export async function getConversationChunks(
+// 读取对话的会话 transcript（供 Console 富展示）。无则返回 null。
+export async function getConversationSession(
   client: pg.Pool | pg.PoolClient,
-  messageId: string,
-  afterSeq = -1
-): Promise<ConversationChunk[]> {
-  const result = await client.query<ConversationChunk>(
-    `SELECT * FROM conversation_message_chunks
-      WHERE message_id = $1 AND seq > $2
-      ORDER BY seq ASC`,
-    [messageId, afterSeq]
+  conversationId: string
+): Promise<{ jsonl: string; synced_at: string } | null> {
+  const result = await client.query<{ jsonl: string; synced_at: string }>(
+    `SELECT jsonl, synced_at FROM conversation_sessions WHERE conversation_id = $1 LIMIT 1`,
+    [conversationId]
   );
-  return result.rows;
+  return result.rows[0] ?? null;
 }
 
 // 流式收尾：落最终全文 + done；首轮把 claude session 写回会话（COALESCE 不覆盖已有）。
@@ -1708,28 +1708,4 @@ export async function renameConversation(
   title: string
 ): Promise<void> {
   await client.query(`UPDATE conversations SET title = $2 WHERE id = $1`, [conversationId, title]);
-}
-
-// 通知 console 的 SSE 端点：某 assistant 消息有新分片（seq>=0）或本轮结束（seq=-1）。
-// payload 小（仅 id + seq），经 PG LISTEN/NOTIFY 跨实例广播，SSE 端据此读增量分片转发浏览器。
-export async function notifyConversationChunk(
-  client: pg.Pool | pg.PoolClient,
-  payload: { conversationId: string; messageId: string; seq: number }
-): Promise<void> {
-  await client.query(`SELECT pg_notify('cc_conversation', $1)`, [JSON.stringify(payload)]);
-}
-
-// SSE 端取当前/最近一条 assistant 消息（流式中或刚结束），据此读分片转发浏览器。
-export async function getLatestAssistantMessage(
-  client: pg.Pool | pg.PoolClient,
-  conversationId: string
-): Promise<ConversationMessage | null> {
-  const result = await client.query<ConversationMessage>(
-    `SELECT * FROM conversation_messages
-      WHERE conversation_id = $1 AND role = 'assistant'
-      ORDER BY seq DESC
-      LIMIT 1`,
-    [conversationId]
-  );
-  return result.rows[0] ?? null;
 }

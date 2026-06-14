@@ -233,10 +233,3 @@ export type ConversationMessage = {
   created_at: string;
   updated_at: string;
 };
-
-export type ConversationChunk = {
-  message_id: string;
-  seq: number;
-  delta: string;
-  created_at: string;
-};
