@@ -1,0 +1,14 @@
+case,description,round-1
+typecheck,console tsc --noEmit 无错误,PASS
+build,next build 通过且 /tasks/[id] 路由构建成功,PASS
+work-failed,work/failed 渲染 200 + 新结构 + 无旧 tab,PASS
+work-claimed,work/claimed 渲染 200 + 新结构 + 无旧 tab,PASS
+work-cancelled,work/cancelled 渲染 200 + 新结构 + 无旧 tab,PASS
+work-pending,work/pending 渲染 200 + 新结构 + 无旧 tab,PASS
+work-running,work/running 渲染 200 + 新结构 + 无旧 tab,PASS
+work-success,work/success 渲染 200 + 验收区(review-actions)出现,PASS
+work-draft,work/draft 发布区(hero-publish)+ 右栏分支信息,PASS
+work-scheduled,work/scheduled 立即发布区出现,PASS
+qa,qa 对话区常驻 + 隐藏分支信息 + 发布区 + 问答类标签,PASS
+not-found,不存在任务 id 返回 404,PASS
+old-tabs-removed,所有详情页均不含 class="tabs"(旧四 tab 已移除),PASS
