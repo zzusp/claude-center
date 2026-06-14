@@ -106,6 +106,16 @@ export type WorkerProjectLink = {
   updated_at: string;
 };
 
+// listWorkerProjectLinks 视图:worker 关联 + 项目展示信息（join projects）。worker 桌面端「关联项目」面板用。
+export type WorkerProjectLinkView = {
+  project_id: string;
+  local_path: string;
+  enabled: boolean;
+  project_name: string;
+  repo_url: string;
+  default_branch: string;
+};
+
 export type Task = {
   id: string;
   project_id: string;
@@ -136,6 +146,8 @@ export type Task = {
   claude_session_id: string | null;
   // 定时发布时间：scheduled 任务到此刻自动转 pending；非定时任务为 null。
   scheduled_at: string | null;
+  // 取消请求时间戳：Console 对在途任务打此戳；Worker 扫到后杀进程并翻为 cancelled。未请求为 null。
+  cancel_requested_at: string | null;
   // 前置任务 id（listRecentTasks 聚合填充；其余查询不返回，故可选）。
   depends_on?: string[];
   // 存在「状态非 accepted 的前置」时为 true，用于 UI 提示阻塞（同上，可选）。

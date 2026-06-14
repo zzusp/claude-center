@@ -1,0 +1,21 @@
+case,description,round-1
+typecheck-db,packages/db typecheck,PASS
+typecheck-worker,apps/worker typecheck,PASS
+typecheck-console,apps/console typecheck,PASS
+build-worker,apps/worker tsc emit dist,PASS
+build-console,apps/console next production build,PASS
+migrate-015,015_task_cancel_request 应用到 dev 库,PASS
+cancel-request,requestTaskCancellation 对在途任务打戳并返回,PASS
+cancel-list,listCancelRequestedTaskIds 命中被请求取消任务,PASS
+cancel-mark,markTaskCancelled 在途任务翻 cancelled 返回 true,PASS
+cancel-guard,markTaskFailed 不覆盖 cancelled(守卫),PASS
+cancel-terminal-null,requestTaskCancellation 对终态任务返回 null,PASS
+cancel-list-exclude,listCancelRequestedTaskIds 排除终态任务,PASS
+link-list,listWorkerProjectLinks 返回关联,PASS
+link-remove,removeWorkerProjectLink 删除关联,PASS
+kill-tree,killProcessTree 终结 spawn 的长时进程,PASS
+capabilities-detect,detectCapabilities 返回 git/gh/claude 真实自检,PASS
+config-persist,persistWorkerState 合并写 maxParallel/projects/allowRemoteControl 保留 workerId,PASS
+config-merge,readWorkerConfig env∪本地项目去重并标记 source,PASS
+runner-boot,runner.start 能力自检→注册→上报 capabilities 到 dev 库,PASS
+runner-snapshot,getStatusSnapshot 返回 activeTasks/logs 且与 DB 能力一致,PASS

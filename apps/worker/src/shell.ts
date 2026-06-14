@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 
 export type CommandResult = {
   command: string;
@@ -8,6 +8,30 @@ export type CommandResult = {
   stdout: string;
   stderr: string;
 };
+
+// 杀掉一棵进程树。Worker 取消在途任务时用来终结长时 Claude 进程及其子进程。
+// win32:`taskkill /PID <pid> /T /F` 杀整棵树（claude 通过 cmd.exe/powershell 间接拉起,
+// 直接 child.kill 杀不到孙子进程）;非 win32:negative pid 杀进程组,失败回退单进程。
+export function killProcessTree(child: ChildProcess): void {
+  const pid = child.pid;
+  if (!pid) {
+    return;
+  }
+  if (process.platform === "win32") {
+    // taskkill 是独立 exe,无需 shell;windowsHide 避免弹窗。best-effort,失败忽略。
+    spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }).on("error", () => {});
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // 进程可能已退出
+    }
+  }
+}
 
 const outputLimit = 80_000;
 
@@ -22,7 +46,14 @@ function appendLimited(current: string, chunk: string): string {
 export function runCommand(
   command: string,
   args: string[],
-  options: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv; shell?: boolean } = {}
+  options: {
+    cwd?: string;
+    timeoutMs?: number;
+    env?: NodeJS.ProcessEnv;
+    shell?: boolean;
+    // 暴露子进程句柄给调用方（取消在途任务时 runner 据此杀进程树）。
+    onSpawn?: (child: ChildProcess) => void;
+  } = {}
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -31,6 +62,7 @@ export function runCommand(
       windowsHide: true,
       env: options.env ?? process.env
     });
+    options.onSpawn?.(child);
 
     let stdout = "";
     let stderr = "";
@@ -99,7 +131,7 @@ export function formatCommandFailure(result: CommandResult): string {
 
 export function runPowerShell(
   script: string,
-  options: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {}
+  options: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv; onSpawn?: (child: ChildProcess) => void } = {}
 ): Promise<CommandResult> {
   // Spawn PowerShell directly (shell: false) so the script reaches it as a
   // single argv element — going through cmd.exe (shell: true) would re-parse
@@ -108,6 +140,7 @@ export function runPowerShell(
     cwd: options.cwd,
     timeoutMs: options.timeoutMs ?? 20 * 60_000,
     env: options.env,
-    shell: false
+    shell: false,
+    onSpawn: options.onSpawn
   });
 }

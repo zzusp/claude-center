@@ -9,6 +9,8 @@ export type WorkerProjectConfig = {
   projectName?: string;
   repoUrl?: string;
   localPath: string;
+  // 来源:env = 来自 CLAUDE_CENTER_PROJECTS（桌面端只读）;local = 桌面端添加并持久化进 worker.json（可删）。
+  source?: "env" | "local";
 };
 
 export type WorkerConfig = {
@@ -40,8 +42,14 @@ export type WorkerConfig = {
   infoIntervalMs: number;
 };
 
-// worker.json 持久化：workerId（稳定身份）+ allowRemoteControl（客户端策略，跨重启保留）。
-type WorkerState = { workerId: string; allowRemoteControl?: boolean };
+// worker.json 持久化:workerId（稳定身份）+ 跨重启保留的客户端策略（allowRemoteControl/maxParallel）
+// + 桌面端添加的本地项目关联（projects，source=local）。env 来源的项目不入此文件。
+export type WorkerState = {
+  workerId: string;
+  allowRemoteControl?: boolean;
+  maxParallel?: number;
+  projects?: WorkerProjectConfig[];
+};
 
 function dataDirOf(): string {
   return process.env.CLAUDE_CENTER_DATA_DIR ?? path.join(os.homedir(), ".claude-center");
@@ -51,7 +59,7 @@ function stateFileOf(dataDir: string): string {
   return path.join(dataDir, "worker.json");
 }
 
-function readWorkerState(dataDir: string): WorkerState {
+export function readWorkerState(dataDir: string): WorkerState {
   const stateFile = stateFileOf(dataDir);
   let state: WorkerState | null = null;
   if (existsSync(stateFile)) {
@@ -72,14 +80,13 @@ function readWorkerState(dataDir: string): WorkerState {
   return created;
 }
 
-// 持久化 allowRemoteControl（Electron 开关改动后调用），保留 workerId 不变。
-export function persistAllowRemoteControl(dataDir: string, workerId: string, allowRemoteControl: boolean): void {
+// 读改写 worker.json:合并 patch（保留 workerId 不变）。桌面端改并发数/远程开关/增删本地项目时调用。
+export function persistWorkerState(dataDir: string, patch: Partial<Omit<WorkerState, "workerId">>): WorkerState {
   mkdirSync(dataDir, { recursive: true });
-  writeFileSync(
-    stateFileOf(dataDir),
-    `${JSON.stringify({ workerId, allowRemoteControl }, null, 2)}\n`,
-    "utf8"
-  );
+  const current = readWorkerState(dataDir);
+  const next: WorkerState = { ...current, ...patch };
+  writeFileSync(stateFileOf(dataDir), `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  return next;
 }
 
 function readBool(name: string, fallback: boolean): boolean {
@@ -107,7 +114,27 @@ function readProjectConfig(): WorkerProjectConfig[] {
     }
   }
 
-  return parsed;
+  return parsed.map((project) => ({ ...project, source: "env" as const }));
+}
+
+// 项目关联去重键:同一项目（按 projectName||repoUrl）+ 同一本地路径视为同一关联。
+export function projectLinkKey(project: WorkerProjectConfig): string {
+  return `${project.projectName ?? project.repoUrl ?? ""}|${project.localPath}`;
+}
+
+// 合并 env 项目与 worker.json 持久化的本地项目;env 优先（冲突时保留 env、标记不可删）。
+function mergeProjects(envProjects: WorkerProjectConfig[], localProjects: WorkerProjectConfig[]): WorkerProjectConfig[] {
+  const merged = new Map<string, WorkerProjectConfig>();
+  for (const project of envProjects) {
+    merged.set(projectLinkKey(project), { ...project, source: "env" });
+  }
+  for (const project of localProjects) {
+    const key = projectLinkKey(project);
+    if (!merged.has(key)) {
+      merged.set(key, { ...project, source: "local" });
+    }
+  }
+  return [...merged.values()];
 }
 
 function readNumber(name: string, fallback: number): number {
@@ -134,7 +161,7 @@ export function readWorkerConfig(): WorkerConfig {
     workerName: process.env.CLAUDE_CENTER_WORKER_NAME || os.hostname(),
     hostName: os.hostname(),
     appVersion: "0.1.0",
-    projects: readProjectConfig(),
+    projects: mergeProjects(readProjectConfig(), state.projects ?? []),
     pollIntervalMs: readNumber("CLAUDE_CENTER_POLL_INTERVAL_MS", 10_000),
     heartbeatIntervalMs: readNumber("CLAUDE_CENTER_HEARTBEAT_INTERVAL_MS", 15_000),
     claudeCommand: process.env.CLAUDE_CODE_COMMAND || "claude",
@@ -146,7 +173,7 @@ export function readWorkerConfig(): WorkerConfig {
     claudeRulesPath:
       process.env.CLAUDE_CENTER_CLAUDE_RULES || path.resolve(workerDir, "../prompts/center-rules.md"),
     dataDir,
-    maxParallel: readNumber("CLAUDE_CENTER_MAX_PARALLEL", 1),
+    maxParallel: state.maxParallel ?? readNumber("CLAUDE_CENTER_MAX_PARALLEL", 1),
     allowRemoteControl: state.allowRemoteControl ?? readBool("CLAUDE_CENTER_ALLOW_REMOTE_CONTROL", false),
     usageProxy,
     infoIntervalMs: readNumber("CLAUDE_CENTER_INFO_INTERVAL_MS", 60_000)
