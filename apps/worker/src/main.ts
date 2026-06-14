@@ -205,7 +205,14 @@ function windowHtml(): string {
             font-family: inherit; font-size: 12.5px; outline: none;
           }
           .reply-input:focus { border-color: var(--running); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
-        </style>
+.card-title{display:flex;align-items:center;gap:7px;}
+          .card-title .ico{display:inline-flex;color:var(--text-3);flex-shrink:0;}
+          .live-dot{display:inline-block;width:7px;height:7px;border-radius:999px;background:var(--success);margin-right:7px;position:relative;}
+          .live-dot.pulse{animation:cc-breathe 1.8s ease-in-out infinite;}
+          .live-dot.pulse::after{content:"";position:absolute;inset:-3px;border-radius:999px;background:var(--success);opacity:.18;animation:cc-ring 1.8s ease-in-out infinite;}
+          @keyframes cc-breathe{0%,100%{opacity:1}50%{opacity:.5}}
+          @keyframes cc-ring{0%{transform:scale(.7);opacity:.25}70%{transform:scale(1.7);opacity:0}100%{opacity:0}}
+          </style>
       </head>
       <body>
         <header class="app-head">
@@ -213,7 +220,7 @@ function windowHtml(): string {
             <span class="brand-mark">CC</span>
             <div>
               <h1 class="brand-title">ClaudeCenter Worker</h1>
-              <p class="brand-sub" id="meta">连接中…</p>
+              <p class="brand-sub"><span class="live-dot pulse"></span><span id="meta">连接中…</span></p>
             </div>
           </div>
         </header>
@@ -222,7 +229,7 @@ function windowHtml(): string {
         <div class="col">
         <section class="card">
           <div class="card-head">
-            <h2 class="card-title">状态与设置</h2>
+            <h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="9" cy="8" r="2.4"/><circle cx="15" cy="16" r="2.4"/></svg></span>状态与设置</h2>
             <span class="badge" id="state" data-tone="cancelled"><span class="glyph">·</span>—</span>
           </div>
           <div class="card-body">
@@ -242,17 +249,17 @@ function windowHtml(): string {
         </section>
 
         <section class="card">
-          <div class="card-head"><h2 class="card-title">能力自检</h2></div>
+          <div class="card-head"><h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 2.5v5.5c0 4-3 7-7 8-4-1-7-4-7-8V5.5z"/><path d="M9 12l2 2 4-4"/></svg></span>能力自检</h2></div>
           <div class="card-body"><div id="caps" class="cap-row">—</div></div>
         </section>
 
         <section class="card" id="usageSection" style="display:none">
-          <div class="card-head"><h2 class="card-title">套餐用量</h2></div>
+          <div class="card-head"><h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 16a7 7 0 1 1 14 0"/><path d="M12 16l3.5-3.5"/></svg></span>套餐用量</h2></div>
           <div class="card-body" id="usage"></div>
         </section>
 
         <section class="card">
-          <div class="card-head"><h2 class="card-title">关联项目</h2></div>
+          <div class="card-head"><h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a1.5 1.5 0 0 1 1.5-1.5h3.2l1.8 1.8h8A1.5 1.5 0 0 1 20 8.8V17a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17z"/></svg></span>关联项目</h2></div>
           <div class="card-body">
             <div id="projects"><span class="empty">加载中…</span></div>
             <div class="addform">
@@ -270,14 +277,14 @@ function windowHtml(): string {
         <div class="col">
         <section class="card">
           <div class="card-head">
-            <h2 class="card-title">任务</h2>
+            <h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.5l2.5 7 4-14 2.5 7H21"/></svg></span>任务</h2>
             <button id="tasksRefresh" class="btn btn-sm" type="button">刷新</button>
           </div>
           <div class="card-body"><div id="tasks"><span class="empty">加载中…</span></div></div>
         </section>
 
         <section class="card">
-          <div class="card-head"><h2 class="card-title">日志</h2></div>
+          <div class="card-head"><h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8l3.5 3L5 14"/><line x1="11" y1="15" x2="18" y2="15"/></svg></span>日志</h2></div>
           <div class="card-body"><div id="logs" class="logs"></div></div>
         </section>
         </div>
