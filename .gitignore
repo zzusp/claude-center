@@ -10,3 +10,4 @@ out/
 worker-data/
 docs/tmp/
 .idea/
+.claude/worktrees/
