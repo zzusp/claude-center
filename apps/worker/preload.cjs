@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("workerApi", {
   setWorking: (working) => ipcRenderer.invoke("worker:setWorking", working),
   setAllowRemote: (allow) => ipcRenderer.invoke("worker:setAllowRemote", allow),
   setMaxParallel: (value) => ipcRenderer.invoke("worker:setMaxParallel", value),
+  clearLogs: () => ipcRenderer.invoke("worker:clearLogs"),
   listTerminals: () => ipcRenderer.invoke("worker:listTerminals"),
   setTerminal: (command) => ipcRenderer.invoke("worker:setTerminal", command),
   setPreCommand: (command) => ipcRenderer.invoke("worker:setPreCommand", command),

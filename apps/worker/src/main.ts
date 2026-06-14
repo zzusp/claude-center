@@ -313,7 +313,7 @@ function windowHtml(): string {
         </section>
 
         <section class="card">
-          <div class="card-head"><h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8l3.5 3L5 14"/><line x1="11" y1="15" x2="18" y2="15"/></svg></span>日志</h2></div>
+          <div class="card-head"><h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8l3.5 3L5 14"/><line x1="11" y1="15" x2="18" y2="15"/></svg></span>日志</h2><button id="logsClear" class="btn btn-sm" type="button">清理</button></div>
           <div class="card-body"><div id="logs" class="logs"></div></div>
         </section>
         </div>
@@ -603,6 +603,7 @@ function windowHtml(): string {
             finally { $("addBtn").disabled = false; }
           });
           $("tasksRefresh").addEventListener("click", reloadTasks);
+          $("logsClear").addEventListener("click", async () => { await window.workerApi.clearLogs(); refresh(); });
 
           document.addEventListener("click", async (e) => {
             const actionEl = e.target.closest && e.target.closest("[data-task-action]");
@@ -663,6 +664,7 @@ app.whenReady().then(async () => {
   );
   ipcMain.handle("worker:setAllowRemote", (_event, allow: boolean) => worker?.setAllowRemoteControl(allow));
   ipcMain.handle("worker:setMaxParallel", (_event, value: number) => worker?.setMaxParallel(value));
+  ipcMain.handle("worker:clearLogs", () => worker?.clearLogs());
   ipcMain.handle("worker:listTerminals", () => worker?.listTerminals() ?? []);
   ipcMain.handle("worker:setTerminal", (_event, command: string) => worker?.setTerminalCommand(command));
   ipcMain.handle("worker:setPreCommand", (_event, command: string) => worker?.setPreCommand(command));

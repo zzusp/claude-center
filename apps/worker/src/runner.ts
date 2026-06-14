@@ -392,6 +392,11 @@ export class ClaudeCenterWorker {
     };
   }
 
+  // 桌面端「清理日志」：清空内存日志环。日志仅存内存（不落库），清理即彻底移除。
+  clearLogs(): void {
+    this.logs.length = 0;
+  }
+
   // —— 内部 —— //
 
   private cap(name: keyof Capabilities): string {
