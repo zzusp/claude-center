@@ -48,9 +48,13 @@ import {
 } from "./executor.js";
 import {
   detectCapabilities,
+  detectTerminals,
   inspectClaude,
+  inspectOs,
   type Capabilities,
   type ClaudeInspect,
+  type OsInfo,
+  type TerminalInfo,
   type WorkerUsage
 } from "./inspect.js";
 import { killProcessTree } from "./shell.js";
@@ -96,6 +100,10 @@ export type WorkerStatusSnapshot = {
   subscriptionType: string;
   usage: WorkerUsage;
   capabilities: Capabilities;
+  // worker 所在机器的操作系统概览 + 当前运行终端配置（桌面端展示 / 回显）。
+  os: OsInfo;
+  terminalCommand: string;
+  claudePreCommand: string;
   activeTasks: ActiveTaskView[];
   logs: LogLine[];
 };
@@ -119,6 +127,8 @@ export class ClaudeCenterWorker {
     claude: UNKNOWN_CAPABILITY
   };
   private readonly logs: LogLine[] = [];
+  // 操作系统概览静态不变,启动时算一次。
+  private readonly os: OsInfo = inspectOs();
 
   constructor(config = readWorkerConfig()) {
     this.config = config;
@@ -184,6 +194,25 @@ export class ClaudeCenterWorker {
     persistWorkerState(this.config.dataDir, { maxParallel: next });
     await this.reportInfo();
     void this.tick();
+  }
+
+  // 本机已装的可选运行终端，供桌面端下拉。
+  async listTerminals(): Promise<TerminalInfo[]> {
+    return detectTerminals();
+  }
+
+  // 设置运行 claude 的终端（可执行文件全路径，空=默认）。改内存 + 持久化 worker.json；仅桌面本机关心，不入 DB。
+  async setTerminalCommand(command: string): Promise<void> {
+    const next = command.trim();
+    this.config.terminalCommand = next;
+    persistWorkerState(this.config.dataDir, { terminalCommand: next });
+  }
+
+  // 设置运行 claude 前在终端会话先执行的前置命令（VPN/代理/登录等）。改内存 + 持久化 worker.json。
+  async setPreCommand(command: string): Promise<void> {
+    const next = command.trim();
+    this.config.claudePreCommand = next;
+    persistWorkerState(this.config.dataDir, { claudePreCommand: next });
   }
 
   // —— 桌面端项目关联 —— //
@@ -340,6 +369,9 @@ export class ClaudeCenterWorker {
       subscriptionType: this.lastInspect.subscriptionType,
       usage: this.lastInspect.usage,
       capabilities: this.capabilities,
+      os: this.os,
+      terminalCommand: this.config.terminalCommand,
+      claudePreCommand: this.config.claudePreCommand,
       activeTasks: [...this.active.entries()].map(([key, entry]) => ({
         key,
         taskId: entry.taskId,

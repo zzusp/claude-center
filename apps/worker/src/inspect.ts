@@ -1,8 +1,9 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { WorkerConfig } from "./config.js";
 import { runCommand } from "./shell.js";
+import { shellFamily, type ShellFamily } from "./terminal.js";
 
 // 采集 worker 机器上 Claude Code 的安装/账号信息，上报给中控展示。
 // 数据源在 docs/spec/worker-detail-usage-parallel.md 有实测记录，全部容错：拿不到不崩 worker。
@@ -55,6 +56,81 @@ export async function detectCapabilities(config: WorkerConfig): Promise<Capabili
     probeCommand(config.claudeCommand)
   ]);
   return { git, gh, claude };
+}
+
+// worker 所在机器的操作系统概览，桌面端展示用。label 形如 "Windows 10.0.26200 (x64)"。
+export type OsInfo = { platform: NodeJS.Platform; release: string; arch: string; label: string };
+export function inspectOs(): OsInfo {
+  const platform = process.platform;
+  const name =
+    platform === "win32" ? "Windows" : platform === "darwin" ? "macOS" : platform === "linux" ? "Linux" : platform;
+  const release = os.release();
+  const arch = os.arch();
+  return { platform, release, arch, label: `${name} ${release} (${arch})` };
+}
+
+// 本机已装的可选运行终端，供桌面端下拉选择。command 为解析出的可执行文件全路径。
+export type TerminalInfo = { name: string; command: string; family: ShellFamily };
+
+// 解析命令到可执行文件全路径：Windows 用 where、POSIX 用 which，取首个命中；解析不到 → null。
+async function resolveCommand(name: string): Promise<string | null> {
+  const finder = process.platform === "win32" ? "where" : "which";
+  try {
+    const result = await runCommand(finder, [name], { timeoutMs: 8_000 });
+    const first = result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)[0];
+    return first || null;
+  } catch {
+    return null;
+  }
+}
+
+// Git Bash 在 PATH 上常与 WSL 的 bash（System32\bash.exe）同名混淆，故不用 where bash，
+// 改按已知安装路径探测；都不命中再从 git 可执行文件位置反推（<root>\bin\bash.exe），覆盖装在任意路径的 Git。
+async function findGitBash(): Promise<string | null> {
+  const candidates = [
+    path.join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe"),
+    path.join(process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)", "Git", "bin", "bash.exe"),
+    path.join(process.env.LOCALAPPDATA ?? "", "Programs", "Git", "bin", "bash.exe")
+  ];
+  const known = candidates.find((candidate) => candidate && existsSync(candidate));
+  if (known) return known;
+
+  const git = await resolveCommand("git");
+  if (!git) return null;
+  // git 常在 <root>\cmd\git.exe 或 <root>\bin\git.exe；bash 在 <root>\bin\bash.exe。
+  const fromGit = path.join(path.dirname(path.dirname(git)), "bin", "bash.exe");
+  return existsSync(fromGit) ? fromGit : null;
+}
+
+// 检测本机已装终端。全部容错：探不到的项不返回。Windows 优先 PowerShell/pwsh/cmd/Git Bash/WSL，
+// 其余平台探常见 POSIX shell。返回列表供桌面端下拉，用户也可手动输入任意路径。
+export async function detectTerminals(): Promise<TerminalInfo[]> {
+  const found: TerminalInfo[] = [];
+  if (process.platform === "win32") {
+    const probes: { name: string; bin: string; family: ShellFamily }[] = [
+      { name: "Windows PowerShell", bin: "powershell", family: "powershell" },
+      { name: "PowerShell 7 (pwsh)", bin: "pwsh", family: "powershell" },
+      { name: "命令提示符 (cmd)", bin: "cmd", family: "cmd" }
+    ];
+    for (const probe of probes) {
+      const command = await resolveCommand(probe.bin);
+      if (command) found.push({ name: probe.name, command, family: probe.family });
+    }
+    const gitBash = await findGitBash();
+    if (gitBash) found.push({ name: "Git Bash", command: gitBash, family: "bash" });
+    const wsl = await resolveCommand("wsl");
+    if (wsl) found.push({ name: "WSL", command: wsl, family: "bash" });
+    return found;
+  }
+
+  for (const bin of ["bash", "zsh", "fish", "sh"]) {
+    const command = await resolveCommand(bin);
+    if (command) found.push({ name: bin, command, family: shellFamily(command) });
+  }
+  return found;
 }
 
 // Claude Code 配置目录：CLAUDE_CONFIG_DIR 覆盖，否则 ~/.claude。凭据在其下 .credentials.json。
