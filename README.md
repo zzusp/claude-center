@@ -227,6 +227,19 @@ Worker 桌面窗口的「任务」面板汇总**本机**（`claimed_by` = 本 Wo
 
 该能力依赖数据库迁移 `004_task_target_branch.sql`（新增 `tasks.target_branch`、`tasks.submit_mode` 列）。升级后务必先跑 `npm run db:migrate`。
 
+## 实时直连对话（Worker Direct Chat）
+
+独立于任务流的实时问答通道：**独立菜单「对话」、独立数据模型、独立 SSE 流式传输**。在 Console 选**指定项目（分支）+ 指定 Worker** 直接多轮对话，助手回复逐字流式呈现（打字机）。与「问答类任务」不同——后者走任务认领队列、不能指定 Worker；本通道定向某个 Worker、实时流式。完整设计见 `docs/spec/worker-direct-chat.md`，验收见 `docs/acceptance/worker-direct-chat/`。
+
+实现要点：
+
+- **数据模型**（迁移 `017_conversations.sql`）：`conversations`（项目 + 分支 + worker + 模型 + claude 会话）、`conversation_messages`（user/assistant，seq 排序）、`conversation_message_chunks`（流式分片 append-only）。
+- **派发**：照搬 `direct_commands` 的「按 `worker_id` 领专属队列」。Worker tick 里独立一支 `claimNextConversationTurn`——**不受工作态门控、不占任务并发槽、≤1 轮在途**（idle 也应答，用户显式点名了这个 Worker）。
+- **流式**：Worker 用 `claude --output-format stream-json` 在 `origin/<branch>` 的**只读 worktree**里跑（全程不 commit / 不 PR），token 增量逐片落 `conversation_message_chunks` + `pg_notify('cc_conversation')`。Console 单条专用连接 `LISTEN`，按 `conversationId` 扇出给各 SSE 连接（`GET /api/conversations/:id/stream`），浏览器 `EventSource` 逐字渲染；2s 慢轮询兜底防丢、跨实例靠 NOTIFY 广播。
+- **代理/环境**：流式用**直接 spawn** claude（不走桌面端「终端 / 前置命令」形态，避免污染 NDJSON），故对话所需代理须在 **Worker 进程 env**（如 `HTTP_PROXY` / `HTTPS_PROXY`）。
+- **权限**：创建 / 发消息复用 `command.create`（与定向指挥同级，仅 admin）；列表 / 查看登录即可、按项目范围过滤。
+- 升级后先跑 `npm run db:migrate` 应用 `017_conversations.sql`。
+
 ## 任务完成后清理（merged 终态）
 
 工作类任务收尾后，Worker 的 periodic tick 还会把任务推进到终态 `merged`：

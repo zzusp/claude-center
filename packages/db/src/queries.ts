@@ -1,5 +1,9 @@
 import type pg from "pg";
 import type {
+  Conversation,
+  ConversationChunk,
+  ConversationMessage,
+  ConversationMessageRole,
   DirectCommand,
   DirectCommandName,
   Project,
@@ -1398,4 +1402,269 @@ export async function getTaskProjectId(
     [taskId]
   );
   return result.rows[0]?.project_id ?? null;
+}
+
+/* ============================== 实时直连对话（Worker Direct Chat） ==============================
+ * 独立于任务流的问答通道：指定项目(分支) + 指定 worker，多轮对话；助手回复流式落 chunks（SSE 打字机）。
+ * 派发照搬 direct_commands 的「按 worker_id 领专属队列」。详见 docs/spec/worker-direct-chat.md
+ */
+
+export async function createConversation(
+  client: pg.Pool | pg.PoolClient,
+  input: {
+    projectId: string;
+    workerId: string;
+    branch: string;
+    model: TaskModel;
+    title?: string;
+    createdBy: string | null;
+  }
+): Promise<Conversation> {
+  const result = await client.query<Conversation>(
+    `INSERT INTO conversations (project_id, worker_id, branch, model, title, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [input.projectId, input.workerId, input.branch, input.model, input.title ?? "", input.createdBy]
+  );
+  return result.rows[0]!;
+}
+
+// 列会话：join 项目 / worker 名 + 最后消息时间。projectIds 非 null 时按项目白名单过滤（RBAC）。
+export async function listConversations(
+  client: pg.Pool | pg.PoolClient,
+  options: { projectIds: string[] | null; limit?: number } = { projectIds: null }
+): Promise<Conversation[]> {
+  const result = await client.query<Conversation>(
+    `SELECT conversations.*,
+            projects.name AS project_name,
+            workers.name AS worker_name,
+            (SELECT max(created_at) FROM conversation_messages m WHERE m.conversation_id = conversations.id) AS last_message_at
+       FROM conversations
+       JOIN projects ON projects.id = conversations.project_id
+       JOIN workers ON workers.id = conversations.worker_id
+      WHERE ($1::uuid[] IS NULL OR conversations.project_id = ANY($1))
+      ORDER BY conversations.updated_at DESC
+      LIMIT $2`,
+    [options.projectIds, options.limit ?? 100]
+  );
+  return result.rows;
+}
+
+export async function getConversation(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string
+): Promise<Conversation | null> {
+  const result = await client.query<Conversation>(
+    `SELECT conversations.*,
+            projects.name AS project_name,
+            workers.name AS worker_name
+       FROM conversations
+       JOIN projects ON projects.id = conversations.project_id
+       JOIN workers ON workers.id = conversations.worker_id
+      WHERE conversations.id = $1`,
+    [conversationId]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function listConversationMessages(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string
+): Promise<ConversationMessage[]> {
+  const result = await client.query<ConversationMessage>(
+    `SELECT * FROM conversation_messages WHERE conversation_id = $1 ORDER BY seq ASC`,
+    [conversationId]
+  );
+  return result.rows;
+}
+
+// 追加一条消息（用户提问用 role='user'）。seq = 当前会话最大 seq + 1，并 bump 会话 updated_at。
+export async function addConversationMessage(
+  client: pg.Pool | pg.PoolClient,
+  input: { conversationId: string; role: ConversationMessageRole; body: string }
+): Promise<ConversationMessage> {
+  const result = await client.query<ConversationMessage>(
+    `INSERT INTO conversation_messages (conversation_id, seq, role, body, status)
+     SELECT $1,
+            COALESCE((SELECT max(seq) FROM conversation_messages WHERE conversation_id = $1), -1) + 1,
+            $2, $3, 'done'
+     RETURNING *`,
+    [input.conversationId, input.role, input.body]
+  );
+  await client.query(`UPDATE conversations SET updated_at = now() WHERE id = $1`, [input.conversationId]);
+  return result.rows[0]!;
+}
+
+// Worker 领下一个待应答的对话轮：本 worker 的 active 会话、最后一条是 user 消息、且无在途 assistant 轮。
+// 认领动作 = 原子插入一条 assistant 'streaming' 消息（FOR UPDATE SKIP LOCKED 防并发重复应答）。
+export async function claimNextConversationTurn(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<ConversationMessage | null> {
+  const result = await client.query<ConversationMessage>(
+    `WITH candidate AS (
+       SELECT c.id AS conversation_id,
+              COALESCE((SELECT max(m.seq) FROM conversation_messages m WHERE m.conversation_id = c.id), -1) + 1 AS next_seq
+         FROM conversations c
+        WHERE c.worker_id = $1
+          AND c.status = 'active'
+          AND (SELECT m.role FROM conversation_messages m
+                WHERE m.conversation_id = c.id ORDER BY m.seq DESC LIMIT 1) = 'user'
+          AND NOT EXISTS (
+            SELECT 1 FROM conversation_messages m
+             WHERE m.conversation_id = c.id
+               AND m.role = 'assistant'
+               AND m.status IN ('pending', 'streaming'))
+        ORDER BY c.updated_at ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+     )
+     INSERT INTO conversation_messages (conversation_id, seq, role, body, status, claimed_by)
+     SELECT conversation_id, next_seq, 'assistant', '', 'streaming', $1 FROM candidate
+     RETURNING *`,
+    [workerId]
+  );
+  return result.rows[0] ?? null;
+}
+
+// 本轮提问：取「最后一条已完成 assistant 之后」的所有 user 消息，按 seq 拼接（多条连发合并为一轮）。
+export async function getConversationPrompt(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string
+): Promise<string | null> {
+  const result = await client.query<{ prompt: string | null }>(
+    `SELECT string_agg(body, E'\n\n' ORDER BY seq) AS prompt
+       FROM conversation_messages
+      WHERE conversation_id = $1
+        AND role = 'user'
+        AND seq > COALESCE(
+          (SELECT max(seq) FROM conversation_messages
+            WHERE conversation_id = $1 AND role = 'assistant' AND status IN ('done', 'failed')),
+          -1)`,
+    [conversationId]
+  );
+  return result.rows[0]?.prompt ?? null;
+}
+
+// 建对话前校验：该 worker 是否关联了此项目（否则它无 localPath、永远领不到该对话轮）。
+export async function workerLinkedToProject(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string,
+  projectId: string
+): Promise<boolean> {
+  const result = await client.query(
+    `SELECT 1 FROM worker_project_links WHERE worker_id = $1 AND project_id = $2 AND enabled = true LIMIT 1`,
+    [workerId, projectId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// Worker 解析 conversation 的项目本地检出路径（经 worker_project_links）。
+export async function getConversationLocalPath(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string,
+  workerId: string
+): Promise<string | null> {
+  const result = await client.query<{ local_path: string }>(
+    `SELECT worker_project_links.local_path
+       FROM conversations
+       JOIN worker_project_links ON worker_project_links.project_id = conversations.project_id
+      WHERE conversations.id = $1
+        AND worker_project_links.worker_id = $2
+        AND worker_project_links.enabled = true
+      LIMIT 1`,
+    [conversationId, workerId]
+  );
+  return result.rows[0]?.local_path ?? null;
+}
+
+// 流式分片落库（append-only）。
+export async function appendConversationChunk(
+  client: pg.Pool | pg.PoolClient,
+  input: { messageId: string; seq: number; delta: string }
+): Promise<void> {
+  await client.query(
+    `INSERT INTO conversation_message_chunks (message_id, seq, delta) VALUES ($1, $2, $3)`,
+    [input.messageId, input.seq, input.delta]
+  );
+}
+
+// 取某 assistant 消息 afterSeq 之后的分片，SSE 首连补发 / 断线重连续传用。
+export async function getConversationChunks(
+  client: pg.Pool | pg.PoolClient,
+  messageId: string,
+  afterSeq = -1
+): Promise<ConversationChunk[]> {
+  const result = await client.query<ConversationChunk>(
+    `SELECT * FROM conversation_message_chunks
+      WHERE message_id = $1 AND seq > $2
+      ORDER BY seq ASC`,
+    [messageId, afterSeq]
+  );
+  return result.rows;
+}
+
+// 流式收尾：落最终全文 + done；首轮把 claude session 写回会话（COALESCE 不覆盖已有）。
+export async function finalizeConversationTurn(
+  client: pg.Pool | pg.PoolClient,
+  input: { conversationId: string; messageId: string; body: string; sessionId: string | null }
+): Promise<void> {
+  await client.query(
+    `UPDATE conversation_messages
+        SET body = $2, status = 'done', updated_at = now()
+      WHERE id = $1`,
+    [input.messageId, input.body]
+  );
+  await client.query(
+    `UPDATE conversations
+        SET claude_session_id = COALESCE($2, claude_session_id), updated_at = now()
+      WHERE id = $1`,
+    [input.conversationId, input.sessionId]
+  );
+}
+
+export async function failConversationTurn(
+  client: pg.Pool | pg.PoolClient,
+  input: { messageId: string; errorMessage: string }
+): Promise<void> {
+  await client.query(
+    `UPDATE conversation_messages
+        SET status = 'failed', error_message = $2, updated_at = now()
+      WHERE id = $1`,
+    [input.messageId, input.errorMessage]
+  );
+}
+
+export async function closeConversation(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string
+): Promise<void> {
+  await client.query(
+    `UPDATE conversations SET status = 'closed', updated_at = now() WHERE id = $1`,
+    [conversationId]
+  );
+}
+
+// 通知 console 的 SSE 端点：某 assistant 消息有新分片（seq>=0）或本轮结束（seq=-1）。
+// payload 小（仅 id + seq），经 PG LISTEN/NOTIFY 跨实例广播，SSE 端据此读增量分片转发浏览器。
+export async function notifyConversationChunk(
+  client: pg.Pool | pg.PoolClient,
+  payload: { conversationId: string; messageId: string; seq: number }
+): Promise<void> {
+  await client.query(`SELECT pg_notify('cc_conversation', $1)`, [JSON.stringify(payload)]);
+}
+
+// SSE 端取当前/最近一条 assistant 消息（流式中或刚结束），据此读分片转发浏览器。
+export async function getLatestAssistantMessage(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string
+): Promise<ConversationMessage | null> {
+  const result = await client.query<ConversationMessage>(
+    `SELECT * FROM conversation_messages
+      WHERE conversation_id = $1 AND role = 'assistant'
+      ORDER BY seq DESC
+      LIMIT 1`,
+    [conversationId]
+  );
+  return result.rows[0] ?? null;
 }

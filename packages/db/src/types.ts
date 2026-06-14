@@ -190,3 +190,48 @@ export type DirectCommand = {
   created_at: string;
   updated_at: string;
 };
+
+// ===== 实时直连对话（Worker Direct Chat）：独立于任务流的问答通道。详见 docs/spec/worker-direct-chat.md =====
+export type ConversationStatus = "active" | "closed";
+export type ConversationMessageRole = "user" | "assistant";
+// user 消息恒 'done'；assistant：claim 即 'streaming'，收尾 'done'/'failed'。
+export type ConversationMessageStatus = "pending" | "streaming" | "done" | "failed";
+
+export type Conversation = {
+  id: string;
+  project_id: string;
+  project_name?: string;
+  worker_id: string;
+  worker_name?: string;
+  branch: string;
+  title: string;
+  // 复用 TaskModel：'default' 不传 --model，跟随 claude 默认。
+  model: TaskModel;
+  status: ConversationStatus;
+  claude_session_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  // listConversations 派生：最后一条消息时间，列表排序/预览用。
+  last_message_at?: string | null;
+};
+
+export type ConversationMessage = {
+  id: string;
+  conversation_id: string;
+  seq: number;
+  role: ConversationMessageRole;
+  body: string;
+  status: ConversationMessageStatus;
+  claimed_by: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ConversationChunk = {
+  message_id: string;
+  seq: number;
+  delta: string;
+  created_at: string;
+};

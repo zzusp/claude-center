@@ -3,10 +3,13 @@ import {
   acceptTask,
   addTaskComment,
   claimNextCleanupCandidate,
+  claimNextConversationTurn,
   claimNextDirectCommand,
   claimNextRejectedTask,
   claimNextResumableTask,
   claimNextTask,
+  failConversationTurn,
+  getConversation,
   getPool,
   getWorkerRuntime,
   heartbeatWorker,
@@ -40,6 +43,7 @@ import {
 } from "./config.js";
 import {
   cleanupMergedTask,
+  executeConversationTurn,
   executeDirectCommand,
   executeTask,
   rerunRejectedTask,
@@ -118,6 +122,8 @@ export class ClaudeCenterWorker {
   private cancelTimer: NodeJS.Timeout | null = null;
   // 仅护住「认领循环」，不护执行：执行 fire-and-forget 进 active 跟踪，实现真并发。
   private claiming = false;
+  // 对话独立车道：≤1 轮在途、不占任务并发槽、不受工作态门控（用户显式点名了这个 worker，idle 也应答）。
+  private conversationBusy = false;
   private readonly active = new Map<string, ActiveEntry>();
   private lastInspect: ClaudeInspect = { claudeVersion: null, subscriptionType: "unknown", usage: {} };
   // 启动时一次性自检的外部命令可用性;register/快照/任务预检都用它。
@@ -145,6 +151,7 @@ export class ClaudeCenterWorker {
     await this.gcOrphanWorktrees();
     await this.refreshInfo();
     await this.tick();
+    await this.tickConversation();
 
     this.heartbeatTimer = setInterval(() => {
       heartbeatWorker(getPool(), this.config.workerId).catch((error) => this.log("error", `heartbeat: ${error}`));
@@ -156,6 +163,7 @@ export class ClaudeCenterWorker {
 
     this.pollTimer = setInterval(() => {
       this.tick().catch((error) => this.log("error", `tick: ${error}`));
+      this.tickConversation().catch((error) => this.log("error", `tickConversation: ${error}`));
     }, this.config.pollIntervalMs);
 
     this.cancelTimer = setInterval(() => {
@@ -483,6 +491,38 @@ export class ClaudeCenterWorker {
       }
     } finally {
       this.claiming = false;
+    }
+  }
+
+  // 对话车道：独立于任务 tick（不受工作态门控、不占并发槽）。≤1 轮在途，认领→流式执行→空闲后再催一次。
+  private async tickConversation(): Promise<void> {
+    if (this.conversationBusy) {
+      return;
+    }
+    this.conversationBusy = true;
+    const pool = getPool();
+    try {
+      const turn = await claimNextConversationTurn(pool, this.config.workerId);
+      if (!turn) {
+        this.conversationBusy = false;
+        return;
+      }
+      const conv = await getConversation(pool, turn.conversation_id);
+      if (!conv) {
+        await failConversationTurn(pool, { messageId: turn.id, errorMessage: "conversation not found" });
+        this.conversationBusy = false;
+        return;
+      }
+      // fire-and-forget：执行期间占住车道，完成后释放并再催一次（处理排队的新消息）。
+      void executeConversationTurn(this.config, conv, turn, { claudeAvailable: this.capabilities.claude.ok })
+        .catch((error) => this.log("error", `conversation ${conv.id}: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => {
+          this.conversationBusy = false;
+          void this.tickConversation();
+        });
+    } catch (error) {
+      this.conversationBusy = false;
+      this.log("error", `tickConversation: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
