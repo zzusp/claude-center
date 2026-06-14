@@ -37,7 +37,7 @@ type Overview = {
   health: Health | null;
 };
 
-type ViewKey = "dashboard" | "tasks" | "workers" | "projects" | "users";
+type ViewKey = "dashboard" | "tasks" | "chat" | "workers" | "projects" | "users";
 
 // 当前登录用户（由服务端 page.tsx 注入）。permissions 决定 UI 显隐。
 type CurrentUser = {

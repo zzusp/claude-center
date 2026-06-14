@@ -1569,6 +1569,19 @@ export async function getConversationPrompt(
   return result.rows[0]?.prompt ?? null;
 }
 
+// 建对话前校验：该 worker 是否关联了此项目（否则它无 localPath、永远领不到该对话轮）。
+export async function workerLinkedToProject(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string,
+  projectId: string
+): Promise<boolean> {
+  const result = await client.query(
+    `SELECT 1 FROM worker_project_links WHERE worker_id = $1 AND project_id = $2 AND enabled = true LIMIT 1`,
+    [workerId, projectId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 // Worker 解析 conversation 的项目本地检出路径（经 worker_project_links）。
 export async function getConversationLocalPath(
   client: pg.Pool | pg.PoolClient,
@@ -1662,4 +1675,19 @@ export async function notifyConversationChunk(
   payload: { conversationId: string; messageId: string; seq: number }
 ): Promise<void> {
   await client.query(`SELECT pg_notify('cc_conversation', $1)`, [JSON.stringify(payload)]);
+}
+
+// SSE 端取当前/最近一条 assistant 消息（流式中或刚结束），据此读分片转发浏览器。
+export async function getLatestAssistantMessage(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string
+): Promise<ConversationMessage | null> {
+  const result = await client.query<ConversationMessage>(
+    `SELECT * FROM conversation_messages
+      WHERE conversation_id = $1 AND role = 'assistant'
+      ORDER BY seq DESC
+      LIMIT 1`,
+    [conversationId]
+  );
+  return result.rows[0] ?? null;
 }
