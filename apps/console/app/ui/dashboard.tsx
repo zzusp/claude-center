@@ -33,7 +33,7 @@ import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
 import { DashboardView, SyncStatus } from "./overview";
 import { TasksView, TaskDrawer } from "./tasks";
 import { WorkersView } from "./workers";
-import { ProjectsView, ProjectDrawer } from "./projects";
+import { ProjectsView } from "./projects";
 import { UsersView } from "./users";
 
 export default function Dashboard({ currentUser }: { currentUser: CurrentUser }) {
@@ -60,7 +60,6 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
   const router = useRouter();
   const [view, setView] = useState<ViewKey>("dashboard");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [projectDrawerOpen, setProjectDrawerOpen] = useState(false);
 
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -107,29 +106,6 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
 
   function openCompose() {
     setDrawerOpen(true);
-  }
-
-  async function handleProjectSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const data = new FormData(form);
-    setBusy(true);
-    try {
-      await postJson("/api/projects", {
-        name: data.get("name"),
-        repoUrl: data.get("repoUrl"),
-        defaultBranch: data.get("defaultBranch"),
-        description: data.get("description")
-      });
-      form.reset();
-      await loadOverview();
-      setProjectDrawerOpen(false);
-      setMessage("项目已创建");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "项目创建失败");
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function handleTaskSubmit(event: FormEvent<HTMLFormElement>) {
@@ -278,7 +254,7 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
           {view === "projects" ? (
             <ProjectsView
               overview={overview}
-              onOpenCompose={() => setProjectDrawerOpen(true)}
+              onChanged={loadOverview}
               canManageProjects={can.createProject}
             />
           ) : null}
@@ -298,12 +274,6 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
         canCreateTask={can.createTask}
       />
 
-      <ProjectDrawer
-        open={projectDrawerOpen}
-        busy={busy}
-        onClose={() => setProjectDrawerOpen(false)}
-        onSubmit={handleProjectSubmit}
-      />
     </div>
   );
 }

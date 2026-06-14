@@ -70,6 +70,40 @@ export async function getProject(client: pg.Pool | pg.PoolClient, id: string): P
   return result.rows[0] ?? null;
 }
 
+export async function updateProject(
+  client: pg.Pool | pg.PoolClient,
+  id: string,
+  input: { name: string; repoUrl: string; defaultBranch: string; description: string }
+): Promise<Project | null> {
+  const result = await client.query<Project>(
+    `UPDATE projects
+        SET name = $2,
+            repo_url = $3,
+            default_branch = $4,
+            description = $5,
+            updated_at = now()
+      WHERE id = $1
+      RETURNING *`,
+    [id, input.name, input.repoUrl, input.defaultBranch, input.description]
+  );
+  return result.rows[0] ?? null;
+}
+
+// 删除项目：其下任务及关联记录由外键 ON DELETE CASCADE 自动级联删除
+// （tasks / worker_project_links / user_project_links → 再到 task_events / task_comments /
+// task_dependencies）。删前点数其下任务条数，供调用方回报「含 N 个任务」。deleted=false 表示项目不存在。
+export async function deleteProject(
+  client: pg.Pool | pg.PoolClient,
+  id: string
+): Promise<{ deleted: boolean; taskCount: number }> {
+  const counted = await client.query<{ count: number }>(
+    `SELECT count(*)::int AS count FROM tasks WHERE project_id = $1`,
+    [id]
+  );
+  const result = await client.query(`DELETE FROM projects WHERE id = $1`, [id]);
+  return { deleted: (result.rowCount ?? 0) > 0, taskCount: counted.rows[0]?.count ?? 0 };
+}
+
 export async function createTask(
   client: pg.Pool | pg.PoolClient,
   input: {
