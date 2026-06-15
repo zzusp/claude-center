@@ -1061,7 +1061,7 @@ table.table {
 
 .worker-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 16px;
 }
 
@@ -1099,10 +1099,11 @@ table.table {
 .worker-name {
   font-weight: 600;
   font-size: 14px;
-}
-
-.worker-top .badge {
-  margin-left: auto;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .worker-rows {
