@@ -12,10 +12,13 @@ import {
   Info,
   ListChecks,
   MessageSquare,
+  Pencil,
+  RefreshCw,
   RotateCcw,
   ScrollText,
   Send,
   Terminal,
+  Trash2,
   UserRound,
   X
 } from "lucide-react";
@@ -52,6 +55,9 @@ export default function TaskDetailPage({
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [publishing, setPublishing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [reactivating, setReactivating] = useState(false);
 
   // 单任务详情轮询：状态翻转 / PR 链接 / 前置阻塞会随之刷新。
   async function loadTask() {
@@ -140,11 +146,40 @@ export default function TaskDetailPage({
     }
   }
 
+  async function handleDelete() {
+    const response = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
+    if (response.ok) {
+      handleBack();
+    }
+  }
+
+  async function reactivate() {
+    setReactivating(true);
+    try {
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reactivate" })
+      });
+      if (response.ok) {
+        await loadTask();
+      }
+    } finally {
+      setReactivating(false);
+    }
+  }
+
   const isBlocked = task.status === "pending" && (task.blocked ?? false);
   const canPublish = (task.status === "draft" || task.status === "scheduled") && canCreateTask;
   const canReview = task.status === "success" && canCreateTask;
   // 在途态可取消（已认领 / 执行中 / 等待回复）。
   const isCancellable = task.status === "claimed" || task.status === "running" || task.status === "waiting";
+  // 仅草稿/定时态可编辑（执行前）。
+  const canEdit = (task.status === "draft" || task.status === "scheduled") && canCreateTask;
+  // 安全态可删除（未执行或已终结）。
+  const canDelete = (task.status === "draft" || task.status === "scheduled" || task.status === "failed" || task.status === "cancelled") && canCreateTask;
+  // 失败/已取消可重新激活（让 Worker 重跑）。
+  const canReactivate = (task.status === "failed" || task.status === "cancelled") && canCreateTask;
 
   const lifecycle: { label: string; time: string | null; state: "done" | "active" | "idle" }[] = [
     { label: "已创建", time: task.created_at, state: "done" },
@@ -265,6 +300,61 @@ export default function TaskDetailPage({
                   {cancelling ? "取消中…" : "取消任务"}
                 </button>
               </div>
+            </div>
+          ) : null}
+
+          {canReactivate ? (
+            <div className="detail-hero-actions">
+              <div className="hero-cancel">
+                <span className="hero-cancel-hint">任务已{task.status === "failed" ? "失败" : "取消"}，可重新激活让 Worker 重跑。</span>
+                <button type="button" className="btn btn-sm" disabled={reactivating} onClick={() => void reactivate()}>
+                  <RefreshCw size={14} />
+                  {reactivating ? "激活中…" : "重新激活"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {canEdit && !editing ? (
+            <div className="detail-hero-actions">
+              <div className="hero-cancel">
+                <span className="hero-cancel-hint">草稿任务可修改字段后再发布。</span>
+                <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>
+                  <Pencil size={14} />
+                  编辑
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {editing ? (
+            <div className="detail-hero-actions">
+              <TaskEditForm task={task} onSaved={(updated) => { setTask(updated); setEditing(false); }} onCancel={() => setEditing(false)} />
+            </div>
+          ) : null}
+
+          {canDelete ? (
+            <div className="detail-hero-actions">
+              {deleting ? (
+                <div className="hero-cancel">
+                  <span className="hero-cancel-hint">确认删除此任务？此操作不可撤销。</span>
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    <button type="button" className="btn btn-sm" onClick={() => setDeleting(false)}>取消</button>
+                    <button type="button" className="btn btn-sm btn-danger" onClick={() => void handleDelete()}>
+                      <Trash2 size={14} />
+                      确认删除
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="hero-cancel">
+                  <span className="hero-cancel-hint">可永久删除此任务（草稿/失败/已取消状态）。</span>
+                  <button type="button" className="btn btn-sm btn-danger" onClick={() => setDeleting(true)}>
+                    <Trash2 size={14} />
+                    删除任务
+                  </button>
+                </div>
+              )}
             </div>
           ) : null}
         </section>
@@ -457,6 +547,132 @@ function TaskReviewActions({ task, onReviewed }: { task: Task; onReviewed: () =>
       )}
       {error ? <div className="error-box">{error}</div> : null}
     </div>
+  );
+}
+
+function TaskEditForm({
+  task,
+  onSaved,
+  onCancel
+}: {
+  task: Task;
+  onSaved: (updated: Task) => void;
+  onCancel: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [submitMode, setSubmitMode] = useState<"pr" | "push">(task.submit_mode);
+  const [autoMergePr, setAutoMergePr] = useState(task.auto_merge_pr);
+  const [model, setModel] = useState(task.model);
+
+  // datetime-local 值格式：去掉秒+时区（只保留 "YYYY-MM-DDTHH:MM"）
+  const scheduledAtDefault = task.scheduled_at
+    ? task.scheduled_at.slice(0, 16)
+    : "";
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const scheduledAtRaw = (data.get("scheduledAt") as string) || "";
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/tasks/${task.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update",
+          title: data.get("title") as string,
+          description: data.get("description") as string,
+          baseBranch: data.get("baseBranch") as string,
+          workBranch: data.get("workBranch") as string,
+          targetBranch: data.get("targetBranch") as string,
+          submitMode,
+          autoMergePr,
+          model,
+          scheduledAt: scheduledAtRaw ? new Date(scheduledAtRaw).toISOString() : null
+        })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? `保存失败：${response.status}`);
+      }
+      const payload = (await response.json()) as { task: Task };
+      onSaved(payload.task);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="form" onSubmit={handleSubmit} style={{ width: "100%" }}>
+      <div className="field">
+        <label className="field-label">标题</label>
+        <input name="title" defaultValue={task.title} required disabled={busy} />
+      </div>
+      <div className="field">
+        <label className="field-label">目标</label>
+        <textarea name="description" rows={4} defaultValue={task.description} required disabled={busy} />
+      </div>
+      <div className="form-row">
+        <div className="field">
+          <label className="field-label">签出分支</label>
+          <input name="baseBranch" defaultValue={task.base_branch} disabled={busy} />
+        </div>
+        <div className="field">
+          <label className="field-label">PR 目标分支</label>
+          <input name="targetBranch" defaultValue={task.target_branch} disabled={busy} />
+        </div>
+      </div>
+      <div className="form-row">
+        <div className="field">
+          <label className="field-label">工作分支</label>
+          <input name="workBranch" defaultValue={task.work_branch} disabled={busy} />
+        </div>
+        <div className="field">
+          <label className="field-label">提交模式</label>
+          <select value={submitMode} onChange={(e) => setSubmitMode(e.target.value as "pr" | "push")} disabled={busy}>
+            <option value="pr">创建 PR</option>
+            <option value="push">直接提交推送</option>
+          </select>
+        </div>
+      </div>
+      {submitMode === "pr" ? (
+        <div className="field">
+          <label className="field-label">自动合并 PR</label>
+          <select value={autoMergePr ? "on" : "off"} onChange={(e) => setAutoMergePr(e.target.value === "on")} disabled={busy}>
+            <option value="off">否 · 仅创建 PR</option>
+            <option value="on">是 · 创建后自动合并</option>
+          </select>
+        </div>
+      ) : null}
+      <div className="field">
+        <label className="field-label">执行模型</label>
+        <select value={model} onChange={(e) => setModel(e.target.value as typeof model)} disabled={busy}>
+          <option value="default">默认 · 跟随 Worker</option>
+          <option value="opus">Opus</option>
+          <option value="sonnet">Sonnet</option>
+          <option value="haiku">Haiku</option>
+        </select>
+      </div>
+      <div className="field">
+        <label className="field-label">
+          定时发布 <span className="field-hint">留空则为草稿</span>
+        </label>
+        <input name="scheduledAt" type="datetime-local" defaultValue={scheduledAtDefault} disabled={busy} />
+      </div>
+      {error ? <div className="error-box">{error}</div> : null}
+      <div className="review-btns">
+        <button className="btn btn-sm" type="button" onClick={onCancel} disabled={busy}>取消</button>
+        <button className="btn btn-primary btn-sm" type="submit" disabled={busy}>
+          <Check size={14} />
+          {busy ? "保存中…" : "保存"}
+        </button>
+      </div>
+    </form>
   );
 }
 

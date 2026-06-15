@@ -1275,6 +1275,16 @@ select:focus {
   background: #000;
 }
 
+.btn-danger {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
 .btn-sm {
   min-height: 32px;
   padding: 0 12px;
