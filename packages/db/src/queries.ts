@@ -616,6 +616,27 @@ export async function setWorkerWorkingState(
   return (result.rowCount ?? 0) > 0;
 }
 
+// 单个 worker 详情（含派生字段），供 web 详情页轮询。不存在返回 null。
+export async function getWorker(client: pg.Pool | pg.PoolClient, workerId: string): Promise<Worker | null> {
+  const result = await client.query<Worker>(
+    `SELECT workers.*,
+            CASE WHEN last_seen_at > now() - interval '60 seconds' THEN 'online' ELSE 'offline' END AS status,
+            (SELECT count(*)::int FROM tasks
+              WHERE tasks.claimed_by = workers.id
+                AND tasks.status IN ('claimed', 'running')) AS active_task_count
+       FROM workers
+      WHERE workers.id = $1`,
+    [workerId]
+  );
+  return result.rows[0] ?? null;
+}
+
+// 删除 worker 记录。返回是否存在并删除成功。
+export async function deleteWorker(client: pg.Pool | pg.PoolClient, workerId: string): Promise<boolean> {
+  const result = await client.query(`DELETE FROM workers WHERE id = $1`, [workerId]);
+  return (result.rowCount ?? 0) > 0;
+}
+
 // worker 每个 tick 读它决定是否领任务、并行上限多少。worker 不存在返回 null。
 export async function getWorkerRuntime(
   client: pg.Pool | pg.PoolClient,
