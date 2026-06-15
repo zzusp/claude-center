@@ -172,7 +172,7 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
   const navItems: { key: ViewKey; label: string; icon: React.ReactNode; count?: number }[] = [
     { key: "dashboard", label: "总览", icon: <LayoutGrid size={18} /> },
     { key: "tasks", label: "任务调度", icon: <ListTodo size={18} />, count: overview.tasks.length },
-    { key: "chat", label: "对话", icon: <MessageSquare size={18} /> },
+    { key: "chat", label: "实时对话", icon: <MessageSquare size={18} /> },
     { key: "workers", label: "执行机群", icon: <Server size={18} />, count: overview.workers.length },
     { key: "projects", label: "代码项目", icon: <FolderGit2 size={18} />, count: overview.projects.length },
     ...(can.manageUsers ? [{ key: "users" as ViewKey, label: "用户权限", icon: <Users size={18} /> }] : [])
@@ -181,7 +181,7 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
   const pageMeta: Record<ViewKey, { title: string; sub: string }> = {
     dashboard: { title: "总览", sub: "系统整体态势与健康状态" },
     tasks: { title: "任务调度", sub: "任务流转、PR 跟踪与发布" },
-    chat: { title: "对话", sub: "指定项目分支 + 指定 Worker 实时对话，独立于任务流" },
+    chat: { title: "实时对话", sub: "指定项目分支 + 指定 Worker 实时对话，独立于任务流" },
     workers: { title: "执行机群", sub: "Worker 在线状态与心跳，点击卡片查看详情" },
     projects: { title: "代码项目", sub: "仓库管理与默认分支配置" },
     users: { title: "用户权限", sub: "用户、角色与项目分配管理" }

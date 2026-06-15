@@ -1709,3 +1709,12 @@ export async function renameConversation(
 ): Promise<void> {
   await client.query(`UPDATE conversations SET title = $2 WHERE id = $1`, [conversationId, title]);
 }
+
+// 删除会话：消息(conversation_messages)、session jsonl(conversation_sessions) 经外键 ON DELETE CASCADE 一并清除。
+export async function deleteConversation(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string
+): Promise<boolean> {
+  const r = await client.query(`DELETE FROM conversations WHERE id = $1`, [conversationId]);
+  return (r.rowCount ?? 0) > 0;
+}
