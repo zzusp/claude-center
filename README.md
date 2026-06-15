@@ -93,7 +93,7 @@ npm run db:migrate      # 应用 008，写入引导管理员
 npm run verify:console
 ```
 
-`verify:console` 会临时启动 Console，依次断言：未登录访问 `/api/overview` 返回 401 → 用引导管理员登录拿到会话 cookie → 带 cookie 访问 `/api/overview` 与首页均 200，然后自动关闭服务。运行前需先 `db:migrate`（否则没有 `admin` 账号）。
+`verify:console` 会临时启动 Console，依次断言：未登录访问 `/api/dashboard` 返回 401 → 用引导管理员登录拿到会话 cookie → 带 cookie 访问 `/api/dashboard`、`/api/summary` 与首页均 200，然后自动关闭服务。运行前需先 `db:migrate`（否则没有 `admin` 账号）。
 
 ## Worker 前置依赖
 
@@ -349,6 +349,6 @@ scheduled ──到点(自动) / 人工立即发布──▶ pending ──▶ c
 实现要点：
 
 - 这三样分属共享库 / Console 服务进程 / 浏览器三个上下文，**代码各自留在原处**（不强行合并），总览页只做统一的运行健康视图。
-- 健康数据**搭 `/api/overview` 既有 3s 轮询返回**（新增 `health: { db, scheduler }` 块），不另开端点、不加定时器。`db` 走 `getPoolStats` + `pingDatabase`；`scheduler` 由 `apps/console/app/lib/scheduler-state.ts` 把调度器的启动 / tick 状态记在 `globalThis`（instrumentation 写、route 读）。
+- 健康数据**搭总览页 `/api/dashboard` 既有 3s 轮询返回**（含 `health: { db, scheduler }` 块），不另开端点、不加定时器。`db` 走 `getPoolStats` + `pingDatabase`；`scheduler` 由 `apps/console/app/lib/scheduler-state.ts` 把调度器的启动 / tick 状态记在 `globalThis`（instrumentation 写、route 读）。
 - 全站客户端轮询统一到 `apps/console/app/lib/use-polling.ts` 的 `POLL_INTERVAL_MS` 常量 + `usePolling` hook，取代散落的 `setInterval(…, 3000)`。
 - 纯内存调度器状态在单 Console 进程下成立；多实例时为 per-instance 视图。详见 `docs/spec/runtime-health-overview.md`。

@@ -4,20 +4,18 @@ import type { Project } from "@claude-center/db";
 import { FolderGit2, GitBranch, Pencil, Plus, Save, Trash2 } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { Empty, fmtTime } from "./shared";
-import { type Overview } from "./dashboard-shared";
 import { Drawer, useConfirm } from "./controls";
 
 
 function ProjectsView({
-  overview,
+  projects,
   onChanged,
   canManageProjects
 }: {
-  overview: Overview;
+  projects: Project[];
   onChanged: () => void | Promise<void>;
   canManageProjects: boolean;
 }) {
-  const projects = overview.projects;
   const [editing, setEditing] = useState<Project | null>(null);
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);

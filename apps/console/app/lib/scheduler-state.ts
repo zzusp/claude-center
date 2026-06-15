@@ -1,4 +1,4 @@
-// 调度器运行状态。instrumentation.ts（写）与 /api/overview（读）在 Next 下可能落在不同
+// 调度器运行状态。instrumentation.ts（写）与 /api/dashboard（读）在 Next 下可能落在不同
 // webpack bundle，模块级变量不保证同实例，故挂到 globalThis（与 instrumentation 的 started 标志
 // 同一套 Symbol.for 约定）。纯内存态：单 Console 进程下成立；将来多实例时是 per-instance 视图。
 

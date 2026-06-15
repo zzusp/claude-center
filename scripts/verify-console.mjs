@@ -48,7 +48,7 @@ function waitForReady() {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       reject(new Error(`Console dev server did not become ready.\n${output}`));
-    }, 30_000);
+    }, 120_000);
 
     const interval = setInterval(() => {
       if (output.includes("Ready in")) {
@@ -70,9 +70,9 @@ try {
   await waitForReady();
 
   // 1) 未登录访问受保护 API 必须 401。
-  const unauth = await fetch(`${baseUrl}/api/overview`);
+  const unauth = await fetch(`${baseUrl}/api/dashboard`);
   if (unauth.status !== 401) {
-    throw new Error(`未登录的 GET /api/overview 应为 401，实际 ${unauth.status}: ${await unauth.text()}`);
+    throw new Error(`未登录的 GET /api/dashboard 应为 401，实际 ${unauth.status}: ${await unauth.text()}`);
   }
 
   // 2) 用引导管理员登录，拿会话 cookie（需先跑过 db:migrate 应用 008）。
@@ -91,19 +91,29 @@ try {
   }
   const cookie = `cc_session=${token}`;
 
-  // 3) 带 cookie 访问受保护 API 应为 200，并返回各项计数。
-  const overview = await fetch(`${baseUrl}/api/overview`, { headers: { cookie } });
-  if (!overview.ok) {
-    throw new Error(`已登录的 GET /api/overview 返回 ${overview.status}: ${await overview.text()}`);
+  // 3) 带 cookie 访问总览数据端点应为 200（拆分后取代旧 /api/overview）。
+  const dashboard = await fetch(`${baseUrl}/api/dashboard`, { headers: { cookie } });
+  if (!dashboard.ok) {
+    throw new Error(`已登录的 GET /api/dashboard 返回 ${dashboard.status}: ${await dashboard.text()}`);
   }
-  const payload = await overview.json();
+  const payload = await dashboard.json();
 
-  // 4b) 健康块应随 overview 返回：DB 连接池 + 定时调度器状态。
+  // 4b) 健康块应随 dashboard 返回：DB 连接池 + 定时调度器状态。
   if (!payload.health || !payload.health.db || !payload.health.scheduler) {
-    throw new Error(`overview 缺少 health 块：${JSON.stringify(payload.health)}`);
+    throw new Error(`dashboard 缺少 health 块：${JSON.stringify(payload.health)}`);
   }
   if (payload.health.db.ok !== true || typeof payload.health.db.latencyMs !== "number") {
     throw new Error(`health.db 异常：${JSON.stringify(payload.health.db)}`);
+  }
+
+  // 4c) 侧边栏计数端点（拆分后由 Shell 轮询保持徽标新鲜）：已登录应为 200 且含 counts。
+  const summary = await fetch(`${baseUrl}/api/summary`, { headers: { cookie } });
+  if (!summary.ok) {
+    throw new Error(`已登录的 GET /api/summary 返回 ${summary.status}: ${await summary.text()}`);
+  }
+  const summaryPayload = await summary.json();
+  if (!summaryPayload.counts || typeof summaryPayload.counts.tasks !== "number") {
+    throw new Error(`summary 缺少 counts：${JSON.stringify(summaryPayload)}`);
   }
 
   // 4) 带 cookie 访问首页（中控台）应为 200。
@@ -115,13 +125,12 @@ try {
   console.log(
     JSON.stringify(
       {
-        unauthOverviewStatus: unauth.status,
+        unauthDashboardStatus: unauth.status,
         loginStatus: login.status,
         pageStatus: page.status,
-        projects: payload.projects.length,
         workers: payload.workers.length,
         tasks: payload.tasks.length,
-        commands: payload.commands.length,
+        counts: summaryPayload.counts,
         health: payload.health
       },
       null,

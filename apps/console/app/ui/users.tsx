@@ -27,7 +27,7 @@ import {
 } from "./shared";
 import {
   ROLE_LABEL, ROLE_OPTIONS, SPARK_CAP, TONE_COLOR, emptyOverview, fmtAgo, syncAgo,
-  type CurrentUser, type Health, type Overview, type ViewKey
+  type CurrentUser, type Health, type ViewKey
 } from "./dashboard-shared";
 import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
 import { Drawer, Select, useConfirm } from "./controls";
@@ -35,7 +35,7 @@ import { Drawer, Select, useConfirm } from "./controls";
 
 type EditableUser = UserWithProjects;
 
-function UsersView({ overview, currentUser }: { overview: Overview; currentUser: CurrentUser }) {
+function UsersView({ projects, currentUser }: { projects: Project[]; currentUser: CurrentUser }) {
   const [users, setUsers] = useState<EditableUser[]>([]);
   const [editing, setEditing] = useState<EditableUser | null>(null);
   const [creating, setCreating] = useState(false);
@@ -63,9 +63,9 @@ function UsersView({ overview, currentUser }: { overview: Overview; currentUser:
 
   const projectName = useMemo(() => {
     const map = new Map<string, string>();
-    for (const project of overview.projects) map.set(project.id, project.name);
+    for (const project of projects) map.set(project.id, project.name);
     return map;
-  }, [overview.projects]);
+  }, [projects]);
 
   async function handleDelete(user: EditableUser) {
     const ok = await confirm({
@@ -238,7 +238,7 @@ function UsersView({ overview, currentUser }: { overview: Overview; currentUser:
         {creating ? (
           <UserForm
             mode="create"
-            projects={overview.projects}
+            projects={projects}
             onDone={async (note) => {
               setCreating(false);
               setMessage(note);
@@ -250,7 +250,7 @@ function UsersView({ overview, currentUser }: { overview: Overview; currentUser:
             mode="edit"
             key={editing.id}
             user={editing}
-            projects={overview.projects}
+            projects={projects}
             onDone={async (note) => {
               setEditing(null);
               setMessage(note);

@@ -1,17 +1,16 @@
 "use client";
 
-import type { Conversation } from "@claude-center/db";
+import type { Conversation, Project, Worker } from "@claude-center/db";
 import { Check, GitBranch, MessageSquare, Pencil, Plus, Send, Server, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, postJson } from "./shared";
 import { TranscriptView, parseTranscript } from "./transcript";
 import { usePolling } from "../lib/use-polling";
-import type { Overview } from "./dashboard-shared";
 import { useConfirm } from "./controls";
 
 // 实时直连对话视图：左侧会话列表 + 新建（项目/分支/worker/模型），右侧消息线（SSE 流式打字机）+ 输入框。
 // 独立于任务流，独立数据通道。详见 docs/spec/worker-direct-chat.md
-export function ChatView({ overview, canCommand }: { overview: Overview; canCommand: boolean }) {
+export function ChatView({ projects, workers, canCommand }: { projects: Project[]; workers: Worker[]; canCommand: boolean }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
@@ -117,7 +116,8 @@ export function ChatView({ overview, canCommand }: { overview: Overview; canComm
 
       {composing ? (
         <NewConversationPanel
-          overview={overview}
+          projects={projects}
+          workers={workers}
           onClose={() => setComposing(false)}
           onCreated={(id) => {
             setComposing(false);
@@ -369,15 +369,17 @@ function ChatThread({
 }
 
 function NewConversationPanel({
-  overview,
+  projects,
+  workers,
   onClose,
   onCreated
 }: {
-  overview: Overview;
+  projects: Project[];
+  workers: Worker[];
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
-  const [projectId, setProjectId] = useState(overview.projects[0]?.id ?? "");
+  const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
   const [branch, setBranch] = useState("");
   const [branches, setBranches] = useState<string[]>([]);
   const [branchState, setBranchState] = useState<"idle" | "loading" | "error">("idle");
@@ -387,7 +389,7 @@ function NewConversationPanel({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  const onlineWorkers = overview.workers.filter((w) => w.status === "online");
+  const onlineWorkers = workers.filter((w) => w.status === "online");
 
   useEffect(() => {
     if (!projectId) {
@@ -402,7 +404,7 @@ function NewConversationPanel({
         }
         const d = (await r.json()) as { branches: string[] };
         setBranches(d.branches);
-        const def = overview.projects.find((p) => p.id === projectId)?.default_branch ?? "";
+        const def = projects.find((p) => p.id === projectId)?.default_branch ?? "";
         setBranch((cur) => (d.branches.includes(cur) ? cur : d.branches.includes(def) ? def : (d.branches[0] ?? "")));
         setBranchState("idle");
       })
@@ -455,7 +457,7 @@ function NewConversationPanel({
           <label className="chat-field">
             <span>项目</span>
             <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-              {overview.projects.map((p) => (
+              {projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
                 </option>

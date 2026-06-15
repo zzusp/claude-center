@@ -28,7 +28,7 @@ import {
 } from "./shared";
 import {
   ROLE_LABEL, ROLE_OPTIONS, SPARK_CAP, TONE_COLOR, emptyOverview, fmtAgo, syncAgo,
-  type CurrentUser, type Health, type Overview, type ViewKey
+  type CurrentUser, type Health, type ViewKey
 } from "./dashboard-shared";
 import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
 import { Drawer, Select } from "./controls";
@@ -92,23 +92,12 @@ function UsageBlock({ label, win }: { label: string; win: { utilization: number;
   );
 }
 
-function WorkersView({
-  overview
-}: {
-  overview: Overview;
-  canCommand: boolean;
-  onChanged: () => Promise<void>;
-}) {
+function WorkersView({ workers }: { workers: Worker[] }) {
   const router = useRouter();
+  const onlineWorkers = workers.filter((worker) => worker.status === "online").length;
 
   function displayName(worker: Worker): string {
     return worker.label || worker.name;
-  }
-
-  function activeTasksOf(workerId: string) {
-    return overview.tasks.filter(
-      (task) => task.claimed_by === workerId && (task.status === "running" || task.status === "claimed")
-    );
   }
 
   return (
@@ -117,19 +106,18 @@ function WorkersView({
         <div>
           <h2 className="section-title">执行机群</h2>
           <span className="section-sub">
-            {overview.summary.onlineWorkers}/{overview.workers.length} 在线 · 心跳 60s 超时判离线 · 在线≠接任务
+            {onlineWorkers}/{workers.length} 在线 · 心跳 60s 超时判离线 · 在线≠接任务
           </span>
         </div>
       </div>
 
-      {overview.workers.length === 0 ? (
+      {workers.length === 0 ? (
         <section className="card">
           <Empty icon={<Server size={28} />} text="暂无 Worker 心跳" />
         </section>
       ) : (
         <div className="worker-grid">
-          {overview.workers.map((worker) => {
-            const active = activeTasksOf(worker.id);
+          {workers.map((worker) => {
             return (
               <article
                 className="worker-card"
@@ -166,7 +154,7 @@ function WorkersView({
                   <div className="worker-row">
                     <Activity size={13} className="ico" />
                     <span className="v">
-                      在途 {worker.active_task_count ?? active.length}/{worker.max_parallel}
+                      在途 {worker.active_task_count ?? 0}/{worker.max_parallel}
                     </span>
                   </div>
                 </div>

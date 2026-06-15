@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
-import { getCurrentUser, toCurrentUser } from "./lib/session";
-import Dashboard from "./ui/dashboard";
+import { getCurrentUser } from "../../lib/session";
+import TasksClient from "./tasks-client";
 
 export const dynamic = "force-dynamic";
 
@@ -9,5 +9,5 @@ export default async function Page() {
   if (!user) {
     redirect("/login");
   }
-  return <Dashboard currentUser={toCurrentUser(user)} />;
+  return <TasksClient canCreateTask={user.permissions.includes("task.create")} />;
 }

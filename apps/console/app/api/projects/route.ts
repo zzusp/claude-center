@@ -1,6 +1,21 @@
-import { createProject, getPool } from "@claude-center/db";
+import { createProject, getPool, listProjectsForUser } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "../../lib/session";
+import { requirePermission, requireUser } from "../../lib/session";
+
+export const dynamic = "force-dynamic";
+
+export async function GET() {
+  const gate = await requireUser();
+  if (gate instanceof NextResponse) {
+    return gate;
+  }
+  try {
+    const projects = await listProjectsForUser(getPool(), gate);
+    return NextResponse.json({ projects });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+  }
+}
 
 export async function POST(request: NextRequest) {
   const gate = await requirePermission("project.create");
