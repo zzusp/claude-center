@@ -93,103 +93,22 @@ function UsageBlock({ label, win }: { label: string; win: { utilization: number;
 }
 
 function WorkersView({
-  overview,
-  canCommand,
-  onChanged
+  overview
 }: {
   overview: Overview;
   canCommand: boolean;
   onChanged: () => Promise<void>;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [toggling, setToggling] = useState(false);
-  const [toggleError, setToggleError] = useState("");
+  const router = useRouter();
 
-  // 重命名状态
-  const [renaming, setRenaming] = useState(false);
-  const [renameValue, setRenameValue] = useState("");
-  const [renameSaving, setRenameSaving] = useState(false);
-  const [renameError, setRenameError] = useState("");
-
-  // 关联项目状态（抽屉打开时懒加载）
-  const [workerProjects, setWorkerProjects] = useState<WorkerProjectLinkView[]>([]);
-  const [loadingProjects, setLoadingProjects] = useState(false);
-
-  // 抽屉读 live 数据：存 id 而非快照，轮询刷新后用量/工作态自动更新。
-  const selected = selectedId ? overview.workers.find((worker) => worker.id === selectedId) ?? null : null;
-
-  // worker 切换时加载关联项目，重置重命名状态。
-  useEffect(() => {
-    if (!selectedId) {
-      setWorkerProjects([]);
-      setRenaming(false);
-      setRenameError("");
-      return;
-    }
-    setRenaming(false);
-    setRenameError("");
-    setLoadingProjects(true);
-    fetch(`/api/workers/${selectedId}/projects`)
-      .then((res) => res.json())
-      .then((data: { links?: WorkerProjectLinkView[] }) => {
-        setWorkerProjects(data.links ?? []);
-      })
-      .catch(() => setWorkerProjects([]))
-      .finally(() => setLoadingProjects(false));
-  }, [selectedId]);
+  function displayName(worker: Worker): string {
+    return worker.label || worker.name;
+  }
 
   function activeTasksOf(workerId: string) {
     return overview.tasks.filter(
       (task) => task.claimed_by === workerId && (task.status === "running" || task.status === "claimed")
     );
-  }
-
-  async function toggleWorking(worker: Worker) {
-    const next = worker.working_state === "working" ? "idle" : "working";
-    setToggling(true);
-    setToggleError("");
-    try {
-      await postJson(`/api/workers/${worker.id}/working-state`, { state: next });
-      await onChanged();
-    } catch (error) {
-      setToggleError(error instanceof Error ? error.message : "切换失败");
-    } finally {
-      setToggling(false);
-    }
-  }
-
-  function startRename(worker: Worker) {
-    setRenameValue(worker.label ?? "");
-    setRenameError("");
-    setRenaming(true);
-  }
-
-  async function saveRename(worker: Worker) {
-    setRenameSaving(true);
-    setRenameError("");
-    try {
-      await postJson(`/api/workers/${worker.id}`, { label: renameValue });
-      await onChanged();
-      setRenaming(false);
-    } catch (error) {
-      setRenameError(error instanceof Error ? error.message : "重命名失败");
-    } finally {
-      setRenameSaving(false);
-    }
-  }
-
-  async function clearLabel(worker: Worker) {
-    try {
-      await postJson(`/api/workers/${worker.id}`, { label: "" });
-      await onChanged();
-    } catch {
-      // ignore
-    }
-  }
-
-  // worker 卡片和抽屉标题用 label（若有），否则用 name。
-  function displayName(worker: Worker): string {
-    return worker.label || worker.name;
   }
 
   return (
@@ -217,11 +136,11 @@ function WorkersView({
                 key={worker.id}
                 role="button"
                 tabIndex={0}
-                onClick={() => setSelectedId(worker.id)}
+                onClick={() => router.push(`/workers/${worker.id}`)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
-                    setSelectedId(worker.id);
+                    router.push(`/workers/${worker.id}`);
                   }
                 }}
               >
@@ -257,185 +176,6 @@ function WorkersView({
         </div>
       )}
 
-      <Drawer open={selected !== null} title={selected ? displayName(selected) : ""} onClose={() => setSelectedId(null)}>
-        {selected ? (
-          <>
-            <div className="kv">
-              {/* 显示名 / 重命名：label 优先，admin 可编辑 */}
-              <KvRow
-                k="显示名"
-                v={
-                  renaming ? (
-                    <span className="rename-row">
-                      <input
-                        className="rename-input"
-                        value={renameValue}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") saveRename(selected);
-                          if (e.key === "Escape") setRenaming(false);
-                        }}
-                        placeholder={selected.name}
-                        autoFocus
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        disabled={renameSaving}
-                        onClick={() => saveRename(selected)}
-                      >
-                        保存
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        onClick={() => setRenaming(false)}
-                      >
-                        取消
-                      </button>
-                    </span>
-                  ) : (
-                    <span className="rename-row">
-                      <span>{displayName(selected)}</span>
-                      {canCommand ? (
-                        <>
-                          <button
-                            type="button"
-                            className="btn-icon"
-                            title="重命名"
-                            onClick={() => startRename(selected)}
-                          >
-                            <Pencil size={13} />
-                          </button>
-                          {selected.label ? (
-                            <button
-                              type="button"
-                              className="btn-icon"
-                              title="清除自定义名，恢复机器名"
-                              onClick={() => clearLabel(selected)}
-                            >
-                              <X size={13} />
-                            </button>
-                          ) : null}
-                        </>
-                      ) : null}
-                    </span>
-                  )
-                }
-              />
-              {renameError ? <KvRow k="" v={<span className="remote-hint">{renameError}</span>} /> : null}
-              <KvRow k="机器名" v={selected.name} mono />
-              <KvRow k="在线状态" v={<StatusBadge status={selected.status} />} />
-              <KvRow
-                k="工作状态"
-                v={
-                  <span className="remote-toggle-row">
-                    <WorkingStateBadge state={selected.working_state} />
-                    {canCommand ? (
-                      selected.allow_remote_control ? (
-                        <button
-                          type="button"
-                          className="btn btn-sm"
-                          disabled={toggling}
-                          onClick={() => toggleWorking(selected)}
-                        >
-                          {selected.working_state === "working" ? "切到空闲" : "切到工作"}
-                        </button>
-                      ) : (
-                        <span className="remote-hint">该 Worker 未开启远程开关</span>
-                      )
-                    ) : null}
-                  </span>
-                }
-              />
-              {toggleError ? <KvRow k="" v={<span className="remote-hint">{toggleError}</span>} /> : null}
-              <KvRow k="主机" v={selected.host_name} mono />
-              <KvRow k="Worker 版本" v={`v${selected.app_version}`} mono />
-              <KvRow k="Claude Code 版本" v={selected.claude_version ?? "—"} mono />
-              <KvRow k="订阅类型" v={subscriptionLabel(selected.subscription_type)} />
-            </div>
-
-            {isPlanSubscription(selected.subscription_type) ? (
-              <>
-                <div className="detail-subhead">套餐用量</div>
-                {selected.usage.five_hour || selected.usage.seven_day ? (
-                  <>
-                    {selected.usage.five_hour ? (
-                      <UsageBlock label="5 小时窗口" win={selected.usage.five_hour} />
-                    ) : null}
-                    {selected.usage.seven_day ? (
-                      <UsageBlock label="7 天窗口" win={selected.usage.seven_day} />
-                    ) : null}
-                  </>
-                ) : (
-                  // 套餐账号却没拿到用量窗口：显示失败原因，而非一片空白（曾因静默而反复修不好）。
-                  <div className="remote-hint">
-                    用量采集失败：{selected.usage.error ?? "Worker 暂未上报用量"}
-                  </div>
-                )}
-              </>
-            ) : null}
-
-            <div className="detail-subhead">
-              并行处理（{selected.active_task_count ?? activeTasksOf(selected.id).length}/{selected.max_parallel}）
-            </div>
-            {activeTasksOf(selected.id).length === 0 ? (
-              <div className="remote-hint">当前空闲，无在途任务</div>
-            ) : (
-              <div className="parallel-list">
-                {activeTasksOf(selected.id).map((task) => (
-                  <div className="parallel-item" key={task.id}>
-                    <span className="t">{task.title}</span>
-                    <StatusBadge status={task.status} />
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="detail-subhead">关联项目</div>
-            {loadingProjects ? (
-              <div className="remote-hint">加载中…</div>
-            ) : workerProjects.length === 0 ? (
-              <div className="remote-hint">暂无关联项目</div>
-            ) : (
-              <div className="project-links">
-                {workerProjects.map((link) => (
-                  <div className="project-link-row" key={`${link.project_id}-${link.local_path}`}>
-                    <FolderGit2 size={13} className="ico" />
-                    <span className="project-link-name">{link.project_name}</span>
-                    <span className="project-link-path mono">{link.local_path}</span>
-                    {!link.enabled ? <span className="badge" data-tone="pending">已停用</span> : null}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="detail-subhead">运行信息</div>
-            <div className="kv">
-              <KvRow k="并行上限" v={String(selected.max_parallel)} />
-              {selected.terminal_command ? (
-                <KvRow k="运行终端" v={selected.terminal_command} mono />
-              ) : null}
-              {selected.claude_pre_command ? (
-                <KvRow k="前置命令" v={selected.claude_pre_command} mono />
-              ) : null}
-              <KvRow
-                k="最后心跳"
-                v={`${fmtDateTime(selected.last_seen_at)}（${fmtAgo(selected.last_seen_at)}）`}
-              />
-              <KvRow k="创建于" v={fmtDateTime(selected.created_at)} />
-              <KvRow k="更新于" v={fmtDateTime(selected.updated_at)} />
-              {Object.keys(selected.capabilities).length > 0 ? (
-                <KvRow k="能力" v={JSON.stringify(selected.capabilities)} mono />
-              ) : null}
-              {Object.keys(selected.metadata).length > 0 ? (
-                <KvRow k="元数据" v={JSON.stringify(selected.metadata)} mono />
-              ) : null}
-              <KvRow k="Worker ID" v={selected.id} mono />
-            </div>
-          </>
-        ) : null}
-      </Drawer>
     </>
   );
 }
