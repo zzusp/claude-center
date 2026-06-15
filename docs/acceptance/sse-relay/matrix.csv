@@ -1,0 +1,13 @@
+case,description,round-1
+C1,relay selftest: 落库后发布秒级投递,PASS
+C2,relay selftest: 保活 ping 700ms 内不误断,PASS
+C3,relay selftest: Last-Event-ID 断点重放补缺口,PASS
+C4,relay selftest: 无票据/无 token 订阅被拒 401,PASS
+C5,relay selftest: ticket 频道白名单过滤(allowed 投递/denied 拒),PASS
+C6,relay selftest: /healthz 返回运行计数,PASS
+C7,集成 e2e: WorkerRelay 经 live relay 收到 console 事件,PASS
+C8,集成 e2e: WorkerRelay 忽略自身发出的事件(origin 过滤),PASS
+C9,relay --check 零副作用自检(打印脱敏配置/不监听/退出0),PASS
+C10,全量 typecheck(db/relay-client/console/worker/relay 五包),PASS
+C11,全量 build 含 next build,PASS
+C12,verify:console relay 禁用时 401→登录→200 无回归,PASS

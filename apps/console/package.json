@@ -4,14 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "predev": "npm -w @claude-center/db run build",
-    "prebuild": "npm -w @claude-center/db run build",
+    "predev": "npm -w @claude-center/db run build && npm -w @claude-center/relay-client run build",
+    "prebuild": "npm -w @claude-center/db run build && npm -w @claude-center/relay-client run build",
     "dev": "next dev",
     "build": "next build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@claude-center/db": "0.1.0",
+    "@claude-center/relay-client": "0.1.0",
     "lucide-react": "^0.468.0",
     "next": "^15.1.4",
     "react": "^19.0.0",

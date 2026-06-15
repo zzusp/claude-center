@@ -10,6 +10,7 @@ import {
   claimNextTask,
   failConversationTurn,
   getConversation,
+  getTaskWithDeps,
   getPool,
   getWorkerRuntime,
   heartbeatWorker,
@@ -68,6 +69,8 @@ import {
 } from "./inspect.js";
 import { killProcessTree } from "./shell.js";
 import { gcWorktrees } from "./worktree.js";
+import { WorkerRelay } from "./relay.js";
+import { projectChannel, type RelayEvent } from "@claude-center/relay-client";
 
 // 取消请求扫描间隔(ms):独立于工作态门控与认领循环,确保在执行中也能及时响应取消。
 const CANCEL_INTERVAL_MS = 3_000;
@@ -129,6 +132,9 @@ export class ClaudeCenterWorker {
   private claiming = false;
   // 对话独立车道：≤1 轮在途、不占任务并发槽、不受工作态门控（用户显式点名了这个 worker，idle 也应答）。
   private conversationBusy = false;
+  private readonly relay: WorkerRelay;
+  // 本机当前关联的项目 id 集（订阅 project 频道 + worker.upserted 扇出用）。
+  private linkedProjectIds: string[] = [];
   private readonly active = new Map<string, ActiveEntry>();
   private lastInspect: ClaudeInspect = { claudeVersion: null, subscriptionType: "unknown", usage: {} };
   // 上次真去打 oauth/usage 的时刻（ms epoch）；按 usageIntervalMs 慢节奏控制，避免 60s 高频被限流。0=尚未采集。
@@ -145,6 +151,7 @@ export class ClaudeCenterWorker {
 
   constructor(config = readWorkerConfig()) {
     this.config = config;
+    this.relay = new WorkerRelay(config, (event) => this.onRelaySignal(event), (level, message) => this.log(level, message));
   }
 
   async start(): Promise<void> {
@@ -156,12 +163,15 @@ export class ClaudeCenterWorker {
 
     await this.register();
     await this.gcOrphanWorktrees();
+    // 拉取本机关联项目 → 订阅 worker:<id> + 各 project:<id> 频道（relayUrl 为空则 no-op）。
+    await this.refreshLinkedProjects();
     await this.refreshInfo();
     await this.tick();
     await this.tickConversation();
 
     this.heartbeatTimer = setInterval(() => {
       heartbeatWorker(getPool(), this.config.workerId).catch((error) => this.log("error", `heartbeat: ${error}`));
+      void this.publishWorkerUpserted();
     }, this.config.heartbeatIntervalMs);
 
     this.infoTimer = setInterval(() => {
@@ -183,6 +193,7 @@ export class ClaudeCenterWorker {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.infoTimer) clearInterval(this.infoTimer);
     if (this.cancelTimer) clearInterval(this.cancelTimer);
+    this.relay.stop();
   }
 
   // —— 桌面端开关 —— //
@@ -190,6 +201,7 @@ export class ClaudeCenterWorker {
   // 本地切换工作态（viaRemote 默认 false，不受 allow_remote_control 约束）。切到 working 立即催一次认领。
   async setWorkingState(state: "idle" | "working"): Promise<void> {
     await setWorkerWorkingState(getPool(), this.config.workerId, state);
+    void this.publishWorkerUpserted();
     if (state === "working") {
       void this.tick();
     }
@@ -275,6 +287,7 @@ export class ClaudeCenterWorker {
       localPath: input.localPath
     });
     this.log("info", `Linked project ${input.projectName} → ${input.localPath}`);
+    void this.refreshLinkedProjects();
     void this.tick();
   }
 
@@ -294,6 +307,7 @@ export class ClaudeCenterWorker {
       localPath: input.localPath
     });
     this.log("info", `Unlinked project ${input.projectName} → ${input.localPath}`);
+    void this.refreshLinkedProjects();
   }
 
   // 桌面端取消一个在途任务：打取消请求戳 + 立即扫描处理一轮（杀进程并翻终态）。返回是否为可取消的在途任务。
@@ -531,6 +545,146 @@ export class ClaudeCenterWorker {
       allowRemoteControl: this.config.allowRemoteControl,
       maxParallel: this.config.maxParallel
     });
+    void this.publishWorkerUpserted();
+  }
+
+  // —— SSE 中转（relay）：订阅信号驱动即时 tick + 各生命周期点落库后 best-effort 发布 —— //
+
+  // 收到外部（非自己发出）的中转信号即催一次相应车道；各车道都有 busy/工作态守卫，重复触发安全。
+  private onRelaySignal(event: RelayEvent): void {
+    if (event.type === "conversation.message" || event.type === "conversation.upserted") {
+      void this.tickConversation();
+      return;
+    }
+    void this.tick();
+    void this.tickConversation();
+    void this.handleCancellations();
+  }
+
+  // 拉取本机关联项目 id，更新 worker.upserted 扇出范围并据此（重新）订阅 project 频道。
+  private async refreshLinkedProjects(): Promise<void> {
+    try {
+      const links = await listWorkerProjectLinks(getPool(), this.config.workerId);
+      this.linkedProjectIds = [...new Set(links.filter((link) => link.enabled).map((link) => link.project_id))];
+      this.relay.subscribe(this.linkedProjectIds);
+    } catch (error) {
+      this.log("error", `relay refreshLinks: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // 推一行任务（full payload）到其项目频道。
+  private publishTask(task: Task): void {
+    this.relay.publish({
+      channel: projectChannel(task.project_id),
+      type: "task.upserted",
+      entityId: task.id,
+      projectId: task.project_id,
+      seq: task.updated_at,
+      payload: task
+    });
+  }
+
+  // 取最新落库任务行后再推（执行进终态 / 取消后）。
+  private async publishTaskById(taskId: string): Promise<void> {
+    if (!this.relay.enabled) {
+      return;
+    }
+    try {
+      const result = await getTaskWithDeps(getPool(), taskId);
+      if (result) {
+        this.publishTask(result.task);
+      }
+    } catch (error) {
+      this.log("error", `relay publishTask ${taskId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // 认领对话轮时推：会话头（进入回复中）+ 该 assistant 轮消息（streaming 占位）。
+  private publishConversationTurn(conversation: Conversation, message: ConversationMessage): void {
+    if (!this.relay.enabled) {
+      return;
+    }
+    const channel = projectChannel(conversation.project_id);
+    this.relay.publish({
+      channel,
+      type: "conversation.upserted",
+      entityId: conversation.id,
+      projectId: conversation.project_id,
+      payload: conversation
+    });
+    this.relay.publish({
+      channel,
+      type: "conversation.message",
+      entityId: conversation.id,
+      projectId: conversation.project_id,
+      seq: message.seq,
+      payload: message
+    });
+  }
+
+  // 对话轮收尾后推：最新会话头 + 助手终态消息（full payload）。
+  private async publishConversationFinal(conversationId: string): Promise<void> {
+    if (!this.relay.enabled) {
+      return;
+    }
+    try {
+      const pool = getPool();
+      const conversation = await getConversation(pool, conversationId);
+      if (!conversation) {
+        return;
+      }
+      const channel = projectChannel(conversation.project_id);
+      this.relay.publish({
+        channel,
+        type: "conversation.upserted",
+        entityId: conversation.id,
+        projectId: conversation.project_id,
+        payload: conversation
+      });
+      const messages = await listConversationMessages(pool, conversationId);
+      const last = messages[messages.length - 1];
+      if (last) {
+        this.relay.publish({
+          channel,
+          type: "conversation.message",
+          entityId: conversation.id,
+          projectId: conversation.project_id,
+          seq: last.seq,
+          payload: last
+        });
+      }
+    } catch (error) {
+      this.log("error", `relay publishConv ${conversationId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // 推 worker 摘要到所有关联项目频道（Console 执行机群列表/详情秒级更新）。
+  private async publishWorkerUpserted(): Promise<void> {
+    if (!this.relay.enabled || !this.linkedProjectIds.length) {
+      return;
+    }
+    try {
+      const runtime = await getWorkerRuntime(getPool(), this.config.workerId).catch(() => null);
+      const payload = {
+        id: this.config.workerId,
+        name: this.config.workerName,
+        host_name: this.config.hostName,
+        working_state: runtime?.working_state ?? "idle",
+        max_parallel: runtime?.max_parallel ?? this.config.maxParallel,
+        active_task_count: this.active.size
+      };
+      for (const projectId of this.linkedProjectIds) {
+        this.relay.publish({
+          channel: projectChannel(projectId),
+          type: "worker.upserted",
+          entityId: this.config.workerId,
+          projectId,
+          payload
+        });
+      }
+    } catch (error) {
+      this.log("error", `relay publishWorker: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private async tick(): Promise<void> {
@@ -575,11 +729,15 @@ export class ClaudeCenterWorker {
         this.conversationBusy = false;
         return;
       }
+      // 认领即推：让 Console 秒级看到该会话进入「回复中」。
+      this.publishConversationTurn(conv, turn);
       // fire-and-forget：执行期间占住车道，完成后释放并再催一次（处理排队的新消息）。
       void executeConversationTurn(this.config, conv, turn, { claudeAvailable: this.capabilities.claude.ok })
         .catch((error) => this.log("error", `conversation ${conv.id}: ${error instanceof Error ? error.message : String(error)}`))
         .finally(() => {
           this.conversationBusy = false;
+          // 收尾后推最新会话头 + 助手终态消息（full payload），Console 秒级显示回复。
+          void this.publishConversationFinal(conv.id);
           void this.tickConversation();
         });
     } catch (error) {
@@ -608,6 +766,7 @@ export class ClaudeCenterWorker {
         { key: `task:${resumable.id}`, taskId: resumable.id, kind: "task", title: resumable.title },
         (hooks) => resumeTask(this.config, resumable, hooks)
       );
+      this.publishTask(resumable);
       return true;
     }
 
@@ -617,6 +776,7 @@ export class ClaudeCenterWorker {
         { key: `task:${rejected.id}`, taskId: rejected.id, kind: "task", title: rejected.title },
         (hooks) => rerunRejectedTask(this.config, rejected, hooks)
       );
+      this.publishTask(rejected);
       return true;
     }
 
@@ -626,6 +786,7 @@ export class ClaudeCenterWorker {
         { key: `task:${task.id}`, taskId: task.id, kind: "task", title: task.title },
         (hooks) => executeTask(this.config, task, hooks)
       );
+      this.publishTask(task);
       return true;
     }
 
@@ -636,6 +797,7 @@ export class ClaudeCenterWorker {
         { key: `cleanup:${cleanup.id}`, taskId: cleanup.id, kind: "cleanup", title: cleanup.title },
         () => cleanupMergedTask(this.config, cleanup)
       );
+      this.publishTask(cleanup);
       return true;
     }
 
@@ -666,6 +828,10 @@ export class ClaudeCenterWorker {
       .catch((error) => this.log("error", `${meta.key}: ${error instanceof Error ? error.message : String(error)}`))
       .finally(() => {
         this.active.delete(meta.key);
+        // 执行进终态后把最新任务行推给 Console（取最新落库状态，full payload）。
+        if (meta.taskId) {
+          void this.publishTaskById(meta.taskId);
+        }
         void this.tick();
       });
     this.active.set(meta.key, entry);
@@ -692,6 +858,9 @@ export class ClaudeCenterWorker {
           killProcessTree(entry.child);
         }
         this.log("info", `Task ${entry.taskId} cancelled (${ok ? "marked" : "already terminal"})`);
+        if (entry.taskId) {
+          void this.publishTaskById(entry.taskId);
+        }
       } catch (error) {
         this.log("error", `cancel ${entry.taskId}: ${error instanceof Error ? error.message : String(error)}`);
       }

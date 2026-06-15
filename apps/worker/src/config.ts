@@ -46,6 +46,12 @@ export type WorkerConfig = {
   // 套餐用量（远程 oauth/usage）单独的采集间隔（ms），独立于 infoIntervalMs 的高频刷新。
   // 用量窗口是 5h/7d 缓变量，无需 60s 高频；放慢可避开该接口限流（rate_limit_error）。
   usageIntervalMs: number;
+  // SSE 中转服务基址（CLAUDE_CENTER_RELAY_URL）。空=禁用中转、纯走数据库轮询。
+  relayUrl: string;
+  // 向中转发布事件的鉴权 token（CLAUDE_CENTER_RELAY_PUBLISH_TOKEN）。
+  relayPublishToken: string;
+  // 订阅中转的 worker 鉴权 token（CLAUDE_CENTER_RELAY_WORKER_TOKEN）。
+  relayWorkerToken: string;
 };
 
 // worker.json 持久化:workerId（稳定身份）+ 跨重启保留的客户端策略（allowRemoteControl/maxParallel）
@@ -188,6 +194,9 @@ export function readWorkerConfig(): WorkerConfig {
     allowRemoteControl: state.allowRemoteControl ?? readBool("CLAUDE_CENTER_ALLOW_REMOTE_CONTROL", false),
     usageProxy,
     infoIntervalMs: readNumber("CLAUDE_CENTER_INFO_INTERVAL_MS", 60_000),
-    usageIntervalMs: readNumber("CLAUDE_CENTER_USAGE_INTERVAL_MS", 300_000)
+    usageIntervalMs: readNumber("CLAUDE_CENTER_USAGE_INTERVAL_MS", 300_000),
+    relayUrl: process.env.CLAUDE_CENTER_RELAY_URL?.trim() || "",
+    relayPublishToken: process.env.CLAUDE_CENTER_RELAY_PUBLISH_TOKEN?.trim() || "",
+    relayWorkerToken: process.env.CLAUDE_CENTER_RELAY_WORKER_TOKEN?.trim() || ""
   };
 }
