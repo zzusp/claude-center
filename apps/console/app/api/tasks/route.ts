@@ -97,6 +97,8 @@ export async function POST(request: NextRequest) {
       targetBranch?: string;
       submitMode?: string;
       autoMergePr?: boolean;
+      autoReply?: boolean;
+      autoDecisionHints?: string;
       model?: string;
       dependsOn?: string[];
       scheduledAt?: string;
@@ -129,6 +131,9 @@ export async function POST(request: NextRequest) {
     const submitMode = body.submitMode === "push" ? "push" : "pr";
     // 自动合并 PR 仅对 PR 模式有效：push 模式直推目标分支、无 PR 可合。
     const autoMergePr = submitMode === "pr" && body.autoMergePr === true;
+    // 自动回复（兜底）：与 submit_mode 解耦。hints 仅在 auto_reply=true 时有意义；不勾时一律落空串。
+    const autoReply = body.autoReply === true;
+    const autoDecisionHints = autoReply ? (body.autoDecisionHints ?? "").trim() : "";
 
     // 执行模型白名单校验：非法 / 缺省一律落 'default'（Worker 执行时不传 --model）。
     const model: TaskModel =
@@ -149,6 +154,8 @@ export async function POST(request: NextRequest) {
         targetBranch: body.targetBranch?.trim() || baseBranch,
         submitMode,
         autoMergePr,
+        autoReply,
+        autoDecisionHints,
         model,
         scheduledAt
       });

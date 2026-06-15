@@ -575,6 +575,7 @@ function ComposeTaskForm({
   const [branchState, setBranchState] = useState<"idle" | "loading" | "error">("idle");
   const [submitMode, setSubmitMode] = useState<"pr" | "push">("pr");
   const [autoMergePr, setAutoMergePr] = useState(false);
+  const [autoReply, setAutoReply] = useState(false);
   const [model, setModel] = useState<"default" | "opus" | "sonnet" | "haiku">("default");
 
   useEffect(() => {
@@ -699,6 +700,29 @@ function ComposeTaskForm({
             ]}
             ariaLabel="自动合并 PR"
           />
+        </div>
+      ) : null}
+      <div className="field">
+        <label className="field-label">
+          自动回复（兜底） <span className="field-hint">主防线让 Claude 不要停下问；真停了：零改动→失败，有改动→自动续接最多 2 轮</span>
+        </label>
+        <Select
+          name="autoReply"
+          value={autoReply ? "on" : "off"}
+          onChange={(value) => setAutoReply(value === "on")}
+          options={[
+            { value: "off", label: "否 · 等人回复（默认）" },
+            { value: "on", label: "是 · 无人值守，按规则兜底" }
+          ]}
+          ariaLabel="自动回复"
+        />
+      </div>
+      {autoReply ? (
+        <div className="field">
+          <label className="field-label">
+            决策预案 <span className="field-hint">可选，喂给 Claude 当决策偏好（如"优先最小改动，跳过测试"）</span>
+          </label>
+          <textarea name="autoDecisionHints" rows={2} placeholder="prefer minimal change; keep existing patterns; ..." />
         </div>
       ) : null}
       <div className="field">

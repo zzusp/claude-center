@@ -121,6 +121,10 @@ export async function createTask(
     submitMode: TaskSubmitMode;
     // 自动合并 PR：仅 PR 模式有意义，Worker 建 PR 后自动 gh pr merge --merge。
     autoMergePr: boolean;
+    // 自动回复（兜底）：见 Task.auto_reply 注释。
+    autoReply: boolean;
+    // 决策预案：auto_reply=true 时拼进 prompt（不勾自动回复则传空串）。
+    autoDecisionHints: string;
     // 任务级 Claude 执行模型；'default' 表示 Worker 执行时不传 --model。
     model: TaskModel;
     // 指定发布时间则落 'scheduled' 定时态，到点由调度器转 pending；为空走默认 'draft'。
@@ -130,8 +134,8 @@ export async function createTask(
   const scheduledAt = input.scheduledAt ?? null;
   const status = scheduledAt ? "scheduled" : "draft";
   const result = await client.query<Task>(
-    `INSERT INTO tasks (project_id, title, description, base_branch, work_branch, target_branch, submit_mode, model, auto_merge_pr, status, scheduled_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    `INSERT INTO tasks (project_id, title, description, base_branch, work_branch, target_branch, submit_mode, model, auto_merge_pr, auto_reply, auto_decision_hints, status, scheduled_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      RETURNING *`,
     [
       input.projectId,
@@ -143,6 +147,8 @@ export async function createTask(
       input.submitMode,
       input.model,
       input.autoMergePr,
+      input.autoReply,
+      input.autoDecisionHints,
       status,
       scheduledAt
     ]
@@ -163,6 +169,8 @@ export async function updateTask(
     targetBranch: string;
     submitMode: TaskSubmitMode;
     autoMergePr: boolean;
+    autoReply: boolean;
+    autoDecisionHints: string;
     model: TaskModel;
     scheduledAt?: string | null;
   }
@@ -178,9 +186,11 @@ export async function updateTask(
             target_branch = $6,
             submit_mode = $7,
             auto_merge_pr = $8,
-            model = $9,
-            scheduled_at = $10,
-            status = $11,
+            auto_reply = $9,
+            auto_decision_hints = $10,
+            model = $11,
+            scheduled_at = $12,
+            status = $13,
             updated_at = now()
       WHERE id = $1 AND status IN ('draft', 'scheduled')
       RETURNING *`,
@@ -193,6 +203,8 @@ export async function updateTask(
       input.targetBranch,
       input.submitMode,
       input.autoMergePr,
+      input.autoReply,
+      input.autoDecisionHints,
       input.model,
       scheduledAt,
       status

@@ -75,6 +75,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       targetBranch?: string;
       submitMode?: TaskSubmitMode;
       autoMergePr?: boolean;
+      autoReply?: boolean;
+      autoDecisionHints?: string;
       model?: TaskModel;
       scheduledAt?: string | null;
     };
@@ -109,6 +111,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (!body.title || !body.description || !body.baseBranch || !body.workBranch || !body.targetBranch || !body.submitMode || !body.model) {
         return NextResponse.json({ error: "缺少必要字段" }, { status: 400 });
       }
+      const autoReply = body.autoReply === true;
       const task = await updateTask(getPool(), id, {
         title: body.title,
         description: body.description,
@@ -117,6 +120,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         targetBranch: body.targetBranch,
         submitMode: body.submitMode,
         autoMergePr: body.autoMergePr ?? false,
+        autoReply,
+        autoDecisionHints: autoReply ? (body.autoDecisionHints ?? "").trim() : "",
         model: body.model,
         scheduledAt: body.scheduledAt ?? null
       });

@@ -58,6 +58,8 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
         targetBranch: data.get("targetBranch"),
         submitMode: data.get("submitMode"),
         autoMergePr: data.get("autoMergePr") === "on",
+        autoReply: data.get("autoReply") === "on",
+        autoDecisionHints: String(data.get("autoDecisionHints") ?? ""),
         model: data.get("model"),
         dependsOn: data.getAll("dependsOn").map(String),
         scheduledAt
