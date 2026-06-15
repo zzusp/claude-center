@@ -1,7 +1,7 @@
 import { getPool, getTaskProjectId, getTaskWithDeps, userHasProject } from "@claude-center/db";
 import { notFound, redirect } from "next/navigation";
-import { getCurrentUser, toCurrentUser } from "../../lib/session";
-import TaskDetailPage from "../../ui/task-detail";
+import { getCurrentUser, toCurrentUser } from "../../../lib/session";
+import TaskDetailPage from "../../../ui/task-detail";
 
 export const dynamic = "force-dynamic";
 
