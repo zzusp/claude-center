@@ -15,7 +15,7 @@ import type {
 import {
   Activity, ArrowDown, ArrowUp, Boxes, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert,
   Clock, Cpu, Database, ExternalLink, Eye, FolderGit2, GitBranch, GitPullRequest, Inbox, LayoutGrid, ListTodo, LogOut,
-  MessageSquare, Network, Pencil, Plus, Power, RadioTower, RotateCcw, Save, Search, Send, Server,
+  MessageSquare, Network, Pencil, Plus, Power, RadioTower, RefreshCw, RotateCcw, Save, Search, Send, Server,
   ShieldCheck, Tag, Trash2, UserRound, Users, X
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -192,22 +192,30 @@ function TasksView({
 
   return (
     <>
-      <div className="section-head">
-        <div>
-          <h2 className="section-title">任务流</h2>
-          <span className="section-sub">{data.total} 个任务 · 点操作列「查看」进入详情</span>
-        </div>
-        {canCreateTask ? (
+      <div className="page-head">
+        <h1 className="page-head-title">任务流</h1>
+        <div className="page-head-actions">
           <button
             type="button"
-            className="btn btn-primary btn-sm"
-            onClick={onOpenCompose}
-            disabled={projects.length === 0}
+            className="btn btn-sm"
+            onClick={() => setRefreshKey((prev) => prev + 1)}
+            title="刷新"
           >
-            <Plus size={16} />
-            发布任务
+            <RefreshCw size={16} />
+            刷新
           </button>
-        ) : null}
+          {canCreateTask ? (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={onOpenCompose}
+              disabled={projects.length === 0}
+            >
+              <Plus size={16} />
+              新建任务
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="page-grid">
