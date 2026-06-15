@@ -548,8 +548,27 @@ function windowHtml(): string {
           function renderConversations(list) {
             convCache = list || [];
             if (!convCache.length) { $("conversations").innerHTML = '<span class="empty">本机暂无对话</span>'; return; }
+            // 轮询重建列表会把已展开详情重置为「加载中…」并触发重新拉取 → 每次刷新闪烁；
+            // 先存下当前详情内容与滚动位置，重建后原样还原，平滑刷新仍交给 1.5s 定时器。
+            let keep = null;
+            if (expandedConvId) {
+              const old = document.getElementById("conv-detail-" + expandedConvId);
+              if (old) {
+                const ml = document.getElementById("conv-msgs-" + expandedConvId);
+                keep = { html: old.innerHTML, top: ml ? ml.scrollTop : null };
+              }
+            }
             $("conversations").innerHTML = convCache.map(convRow).join("");
-            if (expandedConvId) loadConvDetail(expandedConvId);
+            if (expandedConvId) {
+              const box = document.getElementById("conv-detail-" + expandedConvId);
+              if (box && keep) {
+                box.innerHTML = keep.html;
+                const ml = document.getElementById("conv-msgs-" + expandedConvId);
+                if (ml && keep.top != null) ml.scrollTop = keep.top;
+              } else {
+                loadConvDetail(expandedConvId); // 首次展开：显示「加载中…」并拉取
+              }
+            }
           }
           async function reloadConversations() {
             let list = [];
