@@ -8,7 +8,6 @@ import {
   ChevronLeft,
   ExternalLink,
   FileText,
-  GitBranch,
   Info,
   ListChecks,
   MessageSquare,
@@ -25,8 +24,19 @@ import {
 import { useRouter } from "next/navigation";
 import { FormEvent, ReactNode, useMemo, useRef, useState } from "react";
 import { Empty, KvRow, StatusBadge, fmtTime, postJson } from "./shared";
+import { Drawer, useConfirm } from "./controls";
 import { TranscriptView, parseTranscript } from "./transcript";
 import { usePolling } from "../lib/use-polling";
+
+type DetailTabKey = "overview" | "timeline" | "chat" | "execution" | "logs";
+
+const DETAIL_TABS: { key: DetailTabKey; label: string; icon: ReactNode }[] = [
+  { key: "overview", label: "概览", icon: <FileText size={14} /> },
+  { key: "timeline", label: "时间线", icon: <Activity size={14} /> },
+  { key: "chat", label: "对话", icon: <MessageSquare size={14} /> },
+  { key: "execution", label: "Claude Code 执行", icon: <Terminal size={14} /> },
+  { key: "logs", label: "日志", icon: <ScrollText size={14} /> }
+];
 
 const EVENT_LABEL: Record<string, string> = {
   running: "开始执行",
@@ -56,8 +66,10 @@ export default function TaskDetailPage({
   const [publishing, setPublishing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [reactivating, setReactivating] = useState(false);
+  // Tab 化后顶栏 actions：编辑走 Drawer、删除走 useConfirm，与列表页一致。
+  const [activeTab, setActiveTab] = useState<DetailTabKey>("overview");
+  const { confirm, dialog } = useConfirm();
 
   // 单任务详情轮询：状态翻转 / PR 链接 / 前置阻塞会随之刷新。
   async function loadTask() {
@@ -147,6 +159,13 @@ export default function TaskDetailPage({
   }
 
   async function handleDelete() {
+    const ok = await confirm({
+      title: "删除任务",
+      message: `确认删除任务「${task.title}」？此操作不可撤销。`,
+      confirmText: "删除任务",
+      danger: true
+    });
+    if (!ok) return;
     const response = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
     if (response.ok) {
       handleBack();
@@ -229,34 +248,194 @@ export default function TaskDetailPage({
           返回任务流
         </button>
         <div className="detail-page-head">
-          <h1 className="detail-page-title">{task.title}</h1>
-          <div className="detail-tags">
+          <div className="detail-head-title">
+            <h1 className="detail-page-title">{task.title}</h1>
             <StatusBadge status={task.status} />
             {isBlocked ? (
-              <span className="badge" data-tone="pending">
-                ⛔ 前置未完成·阻塞中
-              </span>
+              <span className="badge" data-tone="pending">⛔ 前置未完成·阻塞中</span>
             ) : null}
-            <span className="tag">
-              <GitBranch size={13} className="ico" />
-              {task.base_branch} → {task.work_branch}
-            </span>
-            <span className="tag">
-              {task.submit_mode === "push" ? `直推 ${task.target_branch}` : `PR → ${task.target_branch}`}
-            </span>
-            {task.pr_url ? (
-              <a className="tag" href={task.pr_url} target="_blank" rel="noreferrer">
-                <ExternalLink size={13} className="ico" />
-                PR
-              </a>
+          </div>
+          <div className="detail-actions">
+            {canPublish ? (
+              <button type="button" className="btn btn-primary btn-sm" disabled={publishing} onClick={() => void publish()}>
+                <Send size={14} />
+                {task.status === "scheduled" ? "立即发布" : "发布"}
+              </button>
+            ) : null}
+            {canEdit ? (
+              <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>
+                <Pencil size={14} />
+                编辑
+              </button>
+            ) : null}
+            {canReactivate ? (
+              <button type="button" className="btn btn-sm" disabled={reactivating} onClick={() => void reactivate()}>
+                <RefreshCw size={14} />
+                {reactivating ? "重试中…" : "重试"}
+              </button>
+            ) : null}
+            {isCancellable && canCreateTask ? (
+              <button type="button" className="btn btn-sm" disabled={cancelling} onClick={() => void cancel()}>
+                <X size={14} />
+                {cancelling ? "取消中…" : "取消任务"}
+              </button>
+            ) : null}
+            {canDelete ? (
+              <button type="button" className="btn btn-sm btn-danger" onClick={() => void handleDelete()}>
+                <Trash2 size={14} />
+                删除
+              </button>
             ) : null}
           </div>
         </div>
       </header>
 
-      <div className="detail-page-body">
-        {/* 状态总览：生命周期进度 + 关键动作 */}
-        <section className="card detail-hero">
+      <div className="detail-summary-bar">
+        <div className="ds-item">
+          <span className="ds-k">Task ID</span>
+          <span className="ds-v mono">{task.id}</span>
+        </div>
+        <div className="ds-item">
+          <span className="ds-k">项目</span>
+          <span className="ds-v">{task.project_name ?? task.project_id}</span>
+        </div>
+        <div className="ds-item">
+          <span className="ds-k">分支</span>
+          <span className="ds-v mono">{task.base_branch} → {task.work_branch}</span>
+        </div>
+        <div className="ds-item">
+          <span className="ds-k">Worker</span>
+          <span className="ds-v">{task.worker_name ?? "—"}</span>
+        </div>
+        <div className="ds-item">
+          <span className="ds-k">创建时间</span>
+          <span className="ds-v">{fmtTime(task.created_at)}</span>
+        </div>
+        {task.pr_url ? (
+          <div className="ds-item">
+            <span className="ds-k">PR</span>
+            <a className="ds-v" href={task.pr_url} target="_blank" rel="noreferrer">
+              <ExternalLink size={13} className="ico" />
+              {task.pr_url}
+            </a>
+          </div>
+        ) : null}
+      </div>
+
+      <nav className="detail-tabs">
+        {DETAIL_TABS.map((tab) => (
+          <button
+            type="button"
+            key={tab.key}
+            className={`detail-tab-btn${activeTab === tab.key ? " is-active" : ""}`}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            <span className="dt-ico">{tab.icon}</span>
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="detail-tab-content">
+        {activeTab === "overview" ? (
+          <OverviewTab
+            task={task}
+            lifecycle={lifecycle}
+            modelLabel={modelLabel}
+            depIds={depIds}
+            preById={preById}
+            canReview={canReview}
+            onReviewed={loadTask}
+          />
+        ) : null}
+
+        {activeTab === "timeline" ? (
+          <TimelineTab events={events} lifecycle={lifecycle} />
+        ) : null}
+
+        {activeTab === "chat" ? (
+          <section className="card detail-section">
+            <div className="section-body">
+              <TaskConversation task={task} canComment={canComment} />
+            </div>
+          </section>
+        ) : null}
+
+        {activeTab === "execution" ? (
+          <section className="card detail-section">
+            <div className="section-body">
+              <SessionTranscript task={task} />
+            </div>
+          </section>
+        ) : null}
+
+        {activeTab === "logs" ? (
+          <section className="card detail-section">
+            <div className="section-body">
+              <pre className="logs">{logText}</pre>
+            </div>
+          </section>
+        ) : null}
+      </div>
+
+      <Drawer
+        open={editing}
+        title={`编辑 ${task.title}`}
+        onClose={() => setEditing(false)}
+      >
+        {editing ? (
+          <TaskEditForm
+            key={task.id}
+            task={task}
+            onSaved={(updated) => {
+              setTask(updated);
+              setEditing(false);
+            }}
+            onCancel={() => setEditing(false)}
+          />
+        ) : null}
+      </Drawer>
+
+      {dialog}
+    </div>
+  );
+}
+
+// 概览 Tab：高亮验收行（success 态） + 描述/错误 + 信息 + 前置任务。
+function OverviewTab({
+  task,
+  lifecycle,
+  modelLabel,
+  depIds,
+  preById,
+  canReview,
+  onReviewed
+}: {
+  task: Task;
+  lifecycle: { label: string; time: string | null; state: "done" | "active" | "idle" }[];
+  modelLabel: string;
+  depIds: string[];
+  preById: Map<string, TaskPredecessor>;
+  canReview: boolean;
+  onReviewed: () => void | Promise<void>;
+}) {
+  return (
+    <div className="detail-grid">
+      <div className="detail-main">
+        {canReview ? (
+          <section className="card detail-section">
+            <div className="section-body">
+              <TaskReviewActions task={task} onReviewed={onReviewed} />
+            </div>
+          </section>
+        ) : null}
+
+        <Section icon={<FileText size={15} />} title="任务描述">
+          <p className="detail-desc">{task.description || "（无描述）"}</p>
+          {task.error_message ? <div className="error-box">{task.error_message}</div> : null}
+        </Section>
+
+        <Section icon={<Activity size={15} />} title="执行进度">
           <div className="lifecycle-bar">
             {lifecycle.map((item, index) => (
               <div className={`lc-step ${item.state}`} key={`lc-${index}`}>
@@ -268,200 +447,116 @@ export default function TaskDetailPage({
               </div>
             ))}
           </div>
-
-          {canPublish ? (
-            <div className="detail-hero-actions">
-              <div className="hero-publish">
-                <span className="hero-publish-hint">
-                  {task.status === "scheduled"
-                    ? "定时未到，可立即发布进入待处理队列。"
-                    : "草稿尚未发布，发布后进入任务队列等待认领。"}
-                </span>
-                <button type="button" className="btn btn-primary btn-sm" disabled={publishing} onClick={() => void publish()}>
-                  <Send size={14} />
-                  {task.status === "scheduled" ? "立即发布" : "发布"}
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {canReview ? (
-            <div className="detail-hero-actions">
-              <TaskReviewActions task={task} onReviewed={loadTask} />
-            </div>
-          ) : null}
-
-          {isCancellable && canCreateTask ? (
-            <div className="detail-hero-actions">
-              <div className="hero-cancel">
-                <span className="hero-cancel-hint">任务在途，可取消执行（终止 Claude 进程并标记为已取消）。</span>
-                <button type="button" className="btn btn-sm" disabled={cancelling} onClick={() => void cancel()}>
-                  <X size={14} />
-                  {cancelling ? "取消中…" : "取消任务"}
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {canReactivate ? (
-            <div className="detail-hero-actions">
-              <div className="hero-cancel">
-                <span className="hero-cancel-hint">任务已{task.status === "failed" ? "失败" : "取消"}，可重新激活退回草稿，确认/编辑后重新发布。</span>
-                <button type="button" className="btn btn-sm" disabled={reactivating} onClick={() => void reactivate()}>
-                  <RefreshCw size={14} />
-                  {reactivating ? "激活中…" : "重新激活"}
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {canEdit && !editing ? (
-            <div className="detail-hero-actions">
-              <div className="hero-cancel">
-                <span className="hero-cancel-hint">草稿任务可修改字段后再发布。</span>
-                <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>
-                  <Pencil size={14} />
-                  编辑
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {editing ? (
-            <div className="detail-hero-actions">
-              <TaskEditForm task={task} onSaved={(updated) => { setTask(updated); setEditing(false); }} onCancel={() => setEditing(false)} />
-            </div>
-          ) : null}
-
-          {canDelete ? (
-            <div className="detail-hero-actions">
-              {deleting ? (
-                <div className="hero-cancel">
-                  <span className="hero-cancel-hint">确认删除此任务？此操作不可撤销。</span>
-                  <div style={{ display: "flex", gap: "8px" }}>
-                    <button type="button" className="btn btn-sm" onClick={() => setDeleting(false)}>取消</button>
-                    <button type="button" className="btn btn-sm btn-danger" onClick={() => void handleDelete()}>
-                      <Trash2 size={14} />
-                      确认删除
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="hero-cancel">
-                  <span className="hero-cancel-hint">可永久删除此任务（仅已认领/执行中不可删）。</span>
-                  <button type="button" className="btn btn-sm btn-danger" onClick={() => setDeleting(true)}>
-                    <Trash2 size={14} />
-                    删除任务
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : null}
-        </section>
-
-        <div className="detail-grid">
-          <div className="detail-main">
-            <Section icon={<FileText size={15} />} title="描述">
-              <p className="detail-desc">{task.description || "（无描述）"}</p>
-              {task.error_message ? <div className="error-box">{task.error_message}</div> : null}
-            </Section>
-
-            <Section icon={<MessageSquare size={15} />} title="对话">
-              <TaskConversation task={task} canComment={canComment} />
-            </Section>
-
-            <Section icon={<ScrollText size={15} />} title="执行会话">
-              <SessionTranscript task={task} />
-            </Section>
-
-            <Section icon={<Activity size={15} />} title="活动">
-              {events.length > 0 ? (
-                <div className="timeline">
-                  {events.map((event) => (
-                    <div className="tl-item" key={event.id}>
-                      <span className="tl-node done" />
-                      <div>
-                        <div className="tl-label">
-                          {EVENT_LABEL[event.event_type] ?? event.event_type}
-                          {event.message ? <span className="tl-msg"> · {event.message}</span> : null}
-                        </div>
-                        <div className="tl-time">{fmtTime(event.created_at)}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <Empty icon={<Activity size={24} />} text="暂无执行事件" />
-              )}
-            </Section>
-
-            <Section icon={<Terminal size={15} />} title="日志">
-              <pre className="logs">{logText}</pre>
-            </Section>
-          </div>
-
-          <aside className="detail-side">
-            <Section icon={<Info size={15} />} title="信息">
-              <div className="kv">
-                <KvRow k="项目" v={task.project_name ?? task.project_id} />
-                <KvRow k="签出分支" v={task.base_branch} mono />
-                <KvRow k="工作分支" v={task.work_branch} mono />
-                <KvRow k="目标分支" v={task.target_branch} mono />
-                <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
-                {task.submit_mode === "pr" ? (
-                  <KvRow k="自动合并 PR" v={task.auto_merge_pr ? "是 · 创建后自动合并" : "否"} />
-                ) : null}
-                <KvRow k="执行模型" v={modelLabel} />
-                <KvRow k="Session ID" v={task.claude_session_id ?? "—"} mono />
-                {task.pr_url ? (
-                  <KvRow
-                    k="PR"
-                    v={
-                      <a href={task.pr_url} target="_blank" rel="noreferrer">
-                        {task.pr_url}
-                      </a>
-                    }
-                  />
-                ) : null}
-                {task.scheduled_at ? (
-                  <KvRow
-                    k="定时发布"
-                    v={
-                      task.status === "scheduled"
-                        ? `${fmtTime(task.scheduled_at)}（到点自动进入待处理）`
-                        : fmtTime(task.scheduled_at)
-                    }
-                  />
-                ) : null}
-                <KvRow k="创建于" v={fmtTime(task.created_at)} />
-                <KvRow k="更新于" v={fmtTime(task.updated_at)} />
-              </div>
-            </Section>
-
-            {depIds.length > 0 ? (
-              <Section icon={<ListChecks size={15} />} title="前置任务">
-                <div className="dep-list">
-                  {depIds.map((id, index) => {
-                    const pre = preById.get(id);
-                    return pre ? (
-                      <a className="dep-item" href={`/tasks/${pre.id}`} key={pre.id}>
-                        <StatusBadge status={pre.status} />
-                        <span className="dep-title">{pre.title}</span>
-                      </a>
-                    ) : (
-                      <span className="dep-item is-gone" key={index}>
-                        <span className="badge" data-tone="cancelled">
-                          已删除任务
-                        </span>
-                      </span>
-                    );
-                  })}
-                </div>
-              </Section>
-            ) : null}
-          </aside>
-        </div>
+        </Section>
       </div>
+
+      <aside className="detail-side">
+        <Section icon={<Info size={15} />} title="信息">
+          <div className="kv">
+            <KvRow k="项目" v={task.project_name ?? task.project_id} />
+            <KvRow k="签出分支" v={task.base_branch} mono />
+            <KvRow k="工作分支" v={task.work_branch} mono />
+            <KvRow k="目标分支" v={task.target_branch} mono />
+            <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
+            {task.submit_mode === "pr" ? (
+              <KvRow k="自动合并 PR" v={task.auto_merge_pr ? "是 · 创建后自动合并" : "否"} />
+            ) : null}
+            <KvRow k="执行模型" v={modelLabel} />
+            <KvRow k="Worker" v={task.worker_name ?? "—"} />
+            <KvRow k="Session ID" v={task.claude_session_id ?? "—"} mono />
+            {task.pr_url ? (
+              <KvRow
+                k="PR"
+                v={
+                  <a href={task.pr_url} target="_blank" rel="noreferrer">
+                    {task.pr_url}
+                  </a>
+                }
+              />
+            ) : null}
+            {task.scheduled_at ? (
+              <KvRow
+                k="定时发布"
+                v={
+                  task.status === "scheduled"
+                    ? `${fmtTime(task.scheduled_at)}（到点自动进入待处理）`
+                    : fmtTime(task.scheduled_at)
+                }
+              />
+            ) : null}
+            <KvRow k="创建于" v={fmtTime(task.created_at)} />
+            <KvRow k="更新于" v={fmtTime(task.updated_at)} />
+          </div>
+        </Section>
+
+        {depIds.length > 0 ? (
+          <Section icon={<ListChecks size={15} />} title="前置任务">
+            <div className="dep-list">
+              {depIds.map((id, index) => {
+                const pre = preById.get(id);
+                return pre ? (
+                  <a className="dep-item" href={`/tasks/${pre.id}`} key={pre.id}>
+                    <StatusBadge status={pre.status} />
+                    <span className="dep-title">{pre.title}</span>
+                  </a>
+                ) : (
+                  <span className="dep-item is-gone" key={index}>
+                    <span className="badge" data-tone="cancelled">已删除任务</span>
+                  </span>
+                );
+              })}
+            </div>
+          </Section>
+        ) : null}
+      </aside>
+    </div>
+  );
+}
+
+// 时间线 Tab：lifecycle 阶段头 + task_events 时间轴。
+function TimelineTab({
+  events,
+  lifecycle
+}: {
+  events: TaskEvent[];
+  lifecycle: { label: string; time: string | null; state: "done" | "active" | "idle" }[];
+}) {
+  return (
+    <div className="detail-tab-stack">
+      <Section icon={<Activity size={15} />} title="执行阶段">
+        <div className="lifecycle-bar">
+          {lifecycle.map((item, index) => (
+            <div className={`lc-step ${item.state}`} key={`tl-lc-${index}`}>
+              <span className="lc-node" />
+              <div className="lc-text">
+                <div className="lc-label">{item.label}</div>
+                <div className="lc-time">{item.time ? fmtTime(item.time) : "—"}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <Section icon={<Activity size={15} />} title="事件流">
+        {events.length > 0 ? (
+          <div className="timeline">
+            {events.map((event) => (
+              <div className="tl-item" key={event.id}>
+                <span className="tl-node done" />
+                <div>
+                  <div className="tl-label">
+                    {EVENT_LABEL[event.event_type] ?? event.event_type}
+                    {event.message ? <span className="tl-msg"> · {event.message}</span> : null}
+                  </div>
+                  <div className="tl-time">{fmtTime(event.created_at)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Empty icon={<Activity size={24} />} text="暂无执行事件" />
+        )}
+      </Section>
     </div>
   );
 }

@@ -299,10 +299,12 @@ export async function listRecentTasks(client: pg.Pool | pg.PoolClient, limit = 5
   const result = await client.query<Task>(
     `SELECT tasks.*,
             projects.name AS project_name,
+            workers.name AS worker_name,
             COALESCE(dep.depends_on, ARRAY[]::uuid[]) AS depends_on,
             COALESCE(dep.blocked, false) AS blocked
        FROM tasks
        JOIN projects ON projects.id = tasks.project_id
+       LEFT JOIN workers ON workers.id = tasks.claimed_by
        LEFT JOIN LATERAL (
          SELECT array_agg(d.depends_on_task_id) AS depends_on,
                 bool_or(pre.status NOT IN ('accepted', 'merged')) AS blocked
@@ -328,10 +330,12 @@ export async function getTaskWithDeps(
   const result = await client.query<Task>(
     `SELECT tasks.*,
             projects.name AS project_name,
+            workers.name AS worker_name,
             COALESCE(dep.depends_on, ARRAY[]::uuid[]) AS depends_on,
             COALESCE(dep.blocked, false) AS blocked
        FROM tasks
        JOIN projects ON projects.id = tasks.project_id
+       LEFT JOIN workers ON workers.id = tasks.claimed_by
        LEFT JOIN LATERAL (
          SELECT array_agg(d.depends_on_task_id) AS depends_on,
                 bool_or(pre.status NOT IN ('accepted', 'merged')) AS blocked
@@ -408,6 +412,8 @@ export type ListTasksFilters = {
   // 合并状态（多选）：unknown / unmerged / merged，与状态筛选独立叠加。
   mergeStatus?: string[];
   projectId?: string | null;
+  // 已认领 worker id 过滤；右栏「Worker」下拉用。空/未传 = 不过滤。
+  workerId?: string | null;
   // 项目级隔离：非 admin 传入其可访问项目 id 集合，约束只返回范围内任务（空集合 → 无结果）。
   projectIds?: string[] | null;
   q?: string | null;
@@ -436,6 +442,10 @@ export async function listTasks(
     params.push(filters.projectId);
     conditions.push(`tasks.project_id = $${params.length}`);
   }
+  if (filters.workerId) {
+    params.push(filters.workerId);
+    conditions.push(`tasks.claimed_by = $${params.length}`);
+  }
   // 项目范围约束（非 admin）：与上面的单项目筛选用 AND 叠加，无法越过自己的范围。
   if (filters.projectIds) {
     params.push(filters.projectIds);
@@ -457,9 +467,13 @@ export async function listTasks(
   const offsetIdx = params.length;
 
   const result = await client.query<Task & { total_count: string }>(
-    `SELECT tasks.*, projects.name AS project_name, count(*) OVER() AS total_count
+    `SELECT tasks.*,
+            projects.name AS project_name,
+            workers.name AS worker_name,
+            count(*) OVER() AS total_count
        FROM tasks
        JOIN projects ON projects.id = tasks.project_id
+       LEFT JOIN workers ON workers.id = tasks.claimed_by
        ${where}
       ORDER BY ${orderBy}
       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
@@ -469,6 +483,90 @@ export async function listTasks(
   const total = result.rows[0] ? Number(result.rows[0].total_count) : 0;
   const tasks = result.rows.map(({ total_count: _total, ...task }) => task as Task);
   return { tasks, total };
+}
+
+// 任务流右侧栏统计：总计 + 按状态计数 + 今日完成率/平均耗时。
+// 终态以 finished_at 落在 [todayStartIso, now) 为窗（避免时区偏移影响）；调用方传入本地 0 点 ISO。
+// 非 admin 只看其有项目权限的任务（JOIN user_project_links 过滤）。
+export type TaskStatsResult = {
+  total: number;
+  byStatus: Record<string, number>;
+  today: {
+    finished: number;
+    accepted: number;
+    rejected: number;
+    avgDurationMs: number | null;
+  };
+};
+
+export async function listTaskStatsForUser(
+  client: pg.Pool | pg.PoolClient,
+  user: { id: string; role: Role },
+  todayStartIso: string
+): Promise<TaskStatsResult> {
+  const isAdmin = user.role === "admin";
+  // 项目范围约束：admin 全开放；其余 JOIN user_project_links 过滤。
+  const scopeJoin = isAdmin
+    ? ""
+    : "JOIN user_project_links upl ON upl.project_id = tasks.project_id AND upl.user_id = $2";
+  const params: unknown[] = [todayStartIso];
+  if (!isAdmin) params.push(user.id);
+
+  // 单次查询拿三段：byStatus 数组、today.finished_at 在窗范围内的完成态、平均耗时（finished_at - started_at）。
+  const sql = `
+    WITH scoped AS (
+      SELECT tasks.id,
+             tasks.status,
+             tasks.started_at,
+             tasks.finished_at
+        FROM tasks
+        ${scopeJoin}
+    ),
+    by_status AS (
+      SELECT status, count(*)::int AS n FROM scoped GROUP BY status
+    ),
+    today_window AS (
+      SELECT
+        count(*) FILTER (WHERE status IN ('accepted','merged','failed','cancelled'))::int AS finished,
+        count(*) FILTER (WHERE status IN ('accepted','merged'))::int AS accepted,
+        count(*) FILTER (WHERE status = 'rejected')::int AS rejected,
+        avg(EXTRACT(EPOCH FROM (finished_at - started_at))) FILTER (
+          WHERE finished_at IS NOT NULL
+            AND started_at IS NOT NULL
+            AND status IN ('accepted','merged','failed','cancelled')
+        ) AS avg_secs
+      FROM scoped
+      WHERE finished_at >= $1::timestamptz
+    )
+    SELECT
+      (SELECT count(*)::int FROM scoped) AS total,
+      (SELECT COALESCE(jsonb_object_agg(status, n), '{}'::jsonb) FROM by_status) AS by_status,
+      (SELECT finished FROM today_window) AS today_finished,
+      (SELECT accepted FROM today_window) AS today_accepted,
+      (SELECT rejected FROM today_window) AS today_rejected,
+      (SELECT avg_secs FROM today_window) AS today_avg_secs
+  `;
+
+  const result = await client.query<{
+    total: number;
+    by_status: Record<string, number>;
+    today_finished: number | null;
+    today_accepted: number | null;
+    today_rejected: number | null;
+    today_avg_secs: string | number | null;
+  }>(sql, params);
+  const row = result.rows[0];
+  const avgSecs = row?.today_avg_secs == null ? null : Number(row.today_avg_secs);
+  return {
+    total: row?.total ?? 0,
+    byStatus: row?.by_status ?? {},
+    today: {
+      finished: row?.today_finished ?? 0,
+      accepted: row?.today_accepted ?? 0,
+      rejected: row?.today_rejected ?? 0,
+      avgDurationMs: avgSecs == null || Number.isNaN(avgSecs) ? null : Math.round(avgSecs * 1000)
+    }
+  };
 }
 
 export async function listTaskEvents(client: pg.Pool | pg.PoolClient, taskId: string): Promise<TaskEvent[]> {
@@ -1545,10 +1643,13 @@ export async function listRecentTasksForUser(
     return listRecentTasks(client, limit);
   }
   const result = await client.query<Task>(
-    `SELECT tasks.*, projects.name AS project_name
+    `SELECT tasks.*,
+            projects.name AS project_name,
+            workers.name AS worker_name
        FROM tasks
        JOIN projects ON projects.id = tasks.project_id
        JOIN user_project_links upl ON upl.project_id = tasks.project_id AND upl.user_id = $2
+       LEFT JOIN workers ON workers.id = tasks.claimed_by
       ORDER BY tasks.created_at DESC
       LIMIT $1`,
     [limit, user.id]

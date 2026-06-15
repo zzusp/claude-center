@@ -127,6 +127,8 @@ export type Task = {
   id: string;
   project_id: string;
   project_name?: string;
+  // 认领 worker 的展示名（listTasks / listRecentTasks / getTaskWithDeps 通过 LEFT JOIN workers 填充；未认领或 worker 已删则为 null）。
+  worker_name?: string | null;
   title: string;
   description: string;
   base_branch: string;

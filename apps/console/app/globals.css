@@ -3201,3 +3201,263 @@ a.dep-item:hover {
 .tx-think-label {
   color: var(--text-3);
 }
+
+/* ============================================================
+   Task List - 双栏布局 + 右侧统计卡
+   ============================================================ */
+
+.page-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 20px;
+  align-items: start;
+}
+
+.page-grid-main {
+  min-width: 0;
+}
+
+.page-grid-aside {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+@media (max-width: 1100px) {
+  .page-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 表格内灰色「—」占位（Worker/PR 列空值用）。 */
+.cell-muted {
+  color: var(--text-4);
+}
+
+/* 右侧侧栏卡片复用 .card；这里只加局部排版微调 */
+.sidebar-card .section-body {
+  padding: 14px 16px;
+}
+
+.sb-stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.sb-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+}
+
+.sb-stat-label {
+  font-size: 11.5px;
+  color: var(--text-4);
+}
+
+.sb-stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.sb-stat-value[data-tone="running"] { color: var(--running); }
+.sb-stat-value[data-tone="success"] { color: var(--success); }
+.sb-stat-value[data-tone="failed"]  { color: var(--failed); }
+
+.sb-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sb-bar-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 8px;
+}
+
+.sb-bar-label {
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sb-bar-track {
+  position: relative;
+  height: 8px;
+  background: var(--surface-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.sb-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 240ms ease;
+}
+.sb-bar-fill[data-tone="success"]   { background: var(--success); }
+.sb-bar-fill[data-tone="merged"]    { background: var(--merged); }
+.sb-bar-fill[data-tone="running"]   { background: var(--running); }
+.sb-bar-fill[data-tone="pending"]   { background: var(--pending); }
+.sb-bar-fill[data-tone="failed"]    { background: var(--failed); }
+.sb-bar-fill[data-tone="cancelled"] { background: var(--cancelled); }
+.sb-bar-fill[data-tone="queued"]    { background: var(--queued); }
+.sb-bar-fill[data-tone="waiting"]   { background: var(--waiting); }
+.sb-bar-fill[data-tone="draft"]     { background: var(--draft); }
+.sb-bar-fill[data-tone="scheduled"] { background: var(--scheduled); }
+.sb-bar-fill[data-tone="review"]    { background: var(--review); }
+.sb-bar-fill[data-tone="rejected"]  { background: var(--rejected); }
+
+.sb-bar-n {
+  font-size: 12px;
+  color: var(--text-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+   Task Detail - 顶栏 actions + summary bar + Tabs
+   ============================================================ */
+
+/* 标题行：标题 + 状态徽章 + 阻塞提示 一行排开 */
+.detail-head-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+.detail-head-title .detail-page-title {
+  margin: 0;
+}
+
+/* 顶栏右上 actions 区：覆盖 detail-page-head 默认垂直堆叠 */
+.detail-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.detail-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Summary bar：标题下扁平条带，逗号分隔的元数据 */
+.detail-summary-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  padding: 12px 32px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+
+.ds-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ds-k {
+  color: var(--text-4);
+  font-weight: 500;
+}
+.ds-v {
+  color: var(--text-2);
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ds-v.mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+a.ds-v {
+  color: var(--text-1);
+  text-decoration: none;
+}
+a.ds-v:hover {
+  text-decoration: underline;
+}
+
+/* Tabs 导航：紧贴 summary bar 下方，受控切换。
+   不做 sticky 以免与 detail-page-top（top:0 sticky）层叠。 */
+.detail-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 32px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  overflow-x: auto;
+}
+
+.detail-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+  white-space: nowrap;
+}
+
+.detail-tab-btn:hover {
+  color: var(--text-1);
+}
+
+.detail-tab-btn.is-active {
+  color: var(--text-1);
+  border-bottom-color: var(--text-1);
+}
+
+.dt-ico {
+  display: inline-flex;
+  color: var(--text-4);
+}
+.detail-tab-btn.is-active .dt-ico {
+  color: var(--text-1);
+}
+
+/* Tab 内容容器：复用 detail-page-body 的宽度上限 */
+.detail-tab-content {
+  flex: 1;
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px 32px 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* timeline Tab 内堆叠（lifecycle + events）。 */
+.detail-tab-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
