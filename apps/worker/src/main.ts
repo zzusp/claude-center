@@ -458,8 +458,16 @@ function windowHtml(): string {
               html += '<div class="task-group"><div class="task-group-head">' + g.title +
                 ' <span class="task-count">' + list.length + '</span></div>' + list.map(taskRow).join("") + "</div>";
             });
+            // 同对话面板：重建列表会把已展开详情重置为「加载中…」再异步拉取 → 刷新闪烁。
+            // 先存下旧详情内容、重建后还原消除闪回；任务面板无独立刷新定时器，故仍调 loadDetail
+            // 平滑刷新（先 await 再换 innerHTML，过渡是旧内容→新内容，不经占位符）。
+            const keep = expandedTaskId ? (document.getElementById("detail-" + expandedTaskId) || {}).innerHTML : null;
             $("tasks").innerHTML = html;
-            if (expandedTaskId) loadDetail(expandedTaskId);
+            if (expandedTaskId) {
+              const box = document.getElementById("detail-" + expandedTaskId);
+              if (box && keep != null) box.innerHTML = keep;
+              loadDetail(expandedTaskId);
+            }
           }
           async function reloadTasks() {
             let tasks = [];
@@ -548,8 +556,27 @@ function windowHtml(): string {
           function renderConversations(list) {
             convCache = list || [];
             if (!convCache.length) { $("conversations").innerHTML = '<span class="empty">本机暂无对话</span>'; return; }
+            // 轮询重建列表会把已展开详情重置为「加载中…」并触发重新拉取 → 每次刷新闪烁；
+            // 先存下当前详情内容与滚动位置，重建后原样还原，平滑刷新仍交给 1.5s 定时器。
+            let keep = null;
+            if (expandedConvId) {
+              const old = document.getElementById("conv-detail-" + expandedConvId);
+              if (old) {
+                const ml = document.getElementById("conv-msgs-" + expandedConvId);
+                keep = { html: old.innerHTML, top: ml ? ml.scrollTop : null };
+              }
+            }
             $("conversations").innerHTML = convCache.map(convRow).join("");
-            if (expandedConvId) loadConvDetail(expandedConvId);
+            if (expandedConvId) {
+              const box = document.getElementById("conv-detail-" + expandedConvId);
+              if (box && keep) {
+                box.innerHTML = keep.html;
+                const ml = document.getElementById("conv-msgs-" + expandedConvId);
+                if (ml && keep.top != null) ml.scrollTop = keep.top;
+              } else {
+                loadConvDetail(expandedConvId); // 首次展开：显示「加载中…」并拉取
+              }
+            }
           }
           async function reloadConversations() {
             let list = [];
