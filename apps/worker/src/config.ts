@@ -43,6 +43,9 @@ export type WorkerConfig = {
   usageProxy: string | null;
   // 周期采集 claude 版本/订阅/用量并上报的间隔（ms）。
   infoIntervalMs: number;
+  // 套餐用量（远程 oauth/usage）单独的采集间隔（ms），独立于 infoIntervalMs 的高频刷新。
+  // 用量窗口是 5h/7d 缓变量，无需 60s 高频；放慢可避开该接口限流（rate_limit_error）。
+  usageIntervalMs: number;
 };
 
 // worker.json 持久化:workerId（稳定身份）+ 跨重启保留的客户端策略（allowRemoteControl/maxParallel）
@@ -184,6 +187,7 @@ export function readWorkerConfig(): WorkerConfig {
     maxParallel: state.maxParallel ?? readNumber("CLAUDE_CENTER_MAX_PARALLEL", 1),
     allowRemoteControl: state.allowRemoteControl ?? readBool("CLAUDE_CENTER_ALLOW_REMOTE_CONTROL", false),
     usageProxy,
-    infoIntervalMs: readNumber("CLAUDE_CENTER_INFO_INTERVAL_MS", 60_000)
+    infoIntervalMs: readNumber("CLAUDE_CENTER_INFO_INTERVAL_MS", 60_000),
+    usageIntervalMs: readNumber("CLAUDE_CENTER_USAGE_INTERVAL_MS", 300_000)
   };
 }

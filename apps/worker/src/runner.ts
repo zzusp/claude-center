@@ -130,6 +130,8 @@ export class ClaudeCenterWorker {
   private conversationBusy = false;
   private readonly active = new Map<string, ActiveEntry>();
   private lastInspect: ClaudeInspect = { claudeVersion: null, subscriptionType: "unknown", usage: {} };
+  // 上次真去打 oauth/usage 的时刻（ms epoch）；按 usageIntervalMs 慢节奏控制，避免 60s 高频被限流。0=尚未采集。
+  private lastUsageFetchAt = 0;
   // 启动时一次性自检的外部命令可用性;register/快照/任务预检都用它。
   private capabilities: Capabilities = {
     git: UNKNOWN_CAPABILITY,
@@ -478,9 +480,17 @@ export class ClaudeCenterWorker {
   }
 
   // 采集 claude 版本/订阅/用量 + 当前客户端策略，写入 DB 供 Console 展示。
+  // 版本/订阅每轮（infoIntervalMs，默认 60s）都刷；远程 oauth/usage 单独按 usageIntervalMs（默认 5min）慢刷，
+  // 其余轮沿用上轮用量——避免高频打爆该接口触发 rate_limit_error。仅在真采集的轮次打 Usage 日志，免刷屏。
   private async refreshInfo(): Promise<void> {
-    this.lastInspect = await inspectClaude(this.config);
-    this.logUsage();
+    const now = Date.now();
+    const refreshUsage = now - this.lastUsageFetchAt >= this.config.usageIntervalMs;
+    if (refreshUsage) this.lastUsageFetchAt = now;
+    this.lastInspect = await inspectClaude(this.config, {
+      previousUsage: this.lastInspect.usage,
+      refreshUsage
+    });
+    if (refreshUsage) this.logUsage();
     await this.reportInfo();
   }
 
@@ -495,7 +505,9 @@ export class ClaudeCenterWorker {
     if (usage.five_hour || usage.seven_day) {
       const five = usage.five_hour ? `5h ${usage.five_hour.utilization}%` : "5h —";
       const seven = usage.seven_day ? `7d ${usage.seven_day.utilization}%` : "7d —";
-      this.log("info", `Usage — ${five} · ${seven}`);
+      // 有窗口又带 error：本轮采集失败（如限流），沿用上轮数据，info 轻提示而非报红。
+      const stale = usage.error ? `（本轮采集失败，沿用上次：${usage.error}）` : "";
+      this.log("info", `Usage — ${five} · ${seven}${stale}`);
     } else {
       this.log(
         "error",

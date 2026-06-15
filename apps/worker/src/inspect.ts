@@ -241,16 +241,38 @@ async function fetchUsage(accessToken: string, proxy: string | null): Promise<Wo
   return usage;
 }
 
-// 一次性采集全部：版本 + 订阅 + （仅套餐账号才查）用量。
-export async function inspectClaude(config: WorkerConfig): Promise<ClaudeInspect> {
+// 本轮失败但上轮有窗口数据 → 沿用上轮窗口，仅把本轮失败原因记到 error。
+// oauth/usage 偶发限流（429 rate_limit_error）/网络抖动是瞬时的，不该把已知好数字清成空、
+// 让 Console 翻成「采集失败」、worker 日志反复报红。从未采到过(previous 也空)才原样返回失败。
+function preserveUsageOnError(fresh: WorkerUsage, previous: WorkerUsage | undefined): WorkerUsage {
+  if (fresh.five_hour || fresh.seven_day) return fresh;
+  if (previous?.five_hour || previous?.seven_day) {
+    return { ...previous, error: fresh.error };
+  }
+  return fresh;
+}
+
+// 一次性采集：版本 + 订阅（均为本地廉价读取，每轮都刷）+ 用量。
+// 用量是唯一会被限流的远程调用（oauth/usage），由 refreshUsage 控制本轮是否真去打——
+// runner 按独立慢节奏置 true，其余轮直接沿用 previousUsage，避免 60s 高频打爆接口被限流。
+export async function inspectClaude(
+  config: WorkerConfig,
+  options: { previousUsage?: WorkerUsage; refreshUsage: boolean }
+): Promise<ClaudeInspect> {
   const [claudeVersion, subscription] = await Promise.all([
     getClaudeVersion(config),
     Promise.resolve(readSubscription())
   ]);
 
-  const usage = subscription.accessToken
-    ? await fetchUsage(subscription.accessToken, config.usageProxy)
-    : {};
+  let usage: WorkerUsage;
+  if (!subscription.accessToken) {
+    usage = {}; // 非套餐账号不采集用量。
+  } else if (!options.refreshUsage) {
+    usage = options.previousUsage ?? {}; // 未到刷新点，沿用上轮。
+  } else {
+    const fresh = await fetchUsage(subscription.accessToken, config.usageProxy);
+    usage = preserveUsageOnError(fresh, options.previousUsage);
+  }
 
   return { claudeVersion, subscriptionType: subscription.subscriptionType, usage };
 }
