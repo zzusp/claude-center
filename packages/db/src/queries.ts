@@ -147,6 +147,93 @@ export async function createTask(
   return result.rows[0]!;
 }
 
+// 编辑任务：仅限 draft / scheduled 态（未开始执行），可改标题/描述/分支/提交模式等。
+// scheduledAt 非空则维持 scheduled 态，否则切回 draft。返回 null 表示任务不存在或已不可编辑。
+export async function updateTask(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  input: {
+    title: string;
+    description: string;
+    baseBranch: string;
+    workBranch: string;
+    targetBranch: string;
+    submitMode: TaskSubmitMode;
+    autoMergePr: boolean;
+    model: TaskModel;
+    scheduledAt?: string | null;
+  }
+): Promise<Task | null> {
+  const scheduledAt = input.scheduledAt ?? null;
+  const status = scheduledAt ? "scheduled" : "draft";
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET title = $2,
+            description = $3,
+            base_branch = $4,
+            work_branch = $5,
+            target_branch = $6,
+            submit_mode = $7,
+            auto_merge_pr = $8,
+            model = $9,
+            scheduled_at = $10,
+            status = $11,
+            updated_at = now()
+      WHERE id = $1 AND status IN ('draft', 'scheduled')
+      RETURNING *`,
+    [
+      taskId,
+      input.title,
+      input.description,
+      input.baseBranch,
+      input.workBranch,
+      input.targetBranch,
+      input.submitMode,
+      input.autoMergePr,
+      input.model,
+      scheduledAt,
+      status
+    ]
+  );
+  return result.rows[0] ?? null;
+}
+
+// 删除任务：仅限未启动或已终结的安全态（draft / scheduled / failed / cancelled）。
+// 返回 false 表示任务不存在或处于执行中不可删除。
+export async function deleteTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<boolean> {
+  const result = await client.query(
+    `DELETE FROM tasks WHERE id = $1 AND status IN ('draft', 'scheduled', 'failed', 'cancelled')`,
+    [taskId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// 重新激活失败/已取消的任务：failed / cancelled → pending，清空执行现场（时间戳/错误/PR 等），
+// 让 Worker 重新认领执行。返回 null 表示任务不存在或状态不满足。
+export async function reactivateTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET status = 'pending',
+            claimed_by = null,
+            claimed_at = null,
+            started_at = null,
+            finished_at = null,
+            error_message = null,
+            result = '{}',
+            pr_url = null,
+            merge_status = 'unknown',
+            merge_status_checked_at = null,
+            merge_checked_at = null,
+            claude_session_id = null,
+            cancel_requested_at = null,
+            updated_at = now()
+      WHERE id = $1 AND status IN ('failed', 'cancelled')
+      RETURNING *`,
+    [taskId]
+  );
+  return result.rows[0] ?? null;
+}
+
 // 发布任务：draft / scheduled → pending，进入可认领队列。对 scheduled 任务即「立即发布」
 // （到点前手动提前发布，覆盖定时）。WHERE 限定初始态保证对已认领/运行中/已完成任务无副作用；
 // 未命中返回 null（任务不存在或已不是待发布态）。
