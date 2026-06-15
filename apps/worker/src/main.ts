@@ -251,7 +251,7 @@ function windowHtml(): string {
             <span class="brand-mark">CC</span>
             <div>
               <h1 class="brand-title">ClaudeCenter Worker</h1>
-              <p class="brand-sub"><span class="live-dot pulse"></span><span id="meta">连接中…</span></p>
+              <p class="brand-sub"><span class="live-dot" id="relayDot" title="SSE 实时中转连接状态"></span><span id="relay">连接中…</span> · <span id="meta">—</span></p>
             </div>
           </div>
         </header>
@@ -611,6 +611,17 @@ function windowHtml(): string {
             $("meta").textContent =
               (s.workerName || "worker") + " · " + ((s.os && s.os.label) || "—") + " · claude " + (s.claudeVersion || "—") + " · " +
               s.subscriptionType + " · 在途 " + s.activeCount + "/" + s.maxParallel;
+            // SSE 中转连通性：dot 着色 + 文案；仅 connected 时脉冲（绿）。
+            const relayMeta = {
+              connected: { color: "var(--success)", text: "SSE 已连通（" + (s.relayChannels || 0) + " 频道）", pulse: true },
+              connecting: { color: "var(--running)", text: "SSE 连接中…", pulse: false },
+              reconnecting: { color: "var(--pending)", text: "SSE 重连中…", pulse: false },
+              disabled: { color: "var(--cancelled)", text: "轮询模式（SSE 未启用）", pulse: false }
+            }[s.relayState] || { color: "var(--cancelled)", text: "轮询模式（SSE 未启用）", pulse: false };
+            const relayDot = $("relayDot");
+            relayDot.style.background = relayMeta.color;
+            relayDot.classList.toggle("pulse", relayMeta.pulse);
+            $("relay").textContent = relayMeta.text;
             const state = $("state");
             state.setAttribute("data-tone", working ? "success" : "pending");
             state.innerHTML = '<span class="glyph">' + (working ? "▶" : "⏸") + "</span>" + (working ? "工作中" : "空闲");

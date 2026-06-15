@@ -12,6 +12,10 @@ import type { WorkerConfig } from "./config.js";
 
 type LogFn = (level: "info" | "error", message: string) => void;
 
+// SSE 中转订阅连接状态：disabled=未配置/缺订阅 token(纯轮询)；connecting=建连中(未 open 过)；
+// connected=流已打开；reconnecting=曾连通后断开、退避重连中。供桌面端展示连通性。
+export type RelayStatus = "disabled" | "connecting" | "connected" | "reconnecting";
+
 // Worker 侧的 SSE 中转接入：
 //   - 发布：落库后 best-effort 推全量负载（自动附 origin=workerId）。
 //   - 订阅：worker:<id> + 本机关联 project:<id>；收到「非自己发出」的事件即催一次相应 tick，
@@ -21,7 +25,7 @@ export class WorkerRelay {
   private readonly publisher: Publisher;
   private sub: Subscription | null = null;
   private channels: string[] = [];
-  private connected = false;
+  private status: RelayStatus = "disabled";
 
   constructor(
     private readonly config: WorkerConfig,
@@ -37,6 +41,16 @@ export class WorkerRelay {
 
   get enabled(): boolean {
     return Boolean(this.config.relayUrl);
+  }
+
+  // 当前订阅连接状态（桌面端展示用）。未配置 relayUrl 恒为 disabled。
+  get state(): RelayStatus {
+    return this.enabled ? this.status : "disabled";
+  }
+
+  // 当前订阅的频道数（worker:<id> + 关联 project:<id>）。
+  get channelCount(): number {
+    return this.channels.length;
   }
 
   // best-effort 发布；自动附 origin=workerId，供订阅端忽略自己发出的事件（防自触发循环）。
@@ -57,20 +71,25 @@ export class WorkerRelay {
       return;
     }
     this.channels = next;
+    // 频道集变化要重建订阅：先标记建连中（曾连通则属重连），open 后转 connected。
+    this.status = this.status === "connected" ? "reconnecting" : "connecting";
     this.sub?.close();
     this.sub = subscribeRelay({
       url: this.config.relayUrl,
       channels: next,
       token: this.config.relayWorkerToken,
       onOpen: () => {
-        if (!this.connected) {
-          this.connected = true;
+        if (this.status !== "connected") {
           this.log("info", `relay connected (${next.length} channels)`);
         }
+        this.status = "connected";
       },
       onError: () => {
-        // 重连/退避由 subscribeRelay 内部处理；这里只复位连接标记，避免日志刷屏。
-        this.connected = false;
+        // 重连/退避由 subscribeRelay 内部处理；这里只更新状态，避免日志刷屏。
+        // 曾连通后断开 → reconnecting；首连未成则保持 connecting。
+        if (this.status === "connected") {
+          this.status = "reconnecting";
+        }
       },
       onEvent: (event) => {
         if (event.origin === this.config.workerId) {
@@ -84,5 +103,6 @@ export class WorkerRelay {
   stop(): void {
     this.sub?.close();
     this.sub = null;
+    this.status = "disabled";
   }
 }

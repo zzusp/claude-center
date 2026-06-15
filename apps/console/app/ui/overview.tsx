@@ -30,7 +30,16 @@ import {
   type CurrentUser, type Health, type Overview, type ViewKey
 } from "./dashboard-shared";
 import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
+import { useRelayStatus, type RelayStatus as RelayConnState } from "../lib/use-relay";
 import { Drawer, Select } from "./controls";
+
+// SSE 中转连接状态 → 展示元数据（label/tone/是否脉冲）。tone 复用 .dot[data-tone] 配色。
+const RELAY_META: Record<RelayConnState, { label: string; tone: string; live: boolean }> = {
+  connected: { label: "实时通道已连通", tone: "online", live: true },
+  connecting: { label: "连接中", tone: "running", live: true },
+  reconnecting: { label: "重连中", tone: "pending", live: true },
+  disabled: { label: "未启用（纯轮询）", tone: "offline", live: false }
+};
 
 
 function DashboardView({
@@ -273,6 +282,18 @@ function SyncStatus({
   );
 }
 
+// SSE 中转连接状态指示器（顶栏，全站每页可见）：与 SyncStatus 并列，区分「DB 轮询」与「SSE 快线」两条线。
+function RelayStatus() {
+  const status = useRelayStatus();
+  const meta = RELAY_META[status];
+  return (
+    <span className="sync" data-live={status === "connected" ? "on" : "off"} title="SSE 实时中转连接状态">
+      <span className={`dot${meta.live ? " pulse" : ""}`} data-tone={meta.tone} />
+      <span className="sync-text">SSE {meta.label}</span>
+    </span>
+  );
+}
+
 function RuntimeHealth({
   health,
   synced,
@@ -285,6 +306,8 @@ function RuntimeHealth({
   const db = health?.db;
   const sched = health?.scheduler;
   const intervalSec = sched?.intervalMs ? Math.round(sched.intervalMs / 1000) : null;
+  const relay = useRelayStatus();
+  const relayMeta = RELAY_META[relay];
 
   return (
     <section className="health-section">
@@ -324,7 +347,16 @@ function RuntimeHealth({
           okLabel={synced ? "同步中" : "已断开"}
           rows={[
             { k: "轮询节奏", v: `每 ${Math.round(POLL_INTERVAL_MS / 1000)}s` },
-            { k: "上次同步", v: lastSyncAt ? fmtAgo(lastSyncAt) : "—" }
+            { k: "上次同步", v: lastSyncAt ? fmtAgo(lastSyncAt) : "—" },
+            {
+              k: "SSE 中转",
+              v: (
+                <span className="relay-inline">
+                  <span className={`dot${relayMeta.live ? " pulse" : ""}`} data-tone={relayMeta.tone} />
+                  {relayMeta.label}
+                </span>
+              )
+            }
           ]}
         />
       </div>
@@ -502,4 +534,4 @@ function Donut({
 }
 
 
-export { DashboardView, SyncStatus };
+export { DashboardView, SyncStatus, RelayStatus };

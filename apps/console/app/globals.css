@@ -294,6 +294,12 @@ a:hover {
   animation: cc-flash 0.45s ease-out;
 }
 
+.relay-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 @keyframes cc-flash {
   from {
     opacity: 0;
