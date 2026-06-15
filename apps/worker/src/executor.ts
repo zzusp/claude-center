@@ -60,6 +60,22 @@ function ensureClaudeAvailable(hooks?: ExecHooks): void {
 // Claude 在回复末尾输出该串 + 问题后停止，Worker 解析后落为评论并等待回复。
 const NEEDS_INPUT_SENTINEL = "<<CLAUDE_CENTER_NEEDS_INPUT>>";
 
+// auto_reply 模式（task.auto_reply=true）的兜底常量。主防线是激进版 prompt（哨兵被重新定义为"任务被
+// 判定 blocked"），仍出哨兵时按 worktree 是否有改动分流：零改动→直接 fail；有改动→自动塞一条 user
+// 评论让现有 resumable 流续接，最多 AUTO_REPLY_MAX_ROUNDS 轮，超出立刻 fail。值故意调小（cap=2），
+// 因为进入兜底说明主防线没拦住、再宽容也只是烧 token；如需调整改这一处即可。
+const AUTO_REPLY_MAX_ROUNDS = 2;
+const AUTO_REPLY_CANNED =
+  "Commit what you have and finish in one shot. Use your best judgment for any remaining decisions; document them in the commit message body.";
+
+async function countAutoReplyRounds(taskId: string): Promise<number> {
+  const result = await getPool().query<{ count: string }>(
+    `SELECT count(*)::text AS count FROM task_events WHERE task_id = $1 AND event_type = 'auto_reply'`,
+    [taskId]
+  );
+  return Number(result.rows[0]?.count ?? 0);
+}
+
 type ClaudeTurn = { sessionId: string | null; result: string; raw: CommandResult };
 
 type ClaudeCallOpts = {
@@ -200,6 +216,35 @@ function extractQuestion(result: string): string | null {
   return question || "（Claude 请求确认，但未给出具体问题）";
 }
 
+// 激进版"无人值守"指令：把哨兵从"求助信号"翻转为"任务被判定 blocked"——让 Claude 倾向自己决策、
+// 在 commit message 里留决策理由，而不是停下等人。仅 auto_reply=true 时使用。
+function autoReplyDirective(task: Task): string[] {
+  const hints = task.auto_decision_hints?.trim();
+  return [
+    "You run UNATTENDED. No human is watching. Make all decisions yourself and finish in one shot.",
+    "",
+    "Decision rules:",
+    "- Choose the minimal change that satisfies the goal; prefer existing patterns over introducing new ones.",
+    "- For style / scope / \"is this enough\" / \"should I also X\" questions — just decide. Document the choice in one line of the commit message body.",
+    "- Run local verification (typecheck / build / lint) before finishing if a relevant script exists.",
+    "- DO NOT stop for preferences, scope ambiguity, or to confirm progress.",
+    ...(hints ? ["", "Decision policy from requester:", hints] : []),
+    "",
+    `Stopping protocol (LAST RESORT only): If you literally cannot proceed — missing credentials, a file the task assumes exists, two requirements directly contradict — end with ${NEEDS_INPUT_SENTINEL} + one-sentence reason. The system will CONCLUDE THE TASK AS BLOCKED.`
+  ];
+}
+
+// 默认（auto_reply=false）的协作指令：邀请使用哨兵停下等人回复。
+function manualReplyDirective(): string[] {
+  return [
+    `If you need a decision or clarification from the user before you can proceed safely, do NOT guess. End your reply with a line containing exactly ${NEEDS_INPUT_SENTINEL} followed by your question, then stop without making further changes. The user will reply and you will be resumed in this same session to continue.`
+  ];
+}
+
+function replyDirective(task: Task): string[] {
+  return task.auto_reply ? autoReplyDirective(task) : manualReplyDirective();
+}
+
 function taskPrompt(task: Task): string {
   return [
     `ClaudeCenter task: ${task.title}`,
@@ -209,27 +254,31 @@ function taskPrompt(task: Task): string {
     "",
     "Work directly in the current repository. Implement the requested code changes, keep edits scoped, and run the most relevant local verification command when possible.",
     "",
-    `If you need a decision or clarification from the user before you can proceed safely, do NOT guess. End your reply with a line containing exactly ${NEEDS_INPUT_SENTINEL} followed by your question, then stop without making further changes. The user will reply and you will be resumed in this same session to continue.`
+    ...replyDirective(task)
   ].join("\n");
 }
 
-function resumePrompt(reply: string): string {
+function resumePrompt(task: Task, reply: string): string {
   return [
     "The user replied to your question:",
     "",
     reply,
     "",
-    `Continue the ClaudeCenter task using this answer. If you still need another decision, use the same ${NEEDS_INPUT_SENTINEL} convention again; otherwise finish the implementation.`
+    "Continue the ClaudeCenter task using this answer.",
+    "",
+    ...replyDirective(task)
   ].join("\n");
 }
 
-function rejectionPrompt(feedback: string): string {
+function rejectionPrompt(task: Task, feedback: string): string {
   return [
     "Your previous implementation was reviewed by the user and sent back for revision. Reviewer feedback:",
     "",
     feedback,
     "",
-    `Revise the implementation on the current branch to address this feedback. Your changes will update the existing PR. If you need a decision before proceeding, use the same ${NEEDS_INPUT_SENTINEL} convention; otherwise finish the revision.`
+    "Revise the implementation on the current branch to address this feedback. Your changes will update the existing PR.",
+    "",
+    ...replyDirective(task)
   ].join("\n");
 }
 
@@ -271,8 +320,52 @@ async function handleClaudeTurn(
 
   const question = extractQuestion(turn.result);
   if (question) {
-    // 等待用户回复期间，工作树原样保留（持有未提交改动），续接时复用。
+    // 哨兵命中：先把问题落成 worker 评论（不论是否 auto_reply 都留审计）。
     await addTaskComment(pool, { taskId: task.id, author: "worker", workerId: config.workerId, body: question });
+
+    // auto_reply 兜底分支：worktree 零改动 → 直接 fail（任务多半描述不全，再问也是同样结果）；
+    // 有改动 → 自动塞一条 user 评论让现有 resumable 流续接，cap=AUTO_REPLY_MAX_ROUNDS。
+    if (task.auto_reply) {
+      const status = await runCommand("git", ["-C", wtPath, "status", "--porcelain"], { timeoutMs: 60_000 });
+      const hasChanges = status.stdout.trim() !== "";
+      if (!hasChanges) {
+        await markTaskFailed(
+          pool,
+          task.id,
+          config.workerId,
+          `auto_reply: Claude requested input before making any changes. Question: ${question}`,
+          { failedAt: new Date().toISOString(), autoReply: { reason: "no-changes", question } }
+        );
+        await addTaskEvent(pool, task.id, config.workerId, "auto_reply_blocked", "auto_reply: 零改动卡住 → 失败", { question });
+        return;
+      }
+      const usedRounds = await countAutoReplyRounds(task.id);
+      if (usedRounds >= AUTO_REPLY_MAX_ROUNDS) {
+        await markTaskFailed(
+          pool,
+          task.id,
+          config.workerId,
+          `auto_reply: blocked after ${AUTO_REPLY_MAX_ROUNDS} auto-reply rounds. Last question: ${question}`,
+          { failedAt: new Date().toISOString(), autoReply: { reason: "max-rounds", usedRounds, question } }
+        );
+        await addTaskEvent(pool, task.id, config.workerId, "auto_reply_blocked", `auto_reply: cap=${AUTO_REPLY_MAX_ROUNDS} 仍在问 → 失败`, { usedRounds, question });
+        return;
+      }
+      const nextRound = usedRounds + 1;
+      await addTaskComment(pool, { taskId: task.id, author: "user", workerId: null, body: AUTO_REPLY_CANNED });
+      await addTaskEvent(
+        pool,
+        task.id,
+        config.workerId,
+        "auto_reply",
+        `Auto-replied (round ${nextRound}/${AUTO_REPLY_MAX_ROUNDS})`,
+        { round: nextRound, question, reply: AUTO_REPLY_CANNED }
+      );
+      await setTaskWaiting(pool, task.id, config.workerId, turn.sessionId);
+      return;
+    }
+
+    // 默认（auto_reply=false）：等待用户回复期间，工作树原样保留（持有未提交改动），续接时复用。
     await setTaskWaiting(pool, task.id, config.workerId, turn.sessionId);
     await addTaskEvent(pool, task.id, config.workerId, "waiting", "Worker is waiting for user reply", { question });
     return;
@@ -479,7 +572,7 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
     // 复用工作树；若已被清理（如曾 GC）则从 work_branch 重建。
     await ensureWorktree(localPath, wtPath, { workBranch: task.work_branch, fresh: false });
     const turn = await runTaskClaude(config, task.id, {
-      prompt: resumePrompt(reply),
+      prompt: resumePrompt(task, reply),
       cwd: wtPath,
       resumeSessionId: task.claude_session_id,
       model: task.model,
@@ -522,7 +615,7 @@ export async function rerunRejectedTask(config: WorkerConfig, task: Task, hooks?
     await ensureWorktree(localPath, wtPath, { workBranch: task.work_branch, fresh: false });
 
     const turn = await runTaskClaude(config, task.id, {
-      prompt: rejectionPrompt(feedback),
+      prompt: rejectionPrompt(task, feedback),
       cwd: wtPath,
       resumeSessionId: task.claude_session_id,
       model: task.model,

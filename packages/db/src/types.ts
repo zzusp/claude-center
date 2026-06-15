@@ -137,6 +137,11 @@ export type Task = {
   submit_mode: TaskSubmitMode;
   // 自动合并 PR：仅 submit_mode='pr' 时有意义；Worker 建 PR 后自动执行 gh pr merge --merge。
   auto_merge_pr: boolean;
+  // 自动回复（兜底）：开启后切换激进版 prompt（哨兵 = 任务被判定 blocked）；
+  // 真出哨兵时：零改动→fail；有改动→自动塞一条 user 评论续接，cap=2（见 apps/worker/src/executor.ts）。
+  auto_reply: boolean;
+  // 决策预案：auto_reply=true 时拼进 prompt，作为用户预先编码的偏好（"prefer minimal change" 等）。
+  auto_decision_hints: string;
   // 任务级 Claude 执行模型，见 TaskModel；'default' 表示 Worker 执行时不传 --model。
   model: TaskModel;
   status: TaskStatus;

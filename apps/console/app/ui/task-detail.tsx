@@ -461,6 +461,10 @@ function OverviewTab({
             {task.submit_mode === "pr" ? (
               <KvRow k="自动合并 PR" v={task.auto_merge_pr ? "是 · 创建后自动合并" : "否"} />
             ) : null}
+            <KvRow k="自动回复" v={task.auto_reply ? "是 · 无人值守兜底（cap=2）" : "否"} />
+            {task.auto_reply && task.auto_decision_hints ? (
+              <KvRow k="决策预案" v={task.auto_decision_hints} />
+            ) : null}
             <KvRow k="执行模型" v={modelLabel} />
             <KvRow k="Worker" v={task.worker_name ?? "—"} />
             <KvRow k="Session ID" v={task.claude_session_id ?? "—"} mono />
@@ -658,6 +662,8 @@ export function TaskEditForm({
   const [error, setError] = useState<string | null>(null);
   const [submitMode, setSubmitMode] = useState<"pr" | "push">(task.submit_mode);
   const [autoMergePr, setAutoMergePr] = useState(task.auto_merge_pr);
+  const [autoReply, setAutoReply] = useState(task.auto_reply);
+  const [autoDecisionHints, setAutoDecisionHints] = useState(task.auto_decision_hints);
   const [model, setModel] = useState(task.model);
 
   // datetime-local 值格式：去掉秒+时区（只保留 "YYYY-MM-DDTHH:MM"）
@@ -685,6 +691,8 @@ export function TaskEditForm({
           targetBranch: data.get("targetBranch") as string,
           submitMode,
           autoMergePr,
+          autoReply,
+          autoDecisionHints,
           model,
           scheduledAt: scheduledAtRaw ? new Date(scheduledAtRaw).toISOString() : null
         })
@@ -742,6 +750,25 @@ export function TaskEditForm({
             <option value="off">否 · 仅创建 PR</option>
             <option value="on">是 · 创建后自动合并</option>
           </select>
+        </div>
+      ) : null}
+      <div className="field">
+        <label className="field-label">自动回复（兜底）</label>
+        <select value={autoReply ? "on" : "off"} onChange={(e) => setAutoReply(e.target.value === "on")} disabled={busy}>
+          <option value="off">否 · 等人回复（默认）</option>
+          <option value="on">是 · 无人值守，按规则兜底</option>
+        </select>
+      </div>
+      {autoReply ? (
+        <div className="field">
+          <label className="field-label">决策预案 <span className="field-hint">可选；auto_reply=true 时拼入 prompt</span></label>
+          <textarea
+            rows={2}
+            value={autoDecisionHints}
+            onChange={(e) => setAutoDecisionHints(e.target.value)}
+            placeholder="prefer minimal change; keep existing patterns; ..."
+            disabled={busy}
+          />
         </div>
       ) : null}
       <div className="field">
