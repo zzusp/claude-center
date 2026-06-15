@@ -253,6 +253,21 @@ export async function publishTask(client: pg.Pool | pg.PoolClient, taskId: strin
   return result.rows[0] ?? null;
 }
 
+// 退回草稿：pending → draft（撤回尚未被认领的待处理任务）。仅 pending 态命中，清空定时设置
+// 回到纯草稿，由用户确认/编辑后重新发布。返回 null 表示任务不存在或已不是待处理态。
+export async function unpublishTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET status = 'draft',
+            scheduled_at = null,
+            updated_at = now()
+      WHERE id = $1 AND status = 'pending'
+      RETURNING *`,
+    [taskId]
+  );
+  return result.rows[0] ?? null;
+}
+
 // 调度器：把所有到点的定时任务（scheduled 且 scheduled_at <= now()）翻成 pending。
 // 幂等（WHERE status='scheduled'），多次/并发触发安全；逐条落 scheduled_published 审计事件。
 // 返回本次提升的任务条数。

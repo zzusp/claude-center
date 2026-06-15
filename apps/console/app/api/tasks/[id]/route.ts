@@ -6,6 +6,7 @@ import {
   publishTask,
   reactivateTask,
   requestTaskCancellation,
+  unpublishTask,
   updateTask,
   userHasProject
 } from "@claude-center/db";
@@ -42,7 +43,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 }
 
 // 任务状态切换与编辑：
-// publish（草稿 → 待处理）、cancel（在途取消）、update（编辑草稿字段）、reactivate（失败/取消 → 草稿）。
+// publish（草稿 → 待处理）、unpublish（待处理 → 草稿）、cancel（在途取消）、
+// update（编辑草稿字段）、reactivate（失败/取消 → 草稿）。
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requirePermission("task.create");
   if (gate instanceof NextResponse) {
@@ -113,6 +115,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const task = await reactivateTask(getPool(), id);
       if (!task) {
         return NextResponse.json({ error: "无法激活：仅失败或已取消的任务可重新激活" }, { status: 409 });
+      }
+      return NextResponse.json({ task });
+    }
+
+    if (body.action === "unpublish") {
+      const task = await unpublishTask(getPool(), id);
+      if (!task) {
+        return NextResponse.json({ error: "无法退回：仅待处理任务可退回草稿" }, { status: 409 });
       }
       return NextResponse.json({ task });
     }

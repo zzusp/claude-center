@@ -726,6 +726,11 @@ table.table {
   background: var(--surface-3);
 }
 
+/* 行整体不可点（详情走「查看」按钮），保留 hover 高亮但光标用默认。 */
+.table-static tbody tr {
+  cursor: default;
+}
+
 .table tbody tr.selected {
   background: rgba(37, 99, 235, 0.06);
 }
@@ -762,6 +767,19 @@ table.table {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-3);
+}
+
+/* 表格单元格内「icon + 文本」并排（项目 / 分支列）。 */
+.cell-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cell-icon .ico {
+  color: var(--text-4);
+  flex-shrink: 0;
 }
 
 .cell-stack {
