@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getCurrentUser } from "../../lib/session";
+import { getCurrentUser, toCurrentUser } from "../../lib/session";
 import WorkersClient from "./workers-client";
 
 export const dynamic = "force-dynamic";
@@ -9,5 +9,6 @@ export default async function Page() {
   if (!user) {
     redirect("/login");
   }
-  return <WorkersClient />;
+  const current = toCurrentUser(user);
+  return <WorkersClient canCommand={current.permissions.includes("command.create")} />;
 }

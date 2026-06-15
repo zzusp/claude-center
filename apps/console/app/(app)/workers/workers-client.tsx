@@ -6,7 +6,8 @@ import { usePolling } from "../../lib/use-polling";
 import { WorkersView } from "../../ui/workers";
 
 // 执行机群页容器：轮询 /api/workers（纯展示，不再依赖任务列表）。
-export default function WorkersClient() {
+// canCommand 由服务端页面按 command.create 权限算好传入，决定卡片是否显示删除入口。
+export default function WorkersClient({ canCommand }: { canCommand: boolean }) {
   const [workers, setWorkers] = useState<Worker[]>([]);
 
   usePolling(async (isActive) => {
@@ -21,5 +22,10 @@ export default function WorkersClient() {
     }
   }, []);
 
-  return <WorkersView workers={workers} />;
+  // 删除成功后乐观移除，下一轮轮询再与库对齐。
+  function handleDeleted(id: string) {
+    setWorkers((prev) => prev.filter((w) => w.id !== id));
+  }
+
+  return <WorkersView workers={workers} canCommand={canCommand} onDeleted={handleDeleted} />;
 }

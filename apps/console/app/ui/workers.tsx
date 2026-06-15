@@ -20,7 +20,7 @@ import {
   ShieldCheck, Tag, Trash2, UserRound, Users, X
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Empty, KvRow, MergeStatusBadge, StatusBadge, StatusDot,
@@ -92,12 +92,38 @@ function UsageBlock({ label, win }: { label: string; win: { utilization: number;
   );
 }
 
-function WorkersView({ workers }: { workers: Worker[] }) {
+function WorkersView({
+  workers,
+  canCommand,
+  onDeleted
+}: {
+  workers: Worker[];
+  canCommand: boolean;
+  onDeleted: (id: string) => void;
+}) {
   const router = useRouter();
   const onlineWorkers = workers.filter((worker) => worker.status === "online").length;
 
   function displayName(worker: Worker): string {
     return worker.label || worker.name;
+  }
+
+  // 卡片本身可点击跳详情，删除按钮需阻止冒泡；二次确认后调后端 DELETE，成功后乐观移除。
+  async function handleDelete(event: MouseEvent, worker: Worker) {
+    event.stopPropagation();
+    if (!window.confirm(`确认删除 Worker「${displayName(worker)}」？此操作不可撤销，关联的任务事件历史会保留（仅置空 worker 引用）。`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/workers/${worker.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? "删除失败");
+      }
+      onDeleted(worker.id);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "删除失败");
+    }
   }
 
   return (
@@ -137,6 +163,18 @@ function WorkersView({ workers }: { workers: Worker[] }) {
                   <span className="worker-name">{displayName(worker)}</span>
                   <StatusBadge status={worker.status} />
                   <WorkingStateBadge state={worker.working_state} />
+                  {canCommand && (
+                    <button
+                      type="button"
+                      className="btn-icon"
+                      title="删除 Worker"
+                      style={{ marginLeft: "auto", color: "var(--failed)" }}
+                      onClick={(event) => handleDelete(event, worker)}
+                      onKeyDown={(event) => event.stopPropagation()}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
                 </div>
                 <div className="worker-rows">
                   <div className="worker-row">
