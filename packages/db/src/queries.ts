@@ -29,6 +29,9 @@ export type WorkerRegistration = {
   // 客户端策略与并行上限：register 写入初值，运行时经 updateWorkerInfo 刷新。
   allowRemoteControl?: boolean;
   maxParallel?: number;
+  // 桌面端运行终端配置，随 register 上报一次，变动时经 updateWorkerTerminal 刷新。
+  terminalCommand?: string;
+  claudePreCommand?: string;
 };
 
 // worker 周期性上报的动态信息（claude 版本 / 订阅 / 用量）+ 当前客户端策略。
@@ -411,8 +414,9 @@ export async function registerWorker(client: pg.Pool | pg.PoolClient, input: Wor
   // ON CONFLICT 刻意不更新它，使本地/远程切换过的工作态在重连/重启后保留。
   const result = await client.query<Worker>(
     `INSERT INTO workers (id, name, host_name, app_version, capabilities, metadata,
-                          allow_remote_control, max_parallel, status, last_seen_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'online', now())
+                          allow_remote_control, max_parallel, terminal_command, claude_pre_command,
+                          status, last_seen_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'online', now())
      ON CONFLICT (id) DO UPDATE SET
        name = EXCLUDED.name,
        host_name = EXCLUDED.host_name,
@@ -421,6 +425,8 @@ export async function registerWorker(client: pg.Pool | pg.PoolClient, input: Wor
        metadata = EXCLUDED.metadata,
        allow_remote_control = EXCLUDED.allow_remote_control,
        max_parallel = EXCLUDED.max_parallel,
+       terminal_command = EXCLUDED.terminal_command,
+       claude_pre_command = EXCLUDED.claude_pre_command,
        status = 'online',
        last_seen_at = now(),
        updated_at = now()
@@ -433,7 +439,9 @@ export async function registerWorker(client: pg.Pool | pg.PoolClient, input: Wor
       input.capabilities ?? {},
       input.metadata ?? {},
       input.allowRemoteControl ?? false,
-      input.maxParallel ?? 1
+      input.maxParallel ?? 1,
+      input.terminalCommand ?? "",
+      input.claudePreCommand ?? ""
     ]
   );
   return result.rows[0]!;
@@ -473,6 +481,35 @@ export async function updateWorkerInfo(
       input.maxParallel
     ]
   );
+}
+
+// 更新 worker 运行终端配置（桌面端 setTerminalCommand/setPreCommand 时调用）。
+export async function updateWorkerTerminal(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string,
+  terminalCommand: string,
+  claudePreCommand: string
+): Promise<void> {
+  await client.query(
+    `UPDATE workers
+        SET terminal_command = $2, claude_pre_command = $3, updated_at = now()
+      WHERE id = $1`,
+    [workerId, terminalCommand, claudePreCommand]
+  );
+}
+
+// web 端重命名：仅更新 label 字段（null=清除自定义名，显示回 name）。
+// worker 重注册不覆盖 label，所以此操作跨重启生效。
+export async function updateWorkerLabel(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string,
+  label: string | null
+): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE workers SET label = $2, updated_at = now() WHERE id = $1`,
+    [workerId, label || null]
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 // 切换工作态。viaRemote=true（web 远程）时加 allow_remote_control 门槛，

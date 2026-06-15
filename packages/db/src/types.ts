@@ -90,6 +90,11 @@ export type Worker = {
   max_parallel: number;
   capabilities: Record<string, unknown>;
   metadata: Record<string, unknown>;
+  // 桌面端配置的运行终端路径（空=默认），入库供 web 端展示。
+  terminal_command: string;
+  claude_pre_command: string;
+  // web 端设置的友好显示名（null=未重命名，UI 显示 name）；worker 重注册不覆盖此字段。
+  label: string | null;
   last_seen_at: string;
   created_at: string;
   updated_at: string;

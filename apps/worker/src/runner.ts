@@ -29,6 +29,7 @@ import {
   requestTaskCancellation,
   setWorkerWorkingState,
   updateWorkerInfo,
+  updateWorkerTerminal,
   upsertWorkerProjectLink,
   type Conversation,
   type ConversationMessage,
@@ -215,18 +216,20 @@ export class ClaudeCenterWorker {
     return detectTerminals();
   }
 
-  // 设置运行 claude 的终端（可执行文件全路径，空=默认）。改内存 + 持久化 worker.json；仅桌面本机关心，不入 DB。
+  // 设置运行 claude 的终端（可执行文件全路径，空=默认）。改内存 + 持久化 worker.json + 同步入库。
   async setTerminalCommand(command: string): Promise<void> {
     const next = command.trim();
     this.config.terminalCommand = next;
     persistWorkerState(this.config.dataDir, { terminalCommand: next });
+    await updateWorkerTerminal(getPool(), this.config.workerId, next, this.config.claudePreCommand);
   }
 
-  // 设置运行 claude 前在终端会话先执行的前置命令（VPN/代理/登录等）。改内存 + 持久化 worker.json。
+  // 设置运行 claude 前在终端会话先执行的前置命令（VPN/代理/登录等）。改内存 + 持久化 worker.json + 同步入库。
   async setPreCommand(command: string): Promise<void> {
     const next = command.trim();
     this.config.claudePreCommand = next;
     persistWorkerState(this.config.dataDir, { claudePreCommand: next });
+    await updateWorkerTerminal(getPool(), this.config.workerId, this.config.terminalCommand, next);
   }
 
   // —— 桌面端项目关联 —— //
@@ -453,7 +456,9 @@ export class ClaudeCenterWorker {
         projectCount: this.config.projects.length
       },
       allowRemoteControl: this.config.allowRemoteControl,
-      maxParallel: this.config.maxParallel
+      maxParallel: this.config.maxParallel,
+      terminalCommand: this.config.terminalCommand,
+      claudePreCommand: this.config.claudePreCommand
     });
 
     for (const project of this.config.projects) {
