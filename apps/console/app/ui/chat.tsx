@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation } from "@claude-center/db";
-import { Check, GitBranch, MessageSquare, Pencil, Plus, Send, Server, X } from "lucide-react";
+import { Check, GitBranch, MessageSquare, Pencil, Plus, Send, Server, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, postJson } from "./shared";
 import { TranscriptView, parseTranscript } from "./transcript";
@@ -35,6 +35,28 @@ export function ChatView({ overview, canCommand }: { overview: Overview; canComm
     return () => clearInterval(t);
   }, []);
 
+  async function delConv(c: Conversation): Promise<void> {
+    if (
+      !window.confirm(
+        `确认删除对话「${c.title || "未命名对话"}」？该对话的所有消息与会话记录将一并删除，且不可恢复。`
+      )
+    ) {
+      return;
+    }
+    try {
+      const r = await fetch(`/api/conversations/${c.id}`, { method: "DELETE" });
+      if (!r.ok) {
+        throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "删除失败");
+      }
+      if (activeId === c.id) {
+        setActiveId(null);
+      }
+      await loadList();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "删除失败");
+    }
+  }
+
   const active = conversations.find((c) => c.id === activeId) ?? null;
 
   return (
@@ -53,24 +75,31 @@ export function ChatView({ overview, canCommand }: { overview: Overview; canComm
             <Empty icon={<MessageSquare size={20} />} text="暂无对话" />
           ) : (
             conversations.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                className={`chat-li${c.id === activeId ? " active" : ""}`}
-                onClick={() => setActiveId(c.id)}
-              >
-                <span className="chat-li-title">{c.title || "未命名对话"}</span>
-                <span className="chat-li-meta">
-                  <Server size={11} /> {c.worker_name} <GitBranch size={11} /> {c.branch}
-                </span>
-                <span className="chat-li-foot">
-                  <span className="mono">{c.project_name}</span>
-                  <span className="chat-li-tags">
-                    {c.generating ? <span className="chat-tag live">回复中</span> : null}
-                    <span className={`chat-tag ${c.status}`}>{c.status === "active" ? "进行中" : "已结束"}</span>
+              <div key={c.id} className={`chat-li${c.id === activeId ? " active" : ""}`}>
+                <button type="button" className="chat-li-main" onClick={() => setActiveId(c.id)}>
+                  <span className="chat-li-title">{c.title || "未命名对话"}</span>
+                  <span className="chat-li-meta">
+                    <Server size={11} /> {c.worker_name} <GitBranch size={11} /> {c.branch}
                   </span>
-                </span>
-              </button>
+                  <span className="chat-li-foot">
+                    <span className="mono">{c.project_name}</span>
+                    <span className="chat-li-tags">
+                      {c.generating ? <span className="chat-tag live">回复中</span> : null}
+                      <span className={`chat-tag ${c.status}`}>{c.status === "active" ? "进行中" : "已结束"}</span>
+                    </span>
+                  </span>
+                </button>
+                {canCommand ? (
+                  <button
+                    type="button"
+                    className="chat-li-del"
+                    title="删除对话"
+                    onClick={() => void delConv(c)}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                ) : null}
+              </div>
             ))
           )}
         </div>

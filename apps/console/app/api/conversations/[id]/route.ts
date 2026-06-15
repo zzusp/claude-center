@@ -1,4 +1,5 @@
 import {
+  deleteConversation,
   getConversation,
   getPool,
   listConversationMessages,
@@ -58,6 +59,30 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ error: "无权访问该对话" }, { status: 403 });
     }
     await renameConversation(getPool(), id, title);
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+  }
+}
+
+// 删除会话：复用 command.create 权限（与建/结束/改名同级），按项目可见性校验。
+// 消息与 session jsonl 经外键级联删除。
+export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const gate = await requirePermission("command.create");
+  if (gate instanceof NextResponse) {
+    return gate;
+  }
+  const user = gate;
+  try {
+    const { id } = await params;
+    const conversation = await getConversation(getPool(), id);
+    if (!conversation) {
+      return NextResponse.json({ error: "对话不存在" }, { status: 404 });
+    }
+    if (user.role !== "admin" && !(await userHasProject(getPool(), user.id, conversation.project_id))) {
+      return NextResponse.json({ error: "无权访问该对话" }, { status: 403 });
+    }
+    await deleteConversation(getPool(), id);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });

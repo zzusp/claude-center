@@ -2356,15 +2356,10 @@ a.dep-item:hover {
   gap: 6px;
 }
 .chat-li {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  text-align: left;
-  padding: 10px 12px;
+  position: relative;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--surface-1);
-  cursor: pointer;
   transition: background 120ms ease, border-color 120ms ease;
 }
 .chat-li:hover {
@@ -2374,10 +2369,48 @@ a.dep-item:hover {
   border-color: var(--running);
   background: var(--surface-2);
 }
+.chat-li-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.chat-li-del {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-4);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+}
+.chat-li:hover .chat-li-del,
+.chat-li.active .chat-li-del {
+  opacity: 1;
+}
+.chat-li-del:hover {
+  color: var(--failed);
+  background: var(--surface-1);
+}
 .chat-li-title {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-1);
+  padding-right: 22px;
 }
 .chat-li-meta {
   display: inline-flex;
@@ -2437,6 +2470,11 @@ a.dep-item:hover {
   border: 1px solid var(--border);
   border-radius: var(--r-md, 12px);
   overflow: hidden;
+}
+/* 未选会话时的占位（图标 + 提示语）：撑满主区并居中，避免贴左上角错位。 */
+.chat-main > .empty {
+  flex: 1;
+  align-self: stretch;
 }
 .chat-thread {
   display: flex;
@@ -2610,7 +2648,7 @@ a.dep-item:hover {
 .chat-composer {
   display: flex;
   gap: 8px;
-  align-items: flex-end;
+  align-items: stretch;
   padding: 12px 14px;
   border-top: 1px solid var(--border);
 }
@@ -2632,8 +2670,8 @@ a.dep-item:hover {
 }
 .btn-send {
   flex-shrink: 0;
-  width: 40px;
-  height: 40px;
+  align-self: stretch;
+  width: 44px;
   border-radius: var(--r-sm);
   border: none;
   background: var(--running);
