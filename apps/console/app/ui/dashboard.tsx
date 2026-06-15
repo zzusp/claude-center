@@ -18,7 +18,7 @@ import {
   MessageSquare, Network, Pencil, Plus, Power, RadioTower, RotateCcw, Save, Search, Send, Server,
   ShieldCheck, Tag, Trash2, UserRound, Users, X
 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -36,6 +36,8 @@ import { TasksView, TaskDrawer } from "./tasks";
 import { WorkersView } from "./workers";
 import { ProjectsView } from "./projects";
 import { UsersView } from "./users";
+
+const VIEW_KEYS: ViewKey[] = ["dashboard", "tasks", "chat", "workers", "projects", "users"];
 
 export default function Dashboard({ currentUser }: { currentUser: CurrentUser }) {
   const isAdmin = currentUser.role === "admin";
@@ -59,8 +61,23 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
 
   const router = useRouter();
-  const [view, setView] = useState<ViewKey>("dashboard");
+  const searchParams = useSearchParams();
+  // 当前标签持久化到 URL（?view=tasks），从任务详情 router.back() 回来后能恢复到来源标签，
+  // 否则 Dashboard 重新挂载会把 view 重置成 dashboard（总览）。
+  const [view, setView] = useState<ViewKey>(() => {
+    const v = searchParams.get("view");
+    if (v && (VIEW_KEYS as string[]).includes(v) && (v !== "users" || can.manageUsers)) {
+      return v as ViewKey;
+    }
+    return "dashboard";
+  });
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  function selectView(key: ViewKey) {
+    setView(key);
+    // 用 history API 改 URL：只更新当前历史记录、不触发服务端重渲染；back 时即可被 useSearchParams 读回。
+    window.history.replaceState(null, "", key === "dashboard" ? "/" : `/?view=${key}`);
+  }
 
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -187,7 +204,7 @@ export default function Dashboard({ currentUser }: { currentUser: CurrentUser })
               key={item.key}
               type="button"
               className={`nav-item${view === item.key ? " active" : ""}`}
-              onClick={() => setView(item.key)}
+              onClick={() => selectView(item.key)}
             >
               <span className="nav-ico">{item.icon}</span>
               <span className="nav-label">{item.label}</span>
