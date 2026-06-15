@@ -1,12 +1,14 @@
 # ClaudeCenter
 
-ClaudeCenter 是一个 AI 编码协作中央控制台：一个 Next.js Web Console 加多个 Electron Desktop Worker，所有节点通过同一个 PostgreSQL 数据库协同。
+ClaudeCenter 是一个 AI 编码协作中央控制台：一个 Next.js Web Console 加多个 Electron Desktop Worker，所有节点通过同一个 PostgreSQL 数据库协同；可选叠加一个 SSE 中转服务作低延迟实时线。
 
 ## 组件
 
 - `apps/console`：Web 中控台，负责项目管理、任务发布、Worker/任务监控和定向指令。
 - `apps/worker`：桌面端 Worker，负责心跳、项目本地路径关联、任务领取、Claude Code 执行和 GitHub PR 创建。
+- `apps/relay`：可选的 SSE 中转服务，为 Console↔Worker 提供低延迟实时推送（不可用时自动退回数据库轮询）。
 - `packages/db`：PostgreSQL schema、迁移脚本和共享查询函数。
+- `packages/relay-client`：中转服务的共享客户端（事件契约 + 发布/订阅/票据 helper）。
 
 ## 快速开始
 
@@ -47,6 +49,23 @@ ClaudeCenter 是一个 AI 编码协作中央控制台：一个 Next.js Web Conso
    ```powershell
    npm run dev:worker
    ```
+
+## SSE 中转服务（实时线，可选）
+
+在「PostgreSQL 唯一权威 + 双向轮询」之上，可选叠加一条独立的 **SSE 中转服务**（`apps/relay`），让 Console 与 Worker 的通信在中转可用时走实时推送（亚秒级），不可用时自动退回数据库轮询（功能不降级）。完整设计见 `docs/spec/sse-relay-service.md`。
+
+- **默认禁用**：`CLAUDE_CENTER_RELAY_URL` 为空时，Console 与 Worker 都不连中转、纯走数据库轮询（与启用前行为完全一致）。
+- **启用**：在 `.env` 配齐 `CLAUDE_CENTER_RELAY_*`（基址 + 一组对称密钥/令牌，见 `.env.example`），然后起中转服务：
+
+  ```powershell
+  npm run dev:relay                          # 起中转服务（默认 127.0.0.1:8787）
+  node apps/relay/dist/main.js --check       # 零副作用自检：只打印脱敏配置，不监听
+  npm -w @claude-center/relay run selftest   # 自验证：投递/保活/Last-Event-ID/鉴权/ticket/healthz
+  ```
+
+- **承载**：传全量消息负载，但**消息一律先落库再发布**（DB 仍是唯一权威与持久备份）；中转只搬运已落库的事件，丢事件靠订阅端重连后的数据库轮询自愈。
+- **可靠性**：保活心跳、断线检测、自动重连（指数退避+抖动）、`Last-Event-ID` 短重放；浏览器用原生 `EventSource` + 短时效票据（按项目 RBAC 限定可订阅频道），Worker 用共享令牌订阅 `worker:<id>` + 本机 `project:<id>` 频道。
+- **本期（Phase 1）= SSE 转发 + 消息落库**；DB 轮询「双线择优降级」（中转健康时慢化轮询、断时恢复）列为 Phase 2 TODO——现有轮询天然作隐式兜底。
 
 ## 登录鉴权与权限（RBAC）
 

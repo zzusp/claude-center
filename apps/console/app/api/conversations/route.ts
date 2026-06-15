@@ -9,6 +9,7 @@ import {
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../lib/session";
+import { projectChannel, publishRelay } from "../../lib/relay-publish";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +47,13 @@ export async function POST(request: NextRequest) {
       model,
       title: body.title?.trim() || "",
       createdBy: user.id
+    });
+    publishRelay({
+      channel: projectChannel(conversation.project_id),
+      type: "conversation.upserted",
+      entityId: conversation.id,
+      projectId: conversation.project_id,
+      payload: conversation
     });
     return NextResponse.json({ conversation }, { status: 201 });
   } catch (error) {

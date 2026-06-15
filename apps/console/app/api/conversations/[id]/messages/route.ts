@@ -1,6 +1,7 @@
 import { addConversationMessage, getConversation, getPool, userHasProject } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "../../../../lib/session";
+import { projectChannel, publishRelay } from "../../../../lib/relay-publish";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +29,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json({ error: "对话已结束" }, { status: 400 });
     }
     const message = await addConversationMessage(getPool(), { conversationId: id, role: "user", body: body.body.trim() });
+    // 落库后即推到项目频道：会话的 worker 已关联该项目（创建时校验），会收到并立即认领应答。
+    publishRelay({
+      channel: projectChannel(conversation.project_id),
+      type: "conversation.message",
+      entityId: id,
+      projectId: conversation.project_id,
+      seq: message.seq,
+      payload: message
+    });
     return NextResponse.json({ message }, { status: 201 });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });

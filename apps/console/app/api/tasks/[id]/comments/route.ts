@@ -1,6 +1,7 @@
 import { addTaskComment, getPool, getTaskProjectId, listTaskComments, userHasProject } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser, type AuthUser } from "../../../../lib/session";
+import { projectChannel, publishRelay } from "../../../../lib/relay-publish";
 
 // 校验用户对某任务所属项目的访问范围（admin 全通）。返回 null 表示放行，否则返回拦截响应。
 async function denyIfOutOfScope(user: AuthUser, taskId: string): Promise<NextResponse | null> {
@@ -58,6 +59,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       body: body.body.trim()
     });
 
+    // 用户回复落库后推到项目频道：waiting 任务的 Worker 收到即续接同一会话重跑。
+    const projectId = await getTaskProjectId(getPool(), id);
+    if (projectId) {
+      publishRelay({
+        channel: projectChannel(projectId),
+        type: "task.comment",
+        entityId: id,
+        projectId,
+        seq: comment.created_at,
+        payload: comment
+      });
+    }
     return NextResponse.json({ comment }, { status: 201 });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });

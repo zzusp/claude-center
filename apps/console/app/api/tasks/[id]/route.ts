@@ -11,9 +11,22 @@ import {
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../../lib/session";
-import type { TaskModel, TaskSubmitMode } from "@claude-center/db";
+import { projectChannel, publishRelay } from "../../../lib/relay-publish";
+import type { Task, TaskModel, TaskSubmitMode } from "@claude-center/db";
 
 export const dynamic = "force-dynamic";
+
+// 任务状态变更后推全量任务行到项目频道（best-effort，落库成功后调用）。
+function publishTaskUpserted(task: Task): void {
+  publishRelay({
+    channel: projectChannel(task.project_id),
+    type: "task.upserted",
+    entityId: task.id,
+    projectId: task.project_id,
+    seq: task.updated_at,
+    payload: task
+  });
+}
 
 // 单任务详情：task 本体（含 project_name / depends_on / blocked）+ 前置任务标题，供独立详情页轮询。
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -77,6 +90,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (!task) {
         return NextResponse.json({ error: "任务不存在或不是草稿状态" }, { status: 409 });
       }
+      publishTaskUpserted(task);
       return NextResponse.json({ task });
     }
 
@@ -85,6 +99,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (!task) {
         return NextResponse.json({ error: "无法取消：仅在途（已领取/执行中/等待中）任务可取消" }, { status: 409 });
       }
+      publishTaskUpserted(task);
       return NextResponse.json({ task });
     }
 
@@ -106,6 +121,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (!task) {
         return NextResponse.json({ error: "任务不存在或已开始执行，无法编辑" }, { status: 409 });
       }
+      publishTaskUpserted(task);
       return NextResponse.json({ task });
     }
 
@@ -114,6 +130,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (!task) {
         return NextResponse.json({ error: "无法激活：仅失败或已取消的任务可重新激活" }, { status: 409 });
       }
+      publishTaskUpserted(task);
       return NextResponse.json({ task });
     }
 

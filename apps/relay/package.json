@@ -1,0 +1,19 @@
+{
+  "name": "@claude-center/relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "prebuild": "npm -w @claude-center/relay-client run build",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/main.js",
+    "dev": "tsx src/main.ts",
+    "check": "node dist/main.js --check",
+    "selftest": "node scripts/selftest.mjs"
+  },
+  "dependencies": {
+    "@claude-center/relay-client": "0.1.0"
+  }
+}

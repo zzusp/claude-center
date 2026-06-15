@@ -1,18 +1,28 @@
 # CLAUDE.md — ClaudeCenter
 
-> AI 编码协作中控台：Next.js Web Console（`apps/console`）+ Electron 桌面 Worker（`apps/worker`），共享一个 PostgreSQL（`packages/db`）协同。完整设计见 `docs/spec/claude-center-mvp.md` 与 `README.md`。
+> AI 编码协作中控台：Next.js Web Console（`apps/console`）+ Electron 桌面 Worker（`apps/worker`），共享一个 PostgreSQL（`packages/db`）协同；可选叠加 SSE 中转服务（`apps/relay`）作低延迟实时线（`packages/relay-client` 为共享客户端）。完整设计见 `docs/spec/claude-center-mvp.md`、`docs/spec/sse-relay-service.md` 与 `README.md`。
 
 ## 本地验证（顺序固定）
 
 ```powershell
-npm run typecheck          # db / console / worker 三包
-npm run build              # 三包构建（含 next build）
+npm run typecheck          # db / relay-client / console / worker / relay 五包
+npm run build              # 五包构建（含 next build）
 npm run db:migrate         # 应用迁移到 DATABASE_URL 指向的库
 npm run verify:console     # 起 console，断言 401→登录→200，自动关
+npm -w @claude-center/relay run selftest   # relay 自验证：投递/保活/Last-Event-ID/鉴权/ticket/healthz
 ```
 
 - **build 绿 ≠ dev 绿**：`instrumentation.ts` / edge runtime 的问题只在 dev 暴露（见下「Next.js / webpack 坑」）。改 instrumentation / 中间件 / 服务端入口后，必须 `verify:console` 看到 `401→200` 才算验证过，光 `build` 绿是假信号。
 - `verify:console` 默认起在 `3000`；撞端口用 `$env:CONSOLE_PORT="<空闲口>"`。
+
+## SSE 中转服务（`apps/relay`，可选实时线）
+
+- 在「DB 唯一权威 + 双向轮询」之上叠加一条低延迟 SSE 线：可用时优先走中转（亚秒级），不可用时退回数据库轮询（功能不降级）。完整方案见 `docs/spec/sse-relay-service.md`。
+- **默认禁用**：`CLAUDE_CENTER_RELAY_URL` 为空时 Console/Worker 都不连中转、纯轮询（与改动前行为一致）。配齐 `CLAUDE_CENTER_RELAY_*`（见 `.env.example`）后启用。
+- 起服务：`npm run dev:relay`（或 `node apps/relay/dist/main.js`）；`node apps/relay/dist/main.js --check` 是零副作用自检（只打印脱敏配置、不监听）。
+- **写路径硬约束**：所有消息/状态**先落库再 publish**（best-effort，失败不阻塞、靠轮询兜底）。改了发布点要确保在落库成功之后调用 `publishRelay` / `relay.publish`。
+- **不要把 `relay-publish` / `relay-client` 引进 `instrumentation.ts` 或 edge**：它们用 `node:` 内置（http/crypto），只在 nodejs runtime 的 route handler 里 import（与 `pg` 同理）。
+- Phase 2（TODO）：DB 轮询双线择优（relay 健康时慢化轮询、断时恢复）、reconnect→DB 对账、多 relay 实例广播背板——本期未做，现有轮询天然作隐式兜底。
 
 ## 数据库
 

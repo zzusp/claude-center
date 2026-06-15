@@ -1,6 +1,7 @@
 import { getPool, setWorkerWorkingState } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "../../../../lib/session";
+import { publishRelay, workerChannel } from "../../../../lib/relay-publish";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json({ error: "该 Worker 未开启「允许 web 端远程开关」或不存在" }, { status: 403 });
     }
 
+    // 推到该 worker 频道：Worker 收到即立刻按新工作态认领/停领（不必等下一轮 tick 读 DB）。
+    publishRelay({
+      channel: workerChannel(id),
+      type: "worker.working_state",
+      entityId: id,
+      payload: { working_state: body.state }
+    });
     return NextResponse.json({ ok: true, state: body.state }, { status: 200 });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });

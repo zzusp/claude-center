@@ -10,6 +10,7 @@ import {
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../lib/session";
+import { projectChannel, publishRelay } from "../../lib/relay-publish";
 
 export const dynamic = "force-dynamic";
 
@@ -151,6 +152,14 @@ export async function POST(request: NextRequest) {
       });
       await addTaskDependencies(client, task.id, dependsOn);
       await client.query("COMMIT");
+      publishRelay({
+        channel: projectChannel(task.project_id),
+        type: "task.upserted",
+        entityId: task.id,
+        projectId: task.project_id,
+        seq: task.updated_at,
+        payload: task
+      });
       return NextResponse.json({ task }, { status: 201 });
     } catch (error) {
       await client.query("ROLLBACK");
