@@ -69,7 +69,7 @@ import {
 } from "./inspect.js";
 import { killProcessTree } from "./shell.js";
 import { gcWorktrees } from "./worktree.js";
-import { WorkerRelay } from "./relay.js";
+import { WorkerRelay, type RelayStatus } from "./relay.js";
 import { projectChannel, type RelayEvent } from "@claude-center/relay-client";
 
 // 取消请求扫描间隔(ms):独立于工作态门控与认领循环,确保在执行中也能及时响应取消。
@@ -118,6 +118,9 @@ export type WorkerStatusSnapshot = {
   claudePreCommand: string;
   activeTasks: ActiveTaskView[];
   logs: LogLine[];
+  // SSE 中转连接状态 + 当前订阅频道数（桌面端展示连通性）。
+  relayState: RelayStatus;
+  relayChannels: number;
 };
 
 const UNKNOWN_CAPABILITY = { ok: false, version: null };
@@ -425,7 +428,9 @@ export class ClaudeCenterWorker {
         startedAt: entry.startedAt,
         cancelled: entry.cancelled
       })),
-      logs: this.logs
+      logs: this.logs,
+      relayState: this.relay.state,
+      relayChannels: this.relay.channelCount
     };
   }
 

@@ -7,7 +7,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { SyncStatus } from "./overview";
+import { SyncStatus, RelayStatus } from "./overview";
 import { ROLE_LABEL, fmtAgo, type CurrentUser } from "./dashboard-shared";
 import { usePolling } from "../lib/use-polling";
 
@@ -132,6 +132,7 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
             <p className="page-sub">{meta.sub}</p>
           </div>
           <div className="topbar-actions">
+            <RelayStatus />
             <SyncStatus synced={synced} message={message} lastSyncAt={lastSyncAt} />
           </div>
         </header>
