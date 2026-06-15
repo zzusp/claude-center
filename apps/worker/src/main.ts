@@ -458,8 +458,16 @@ function windowHtml(): string {
               html += '<div class="task-group"><div class="task-group-head">' + g.title +
                 ' <span class="task-count">' + list.length + '</span></div>' + list.map(taskRow).join("") + "</div>";
             });
+            // 同对话面板：重建列表会把已展开详情重置为「加载中…」再异步拉取 → 刷新闪烁。
+            // 先存下旧详情内容、重建后还原消除闪回；任务面板无独立刷新定时器，故仍调 loadDetail
+            // 平滑刷新（先 await 再换 innerHTML，过渡是旧内容→新内容，不经占位符）。
+            const keep = expandedTaskId ? (document.getElementById("detail-" + expandedTaskId) || {}).innerHTML : null;
             $("tasks").innerHTML = html;
-            if (expandedTaskId) loadDetail(expandedTaskId);
+            if (expandedTaskId) {
+              const box = document.getElementById("detail-" + expandedTaskId);
+              if (box && keep != null) box.innerHTML = keep;
+              loadDetail(expandedTaskId);
+            }
           }
           async function reloadTasks() {
             let tasks = [];
