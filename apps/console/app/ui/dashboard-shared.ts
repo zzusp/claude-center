@@ -1,11 +1,4 @@
-import type {
-  DirectCommand,
-  Permission,
-  Project,
-  Role,
-  Task,
-  Worker
-} from "@claude-center/db";
+import type { Permission, Role, Task, Worker } from "@claude-center/db";
 import type { Tone } from "./shared";
 
 type Health = {
@@ -23,11 +16,11 @@ type Health = {
   };
 };
 
+// 总览页数据（/api/dashboard）：summary 卡片 + worker/任务流 + 运行健康。
+// projects / commands 已随菜单页拆分移除（各页自取所需）。
 type Overview = {
-  projects: Project[];
   workers: Worker[];
   tasks: Task[];
-  commands: DirectCommand[];
   summary: {
     onlineWorkers: number;
     pendingTasks: number;
@@ -58,10 +51,8 @@ const ROLE_LABEL: Record<Role, string> = {
 const ROLE_OPTIONS: Role[] = ["viewer", "commenter", "publisher", "admin"];
 
 const emptyOverview: Overview = {
-  projects: [],
   workers: [],
   tasks: [],
-  commands: [],
   summary: { onlineWorkers: 0, pendingTasks: 0, runningTasks: 0, failedTasks: 0 },
   health: null
 };

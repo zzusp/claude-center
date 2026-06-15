@@ -145,7 +145,7 @@ export default function WorkerDetailPage({
     if (window.history.length > 1) {
       router.back();
     } else {
-      router.push("/?view=workers");
+      router.push("/workers");
     }
   }
 
@@ -211,7 +211,7 @@ export default function WorkerDetailPage({
     try {
       const res = await fetch(`/api/workers/${workerId}`, { method: "DELETE" });
       if (res.ok) {
-        router.push("/?view=workers");
+        router.push("/workers");
       } else {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         setDeleteError(data.error ?? "删除失败");

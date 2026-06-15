@@ -2,8 +2,6 @@ import {
   countScheduledTasks,
   getPool,
   getPoolStats,
-  listProjectsForUser,
-  listRecentDirectCommands,
   listRecentTasksForUser,
   listWorkers,
   pingDatabase
@@ -14,6 +12,8 @@ import { getSchedulerState, isSchedulerHealthy } from "../../lib/scheduler-state
 
 export const dynamic = "force-dynamic";
 
+// 总览页专用聚合：summary 卡片 + sparkline 数据源 + worker/任务流 + 运行健康。
+// 等于原 /api/overview 去掉 projects（总览不用）与 commands（前端从未消费）。
 export async function GET() {
   const gate = await requireUser();
   if (gate instanceof NextResponse) {
@@ -22,14 +22,10 @@ export async function GET() {
   const user = gate;
   try {
     const pool = getPool();
-    const isAdmin = user.role === "admin";
-    // projects / tasks 按用户项目范围过滤；定向指挥回执仅 admin 可见。
     // dbLatencyMs / scheduledPending 一并入 Promise.all，健康数据复用同一轮询、不另起请求。
-    const [projects, workers, tasks, commands, dbLatencyMs, scheduledPending] = await Promise.all([
-      listProjectsForUser(pool, user),
+    const [workers, tasks, dbLatencyMs, scheduledPending] = await Promise.all([
       listWorkers(pool),
       listRecentTasksForUser(pool, user, 80),
-      isAdmin ? listRecentDirectCommands(pool, 40) : Promise.resolve([]),
       pingDatabase(pool),
       countScheduledTasks(pool)
     ]);
@@ -37,10 +33,8 @@ export async function GET() {
     const scheduler = getSchedulerState();
 
     return NextResponse.json({
-      projects,
       workers,
       tasks,
-      commands,
       summary: {
         onlineWorkers: workers.filter((worker) => worker.status === "online").length,
         pendingTasks: tasks.filter((task) => task.status === "pending").length,

@@ -27,7 +27,7 @@ import {
 } from "./shared";
 import {
   ROLE_LABEL, ROLE_OPTIONS, SPARK_CAP, TONE_COLOR, emptyOverview, fmtAgo, syncAgo,
-  type CurrentUser, type Health, type Overview, type ViewKey
+  type CurrentUser, type Health, type ViewKey
 } from "./dashboard-shared";
 import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
 import { Drawer, Select, useConfirm } from "./controls";
@@ -60,12 +60,12 @@ const MERGE_STATUS_FILTERS: { value: string; label: string }[] = [
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 function TasksView({
-  overview,
+  projects,
   onOpenTask,
   onOpenCompose,
   canCreateTask
 }: {
-  overview: Overview;
+  projects: Project[];
   onOpenTask: (task: Task) => void;
   onOpenCompose: () => void;
   canCreateTask: boolean;
@@ -163,7 +163,7 @@ function TasksView({
             type="button"
             className="btn btn-primary btn-sm"
             onClick={onOpenCompose}
-            disabled={overview.projects.length === 0}
+            disabled={projects.length === 0}
           >
             <Plus size={16} />
             发布任务
@@ -197,7 +197,7 @@ function TasksView({
             onChange={setProjectId}
             options={[
               { value: "", label: "全部项目" },
-              ...overview.projects.map((project) => ({ value: project.id, label: project.name }))
+              ...projects.map((project) => ({ value: project.id, label: project.name }))
             ]}
             ariaLabel="按项目筛选"
           />
@@ -370,14 +370,18 @@ function TasksView({
 }
 
 function ComposeTaskForm({
-  overview,
+  projects,
+  candidateTasks,
   busy,
+  submitError,
   selectedProjectId,
   onSelectProject,
   onSubmit
 }: {
-  overview: Overview;
+  projects: Project[];
+  candidateTasks: Task[];
   busy: boolean;
+  submitError: string | null;
   selectedProjectId: string;
   onSelectProject: (id: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -426,7 +430,7 @@ function ComposeTaskForm({
           : "可手动输入";
 
   // 前置任务候选：同项目、未取消（取消的任务无法被验收，选它会导致后置永久阻塞）。
-  const dependencyCandidates = overview.tasks.filter(
+  const dependencyCandidates = candidateTasks.filter(
     (task) => task.project_id === selectedProjectId && task.status !== "cancelled"
   );
 
@@ -437,7 +441,7 @@ function ComposeTaskForm({
         <Select
           value={selectedProjectId}
           onChange={onSelectProject}
-          options={overview.projects.map((project) => ({ value: project.id, label: project.name }))}
+          options={projects.map((project) => ({ value: project.id, label: project.name }))}
           placeholder="选择项目"
           ariaLabel="项目"
         />
@@ -551,7 +555,8 @@ function ComposeTaskForm({
           </select>
         )}
       </div>
-      <button className="btn btn-primary" disabled={busy || overview.projects.length === 0} type="submit">
+      {submitError ? <div className="error-box">{submitError}</div> : null}
+      <button className="btn btn-primary" disabled={busy || projects.length === 0} type="submit">
         <Send size={16} />
         入队
       </button>
@@ -562,7 +567,9 @@ function ComposeTaskForm({
 function TaskDrawer({
   open,
   busy,
-  overview,
+  submitError,
+  projects,
+  candidateTasks,
   selectedProjectId,
   onClose,
   onSelectProject,
@@ -571,7 +578,9 @@ function TaskDrawer({
 }: {
   open: boolean;
   busy: boolean;
-  overview: Overview;
+  submitError: string | null;
+  projects: Project[];
+  candidateTasks: Task[];
   selectedProjectId: string;
   onClose: () => void;
   onSelectProject: (id: string) => void;
@@ -583,8 +592,10 @@ function TaskDrawer({
     <Drawer open={open} title={canCreateTask ? "发布任务" : ""} onClose={onClose}>
       {canCreateTask ? (
         <ComposeTaskForm
-          overview={overview}
+          projects={projects}
+          candidateTasks={candidateTasks}
           busy={busy}
+          submitError={submitError}
           selectedProjectId={selectedProjectId}
           onSelectProject={onSelectProject}
           onSubmit={onSubmitTask}
