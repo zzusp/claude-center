@@ -14,7 +14,7 @@ import type {
 } from "@claude-center/db";
 import {
   Activity, ArrowDown, ArrowUp, Boxes, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert,
-  Clock, Cpu, Database, ExternalLink, Eye, FolderGit2, GitBranch, Inbox, LayoutGrid, ListTodo, LogOut,
+  Clock, Cpu, Database, ExternalLink, Eye, FolderGit2, GitBranch, GitPullRequest, Inbox, LayoutGrid, ListTodo, LogOut,
   MessageSquare, Network, Pencil, Plus, Power, RadioTower, RotateCcw, Save, Search, Send, Server,
   ShieldCheck, Tag, Trash2, UserRound, Users, X
 } from "lucide-react";
@@ -22,7 +22,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
-  Empty, KvRow, MergeStatusBadge, StatusBadge, StatusDot,
+  Empty, KvRow, StatusBadge, StatusDot,
   fmtDateTime, fmtTime, metaOf, postJson, type Tone
 } from "./shared";
 import {
@@ -35,6 +35,31 @@ import { TaskEditForm } from "./task-detail";
 
 
 type ListResponse = { tasks: Task[]; total: number; page: number; pageSize: number };
+
+type TaskStatsPayload = {
+  total: number;
+  byStatus: Record<string, number>;
+  today: { finished: number; accepted: number; rejected: number; avgDurationMs: number | null };
+};
+
+// 从 GitHub PR URL 抽 PR 号；非标准格式（含手填）返回 null，UI 退回 ExternalLink。
+function parsePrNumber(url: string | null): number | null {
+  if (!url) return null;
+  const m = url.match(/\/pull\/(\d+)\b/);
+  return m ? Number(m[1]) : null;
+}
+
+// 平均耗时人读：右栏「今日统计」用，单位毫秒 → 自适应秒/分/时。
+function fmtDurationMs(ms: number | null): string {
+  if (ms == null || ms <= 0) return "—";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} 秒`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} 分钟`;
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  return rest === 0 ? `${h} 小时` : `${h}h ${rest}m`;
+}
 
 const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: "", label: "全部状态" },
@@ -50,14 +75,13 @@ const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: "cancelled", label: "已取消" }
 ];
 
-const MERGE_STATUS_FILTERS: { value: string; label: string }[] = [
-  { value: "", label: "全部合并状态" },
-  { value: "unknown", label: "未检查" },
-  { value: "unmerged", label: "未合并" },
-  { value: "merged", label: "已合并" }
-];
-
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
+
+// 右侧栏「状态分布」按钩子顺序排序（与 STATUS_FILTERS 对齐），未出现的状态隐藏。
+const STATUS_ORDER: string[] = [
+  "draft", "scheduled", "pending", "claimed", "running", "waiting",
+  "success", "merged", "accepted", "rejected", "failed", "cancelled"
+];
 
 function TasksView({
   projects,
@@ -71,8 +95,9 @@ function TasksView({
   canCreateTask: boolean;
 }) {
   const [status, setStatus] = useState("");
-  const [mergeStatus, setMergeStatus] = useState("");
   const [projectId, setProjectId] = useState("");
+  // Worker 维度过滤：取已认领任务的 worker_id；不限即空字符串。
+  const [workerId, setWorkerId] = useState("");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   // 列表固定按更新时间排序，方向由「更新」表头切换（默认降序）。
@@ -84,6 +109,8 @@ function TasksView({
   // 列表内编辑/删除：编辑套用详情页同款 TaskEditForm（抽屉），删除走非原生确认弹框。
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  // 右侧栏 worker 下拉与统计：上层共享下拉数据源。
+  const [workers, setWorkers] = useState<Worker[]>([]);
   const { confirm, dialog } = useConfirm();
 
   async function handleDelete(task: Task) {
@@ -117,14 +144,26 @@ function TasksView({
   // 任一筛选条件变化都回到第 1 页
   useEffect(() => {
     setPage(1);
-  }, [status, mergeStatus, projectId, debouncedQ, dir, pageSize]);
+  }, [status, projectId, workerId, debouncedQ, dir, pageSize]);
+
+  // worker 下拉数据：取全集仅用于过滤展示，离线 worker 也保留（历史任务仍要可定位）。
+  usePolling(async (isActive) => {
+    try {
+      const response = await fetch("/api/workers", { cache: "no-store" });
+      if (!response.ok) return;
+      const json = (await response.json()) as { workers: Worker[] };
+      if (isActive()) setWorkers(json.workers);
+    } catch {
+      /* 轮询失败静默 */
+    }
+  }, []);
 
   usePolling(
     async (isActive) => {
       const params = new URLSearchParams();
       if (status) params.set("status", status);
-      if (mergeStatus) params.set("mergeStatus", mergeStatus);
       if (projectId) params.set("projectId", projectId);
+      if (workerId) params.set("workerId", workerId);
       if (debouncedQ) params.set("q", debouncedQ);
       params.set("dir", dir);
       params.set("page", String(page));
@@ -140,7 +179,7 @@ function TasksView({
         if (isActive()) setLoading(false);
       }
     },
-    [status, mergeStatus, projectId, debouncedQ, dir, page, pageSize, refreshKey]
+    [status, projectId, workerId, debouncedQ, dir, page, pageSize, refreshKey]
   );
 
   const totalPages = Math.max(1, Math.ceil(data.total / pageSize));
@@ -149,7 +188,7 @@ function TasksView({
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
 
-  const hasFilter = Boolean(status || mergeStatus || projectId || debouncedQ);
+  const hasFilter = Boolean(status || projectId || workerId || debouncedQ);
 
   return (
     <>
@@ -171,180 +210,212 @@ function TasksView({
         ) : null}
       </div>
 
-      <section className="card">
-        <div className="toolbar">
-          <div className="tb-search">
-            <Search size={15} className="ico" />
-            <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="搜索标题或工作分支" />
-          </div>
-          <Select
-            className="tb-select"
-            value={status}
-            onChange={setStatus}
-            options={STATUS_FILTERS}
-            ariaLabel="按状态筛选"
-          />
-          <Select
-            className="tb-select"
-            value={mergeStatus}
-            onChange={setMergeStatus}
-            options={MERGE_STATUS_FILTERS}
-            ariaLabel="按合并状态筛选"
-          />
-          <Select
-            className="tb-select"
-            value={projectId}
-            onChange={setProjectId}
-            options={[
-              { value: "", label: "全部项目" },
-              ...projects.map((project) => ({ value: project.id, label: project.name }))
-            ]}
-            ariaLabel="按项目筛选"
-          />
-        </div>
-
-        <div className="card-body flush">
-          {data.tasks.length === 0 ? (
-            <Empty
-              icon={<Inbox size={28} />}
-              text={loading ? "加载中…" : hasFilter ? "没有符合条件的任务" : "暂无任务，点击右上角发布第一个任务"}
-            />
-          ) : (
-            <div className="table-wrap">
-              <table className="table table-static">
-                <thead>
-                  <tr>
-                    <th>任务</th>
-                    <th>项目</th>
-                    <th>分支</th>
-                    <th>状态</th>
-                    <th>合并</th>
-                    <th
-                      style={{ cursor: "pointer", userSelect: "none" }}
-                      onClick={() => setDir((prev) => (prev === "desc" ? "asc" : "desc"))}
-                      title="点击切换更新时间排序"
-                    >
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                        更新
-                        {dir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
-                      </span>
-                    </th>
-                    <th className="t-right">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.tasks.map((task) => {
-                    const rowCanEdit = canCreateTask && (task.status === "draft" || task.status === "scheduled");
-                    const rowCanDelete = canCreateTask && task.status !== "claimed" && task.status !== "running";
-                    const rowCanUnpublish = canCreateTask && task.status === "pending";
-                    return (
-                      <tr key={task.id}>
-                        <td>
-                          <span className="t-title">{task.title}</span>
-                        </td>
-                        <td className="t-meta">
-                          <span className="cell-icon">
-                            <FolderGit2 size={13} className="ico" />
-                            {task.project_name ?? task.project_id}
-                          </span>
-                        </td>
-                        <td className="mono">
-                          <span className="cell-icon">
-                            <GitBranch size={13} className="ico" />
-                            {task.work_branch}
-                          </span>
-                        </td>
-                        <td>
-                          <StatusBadge status={task.status} />
-                        </td>
-                        <td><MergeStatusBadge status={task.merge_status} /></td>
-                        <td className="t-num">{fmtDateTime(task.updated_at)}</td>
-                        <td className="t-right">
-                          <div className="row-actions">
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              title="查看"
-                              onClick={() => onOpenTask(task)}
-                            >
-                              <Eye size={14} />
-                            </button>
-                            {rowCanUnpublish ? (
-                              <button
-                                type="button"
-                                className="icon-btn"
-                                title="退回草稿"
-                                onClick={() => void handleUnpublish(task)}
-                              >
-                                <RotateCcw size={14} />
-                              </button>
-                            ) : null}
-                            {rowCanEdit ? (
-                              <button
-                                type="button"
-                                className="icon-btn"
-                                title="编辑"
-                                onClick={() => setEditingTask(task)}
-                              >
-                                <Pencil size={14} />
-                              </button>
-                            ) : null}
-                            {rowCanDelete ? (
-                              <button
-                                type="button"
-                                className="icon-btn danger"
-                                title="删除"
-                                onClick={() => void handleDelete(task)}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        {data.total > 0 ? (
-          <div className="pager">
-            <span className="pager-info">
-              第 {Math.min(page, totalPages)} / {totalPages} 页 · 共 {data.total} 条
-            </span>
-            <div className="pager-controls">
+      <div className="page-grid">
+        <main className="page-grid-main">
+          <section className="card">
+            <div className="toolbar">
+              <div className="tb-search">
+                <Search size={15} className="ico" />
+                <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="搜索标题或工作分支" />
+              </div>
               <Select
-                className="pager-select"
-                value={String(pageSize)}
-                onChange={(value) => setPageSize(Number(value))}
-                options={PAGE_SIZE_OPTIONS.map((size) => ({ value: String(size), label: `每页 ${size} 条` }))}
-                ariaLabel="每页条数"
+                className="tb-select"
+                value={status}
+                onChange={setStatus}
+                options={STATUS_FILTERS}
+                ariaLabel="按状态筛选"
               />
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={page <= 1}
-                onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-              >
-                <ChevronLeft size={16} />
-                上一页
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={page >= totalPages}
-                onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
-              >
-                下一页
-                <ChevronRight size={16} />
-              </button>
+              <Select
+                className="tb-select"
+                value={projectId}
+                onChange={setProjectId}
+                options={[
+                  { value: "", label: "全部项目" },
+                  ...projects.map((project) => ({ value: project.id, label: project.name }))
+                ]}
+                ariaLabel="按项目筛选"
+              />
+              <Select
+                className="tb-select"
+                value={workerId}
+                onChange={setWorkerId}
+                options={[
+                  { value: "", label: "全部 Worker" },
+                  ...workers.map((worker) => ({ value: worker.id, label: worker.name }))
+                ]}
+                ariaLabel="按 Worker 筛选"
+              />
             </div>
-          </div>
-        ) : null}
-      </section>
+
+            <div className="card-body flush">
+              {data.tasks.length === 0 ? (
+                <Empty
+                  icon={<Inbox size={28} />}
+                  text={loading ? "加载中…" : hasFilter ? "没有符合条件的任务" : "暂无任务，点击右上角发布第一个任务"}
+                />
+              ) : (
+                <div className="table-wrap">
+                  <table className="table table-static">
+                    <thead>
+                      <tr>
+                        <th>任务</th>
+                        <th>项目</th>
+                        <th>分支</th>
+                        <th>状态</th>
+                        <th>Worker</th>
+                        <th>PR</th>
+                        <th
+                          style={{ cursor: "pointer", userSelect: "none" }}
+                          onClick={() => setDir((prev) => (prev === "desc" ? "asc" : "desc"))}
+                          title="点击切换更新时间排序"
+                        >
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            更新
+                            {dir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
+                          </span>
+                        </th>
+                        <th className="t-right">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.tasks.map((task) => {
+                        const rowCanEdit = canCreateTask && (task.status === "draft" || task.status === "scheduled");
+                        const rowCanDelete = canCreateTask && task.status !== "claimed" && task.status !== "running";
+                        const rowCanUnpublish = canCreateTask && task.status === "pending";
+                        const prNumber = parsePrNumber(task.pr_url);
+                        return (
+                          <tr key={task.id}>
+                            <td>
+                              <span className="t-title">{task.title}</span>
+                            </td>
+                            <td className="t-meta">
+                              <span className="cell-icon">
+                                <FolderGit2 size={13} className="ico" />
+                                {task.project_name ?? task.project_id}
+                              </span>
+                            </td>
+                            <td className="mono">
+                              <span className="cell-icon">
+                                <GitBranch size={13} className="ico" />
+                                {task.work_branch}
+                              </span>
+                            </td>
+                            <td>
+                              <StatusBadge status={task.status} />
+                            </td>
+                            <td className="t-meta">
+                              {task.worker_name ? (
+                                <span className="cell-icon">
+                                  <Cpu size={13} className="ico" />
+                                  {task.worker_name}
+                                </span>
+                              ) : (
+                                <span className="cell-muted">—</span>
+                              )}
+                            </td>
+                            <td className="t-meta">
+                              {task.pr_url ? (
+                                <a className="cell-icon" href={task.pr_url} target="_blank" rel="noreferrer">
+                                  <GitPullRequest size={13} className="ico" />
+                                  {prNumber != null ? `#${prNumber}` : "PR"}
+                                </a>
+                              ) : (
+                                <span className="cell-muted">—</span>
+                              )}
+                            </td>
+                            <td className="t-num">{fmtDateTime(task.updated_at)}</td>
+                            <td className="t-right">
+                              <div className="row-actions">
+                                <button
+                                  type="button"
+                                  className="icon-btn"
+                                  title="查看"
+                                  onClick={() => onOpenTask(task)}
+                                >
+                                  <Eye size={14} />
+                                </button>
+                                {rowCanUnpublish ? (
+                                  <button
+                                    type="button"
+                                    className="icon-btn"
+                                    title="退回草稿"
+                                    onClick={() => void handleUnpublish(task)}
+                                  >
+                                    <RotateCcw size={14} />
+                                  </button>
+                                ) : null}
+                                {rowCanEdit ? (
+                                  <button
+                                    type="button"
+                                    className="icon-btn"
+                                    title="编辑"
+                                    onClick={() => setEditingTask(task)}
+                                  >
+                                    <Pencil size={14} />
+                                  </button>
+                                ) : null}
+                                {rowCanDelete ? (
+                                  <button
+                                    type="button"
+                                    className="icon-btn danger"
+                                    title="删除"
+                                    onClick={() => void handleDelete(task)}
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                ) : null}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {data.total > 0 ? (
+              <div className="pager">
+                <span className="pager-info">
+                  第 {Math.min(page, totalPages)} / {totalPages} 页 · 共 {data.total} 条
+                </span>
+                <div className="pager-controls">
+                  <Select
+                    className="pager-select"
+                    value={String(pageSize)}
+                    onChange={(value) => setPageSize(Number(value))}
+                    options={PAGE_SIZE_OPTIONS.map((size) => ({ value: String(size), label: `每页 ${size} 条` }))}
+                    ariaLabel="每页条数"
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={page <= 1}
+                    onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+                  >
+                    <ChevronLeft size={16} />
+                    上一页
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={page >= totalPages}
+                    onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+                  >
+                    下一页
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </section>
+        </main>
+
+        <aside className="page-grid-aside">
+          <TasksSidebar />
+        </aside>
+      </div>
 
       <Drawer
         open={editingTask !== null}
@@ -365,6 +436,112 @@ function TasksView({
       </Drawer>
 
       {dialog}
+    </>
+  );
+}
+
+// 任务流右侧栏：任务概览 / 状态分布 / 今日统计。轮询 /api/tasks/stats，failure 时保持上次值。
+function TasksSidebar() {
+  const [stats, setStats] = useState<TaskStatsPayload | null>(null);
+
+  usePolling(async (isActive) => {
+    try {
+      const response = await fetch("/api/tasks/stats", { cache: "no-store" });
+      if (!response.ok) return;
+      const json = (await response.json()) as TaskStatsPayload;
+      if (isActive()) setStats(json);
+    } catch {
+      /* 轮询失败静默 */
+    }
+  }, []);
+
+  const byStatus = stats?.byStatus ?? {};
+  const total = stats?.total ?? 0;
+  const running = (byStatus.running ?? 0) + (byStatus.claimed ?? 0);
+  const successCount = (byStatus.accepted ?? 0) + (byStatus.merged ?? 0) + (byStatus.success ?? 0);
+  const failed = (byStatus.failed ?? 0) + (byStatus.cancelled ?? 0);
+
+  // 状态分布：按 STATUS_ORDER 排序，过滤 0 计数；max 用于横条比例。
+  const distribution = STATUS_ORDER
+    .map((key) => ({ key, n: byStatus[key] ?? 0 }))
+    .filter((row) => row.n > 0);
+  const maxN = distribution.reduce((acc, row) => Math.max(acc, row.n), 0);
+
+  const today = stats?.today ?? { finished: 0, accepted: 0, rejected: 0, avgDurationMs: null };
+  const completionRate = today.finished > 0
+    ? `${Math.round((today.accepted / today.finished) * 1000) / 10}%`
+    : "—";
+
+  return (
+    <>
+      <section className="card sidebar-card">
+        <div className="section-head">
+          <span className="section-ico"><ListTodo size={15} /></span>
+          <h3 className="section-title">任务概览</h3>
+        </div>
+        <div className="section-body">
+          <div className="sb-stat-grid">
+            <div className="sb-stat">
+              <span className="sb-stat-label">总任务</span>
+              <span className="sb-stat-value">{total}</span>
+            </div>
+            <div className="sb-stat">
+              <span className="sb-stat-label">执行中</span>
+              <span className="sb-stat-value" data-tone="running">{running}</span>
+            </div>
+            <div className="sb-stat">
+              <span className="sb-stat-label">已完成</span>
+              <span className="sb-stat-value" data-tone="success">{successCount}</span>
+            </div>
+            <div className="sb-stat">
+              <span className="sb-stat-label">失败/取消</span>
+              <span className="sb-stat-value" data-tone="failed">{failed}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="card sidebar-card">
+        <div className="section-head">
+          <span className="section-ico"><Activity size={15} /></span>
+          <h3 className="section-title">状态分布</h3>
+        </div>
+        <div className="section-body">
+          {distribution.length === 0 ? (
+            <Empty icon={<Activity size={22} />} text="暂无数据" />
+          ) : (
+            <div className="sb-bars">
+              {distribution.map((row) => {
+                const meta = metaOf(row.key);
+                const pct = maxN === 0 ? 0 : Math.max(4, Math.round((row.n / maxN) * 100));
+                return (
+                  <div className="sb-bar-row" key={row.key}>
+                    <span className="sb-bar-label">{meta.label}</span>
+                    <span className="sb-bar-track">
+                      <span className="sb-bar-fill" data-tone={meta.tone} style={{ width: `${pct}%` }} />
+                    </span>
+                    <span className="sb-bar-n">{row.n}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="card sidebar-card">
+        <div className="section-head">
+          <span className="section-ico"><Clock size={15} /></span>
+          <h3 className="section-title">今日统计</h3>
+        </div>
+        <div className="section-body">
+          <div className="kv">
+            <KvRow k="今日完成率" v={completionRate} />
+            <KvRow k="完成任务" v={`${today.accepted} / ${today.finished}`} />
+            <KvRow k="平均耗时" v={fmtDurationMs(today.avgDurationMs)} />
+          </div>
+        </div>
+      </section>
     </>
   );
 }

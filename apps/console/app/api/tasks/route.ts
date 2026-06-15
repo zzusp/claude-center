@@ -39,6 +39,7 @@ export async function GET(request: NextRequest) {
       .filter((value) => MERGE_STATUSES.includes(value));
 
     const projectId = params.get("projectId")?.trim() || null;
+    const workerId = params.get("workerId")?.trim() || null;
     const q = params.get("q")?.trim() || null;
 
     // 排序方向：表头切换 updated_at 升/降序，白名单 asc/desc，默认 desc。
@@ -57,6 +58,7 @@ export async function GET(request: NextRequest) {
       status,
       mergeStatus,
       projectId,
+      workerId,
       projectIds,
       q,
       dir,

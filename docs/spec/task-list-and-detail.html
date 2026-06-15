@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8" />
+    <title>ClaudeCenter UI Spec</title>
+</head>
+<body>
+
+<!-- =========================================
+1. TASK LIST PAGE
+========================================= -->
+
+<section id="tasks-page">
+
+    <!-- Top Bar -->
+    <header class="topbar">
+        <div class="left">
+            <h1>任务流 Tasks</h1>
+        </div>
+
+        <div class="right">
+            <input type="search" placeholder="搜索任务 / ID / 文件 / 分支..." />
+            <button class="btn-primary">+ 新建任务</button>
+        </div>
+    </header>
+
+    <!-- Filter Bar -->
+    <div class="filter-bar">
+
+        <input type="text" placeholder="关键字搜索" />
+
+        <select name="status">
+            <option>全部状态</option>
+            <option>pending</option>
+            <option>queued</option>
+            <option>running</option>
+            <option>success</option>
+            <option>failed</option>
+            <option>cancelled</option>
+        </select>
+
+        <select name="project">
+            <option>全部项目</option>
+        </select>
+
+        <select name="worker">
+            <option>全部 Worker</option>
+        </select>
+
+        <input type="date-range" />
+
+    </div>
+
+    <!-- Main Layout -->
+    <div class="layout">
+
+        <!-- Task Table -->
+        <main class="table-area">
+
+            <table class="task-table">
+
+                <thead>
+                <tr>
+                    <th>任务</th>
+                    <th>项目</th>
+                    <th>分支</th>
+                    <th>文件</th>
+                    <th>状态</th>
+                    <th>Worker</th>
+                    <th>PR</th>
+                    <th>时间</th>
+                    <th>操作</th>
+                </tr>
+                </thead>
+
+                <tbody>
+
+                <tr>
+                    <td>修复登录异常</td>
+                    <td>api-gateway</td>
+                    <td>main → fix/login</td>
+                    <td>auth.ts</td>
+
+                    <td>
+                        <span class="status running">● running</span>
+                    </td>
+
+                    <td>worker-01</td>
+
+                    <td>
+                        <a href="#">#123</a>
+                    </td>
+
+                    <td>14:32:10</td>
+
+                    <td>
+                        <button>查看</button>
+                        <button>编辑</button>
+                        <button>删除</button>
+                    </td>
+                </tr>
+
+                </tbody>
+            </table>
+
+        </main>
+
+        <!-- Right Panel -->
+        <aside class="side-panel">
+
+            <section class="card">
+                <h3>任务概览</h3>
+                <div>总任务：128</div>
+                <div>执行中：7</div>
+                <div>成功：98</div>
+                <div>失败：5</div>
+            </section>
+
+            <section class="card">
+                <h3>状态分布</h3>
+                <div class="chart-placeholder"></div>
+            </section>
+
+            <section class="card">
+                <h3>今日统计</h3>
+                <div>完成率：85.7%</div>
+                <div>平均耗时：18m</div>
+            </section>
+
+        </aside>
+
+    </div>
+</section>
+
+<!-- =========================================
+2. TASK DETAIL PAGE
+========================================= -->
+
+<section id="task-detail">
+
+    <!-- Header -->
+    <header class="detail-header">
+
+        <button class="back">← 返回</button>
+
+        <div class="title">
+            <h2>修复用户登录异常</h2>
+            <span class="status running">● running</span>
+        </div>
+
+        <div class="actions">
+            <button>编辑</button>
+            <button>重试</button>
+            <button>取消任务</button>
+        </div>
+
+    </header>
+
+    <!-- Summary -->
+    <div class="summary-bar">
+
+        <div>Task ID: task_abc123</div>
+        <div>项目: api-gateway</div>
+        <div>分支: main → fix/login</div>
+        <div>Worker: worker-03</div>
+        <div>创建时间: 14:32:10</div>
+
+    </div>
+
+    <!-- Tabs -->
+    <nav class="tabs">
+
+        <button>概览</button>
+        <button>时间线</button>
+        <button>对话</button>
+        <button>Claude Code 执行</button>
+        <button>日志</button>
+
+    </nav>
+
+    <!-- TAB CONTENT -->
+    <div class="tab-content">
+
+        <!-- Overview -->
+        <section class="panel">
+
+            <h3>任务描述</h3>
+            <p>修复用户登录后跳转异常问题，涉及 auth flow 修改。</p>
+
+            <h3>文件</h3>
+            <ul>
+                <li>auth.ts</li>
+                <li>login.tsx</li>
+            </ul>
+
+            <h3>PR</h3>
+            <a href="#">#123</a>
+
+        </section>
+
+        <!-- Timeline -->
+        <section class="panel">
+
+            <h3>执行时间线</h3>
+
+            <ul class="timeline">
+
+                <li>✔ task created - 14:32:10</li>
+                <li>✔ queued - 14:32:12</li>
+                <li>✔ running - 14:33:00</li>
+                <li>⚠ error detected - 14:35:20</li>
+
+            </ul>
+
+        </section>
+
+        <!-- Chat -->
+        <section class="panel chat">
+
+            <h3>对话</h3>
+
+            <div class="message user">请优先修复 login redirect</div>
+            <div class="message assistant">已开始分析 auth flow</div>
+
+            <input placeholder="输入指令..." />
+
+        </section>
+
+        <!-- Claude Code Execution -->
+        <section class="panel">
+
+            <h3>Claude Code 执行会话</h3>
+
+            <pre class="terminal">
+> analyzing project...
+> reading auth.ts
+> detecting redirect issue...
+> patch applied
+      </pre>
+
+        </section>
+
+        <!-- Logs -->
+        <section class="panel">
+
+            <h3>日志</h3>
+
+            <pre class="logs">
+[INFO] Task started
+[INFO] Worker assigned
+[WARN] redirect undefined
+[ERROR] login flow broken
+      </pre>
+
+        </section>
+
+    </div>
+
+</section>
+
+</body>
+</html>
