@@ -201,22 +201,23 @@ export async function updateTask(
   return result.rows[0] ?? null;
 }
 
-// 删除任务：仅限未启动或已终结的安全态（draft / scheduled / failed / cancelled）。
-// 返回 false 表示任务不存在或处于执行中不可删除。
+// 删除任务：仅「已认领 / 执行中」（claimed / running）在途态禁止删除，其余状态均可删除。
+// 返回 false 表示任务不存在或正处于在途态不可删除。
 export async function deleteTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<boolean> {
   const result = await client.query(
-    `DELETE FROM tasks WHERE id = $1 AND status IN ('draft', 'scheduled', 'failed', 'cancelled')`,
+    `DELETE FROM tasks WHERE id = $1 AND status NOT IN ('claimed', 'running')`,
     [taskId]
   );
   return (result.rowCount ?? 0) > 0;
 }
 
-// 重新激活失败/已取消的任务：failed / cancelled → pending，清空执行现场（时间戳/错误/PR 等），
-// 让 Worker 重新认领执行。返回 null 表示任务不存在或状态不满足。
+// 重新激活失败/已取消的任务：failed / cancelled → draft（草稿），清空执行现场（时间戳/错误/PR 等）
+// 与定时设置，退回草稿后由用户确认/编辑再手动发布。返回 null 表示任务不存在或状态不满足。
 export async function reactivateTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
   const result = await client.query<Task>(
     `UPDATE tasks
-        SET status = 'pending',
+        SET status = 'draft',
+            scheduled_at = null,
             claimed_by = null,
             claimed_at = null,
             started_at = null,

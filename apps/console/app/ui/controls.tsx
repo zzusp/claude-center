@@ -6,7 +6,7 @@ import {
   MessageSquare, Network, Pencil, Plus, Power, RadioTower, RotateCcw, Save, Search, Send, Server,
   ShieldCheck, Tag, Trash2, UserRound, Users, X
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 // 通用右侧抽屉外壳：backdrop + 滑入面板 + 头部标题/关闭 + 滚动内容区，Esc 关闭。
@@ -170,4 +170,94 @@ function Select({
   );
 }
 
-export { Drawer, Select };
+/* ============================ ConfirmDialog ============================
+   居中确认弹框：替代浏览器原生 window.confirm（样式不可控、丑）。受控展示，
+   配 useConfirm() 可在异步流程里以 `await confirm({...})` 形式无缝替换 confirm()。
+   Esc 取消；点 backdrop 取消；destructive 操作用 danger 让确认键变红。 */
+
+type ConfirmOptions = {
+  title: string;
+  message: ReactNode;
+  confirmText?: string;
+  cancelText?: string;
+  danger?: boolean;
+};
+
+function ConfirmDialog({
+  open,
+  title,
+  message,
+  confirmText = "确认",
+  cancelText = "取消",
+  danger = false,
+  onConfirm,
+  onCancel
+}: ConfirmOptions & { open: boolean; onConfirm: () => void; onCancel: () => void }) {
+  // Esc 关闭（不绑 Enter，避免误触发破坏性确认）
+  useEffect(() => {
+    if (!open) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onCancel();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onCancel]);
+
+  if (!open) return null;
+  return (
+    <div className="modal-backdrop open" onClick={onCancel}>
+      <div className="modal" role="alertdialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-head">
+          <span className={`modal-icon${danger ? " danger" : ""}`}>
+            <CircleAlert size={18} />
+          </span>
+          <h2 className="modal-title">{title}</h2>
+        </div>
+        <div className="modal-body">{message}</div>
+        <div className="modal-actions">
+          <button type="button" className="btn btn-sm" onClick={onCancel}>
+            {cancelText}
+          </button>
+          <button type="button" className={`btn btn-sm ${danger ? "btn-danger" : "btn-primary"}`} onClick={onConfirm}>
+            {confirmText}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Promise 化确认：`const { confirm, dialog } = useConfirm()`，把 `dialog` 渲染进组件，
+// 在 handler 里 `if (!(await confirm({...}))) return;`，与原生 confirm 同形便于替换。
+function useConfirm() {
+  const [state, setState] = useState<(ConfirmOptions & { resolve: (ok: boolean) => void }) | null>(null);
+
+  const confirm = useCallback(
+    (options: ConfirmOptions) => new Promise<boolean>((resolve) => setState({ ...options, resolve })),
+    []
+  );
+
+  function settle(ok: boolean) {
+    setState((cur) => {
+      cur?.resolve(ok);
+      return null;
+    });
+  }
+
+  const dialog = (
+    <ConfirmDialog
+      open={state !== null}
+      title={state?.title ?? ""}
+      message={state?.message ?? null}
+      confirmText={state?.confirmText}
+      cancelText={state?.cancelText}
+      danger={state?.danger}
+      onConfirm={() => settle(true)}
+      onCancel={() => settle(false)}
+    />
+  );
+
+  return { confirm, dialog };
+}
+
+export { Drawer, Select, ConfirmDialog, useConfirm };

@@ -176,9 +176,9 @@ export default function TaskDetailPage({
   const isCancellable = task.status === "claimed" || task.status === "running" || task.status === "waiting";
   // 仅草稿/定时态可编辑（执行前）。
   const canEdit = (task.status === "draft" || task.status === "scheduled") && canCreateTask;
-  // 安全态可删除（未执行或已终结）。
-  const canDelete = (task.status === "draft" || task.status === "scheduled" || task.status === "failed" || task.status === "cancelled") && canCreateTask;
-  // 失败/已取消可重新激活（让 Worker 重跑）。
+  // 仅「已认领 / 执行中」在途态禁止删除，其余状态均可删除。
+  const canDelete = task.status !== "claimed" && task.status !== "running" && canCreateTask;
+  // 失败/已取消可重新激活（退回草稿后重新发布）。
   const canReactivate = (task.status === "failed" || task.status === "cancelled") && canCreateTask;
 
   const lifecycle: { label: string; time: string | null; state: "done" | "active" | "idle" }[] = [
@@ -306,7 +306,7 @@ export default function TaskDetailPage({
           {canReactivate ? (
             <div className="detail-hero-actions">
               <div className="hero-cancel">
-                <span className="hero-cancel-hint">任务已{task.status === "failed" ? "失败" : "取消"}，可重新激活让 Worker 重跑。</span>
+                <span className="hero-cancel-hint">任务已{task.status === "failed" ? "失败" : "取消"}，可重新激活退回草稿，确认/编辑后重新发布。</span>
                 <button type="button" className="btn btn-sm" disabled={reactivating} onClick={() => void reactivate()}>
                   <RefreshCw size={14} />
                   {reactivating ? "激活中…" : "重新激活"}
@@ -348,7 +348,7 @@ export default function TaskDetailPage({
                 </div>
               ) : (
                 <div className="hero-cancel">
-                  <span className="hero-cancel-hint">可永久删除此任务（草稿/失败/已取消状态）。</span>
+                  <span className="hero-cancel-hint">可永久删除此任务（仅已认领/执行中不可删）。</span>
                   <button type="button" className="btn btn-sm btn-danger" onClick={() => setDeleting(true)}>
                     <Trash2 size={14} />
                     删除任务
@@ -550,7 +550,7 @@ function TaskReviewActions({ task, onReviewed }: { task: Task; onReviewed: () =>
   );
 }
 
-function TaskEditForm({
+export function TaskEditForm({
   task,
   onSaved,
   onCancel

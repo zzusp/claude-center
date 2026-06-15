@@ -7,6 +7,7 @@ import { Empty, postJson } from "./shared";
 import { TranscriptView, parseTranscript } from "./transcript";
 import { usePolling } from "../lib/use-polling";
 import type { Overview } from "./dashboard-shared";
+import { useConfirm } from "./controls";
 
 // 实时直连对话视图：左侧会话列表 + 新建（项目/分支/worker/模型），右侧消息线（SSE 流式打字机）+ 输入框。
 // 独立于任务流，独立数据通道。详见 docs/spec/worker-direct-chat.md
@@ -15,6 +16,7 @@ export function ChatView({ overview, canCommand }: { overview: Overview; canComm
   const [activeId, setActiveId] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
   const [error, setError] = useState("");
+  const { confirm, dialog } = useConfirm();
 
   async function loadList(): Promise<void> {
     try {
@@ -36,13 +38,13 @@ export function ChatView({ overview, canCommand }: { overview: Overview; canComm
   }, []);
 
   async function delConv(c: Conversation): Promise<void> {
-    if (
-      !window.confirm(
-        `确认删除对话「${c.title || "未命名对话"}」？该对话的所有消息与会话记录将一并删除，且不可恢复。`
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: "删除对话",
+      message: `确认删除对话「${c.title || "未命名对话"}」？该对话的所有消息与会话记录将一并删除，且不可恢复。`,
+      confirmText: "删除对话",
+      danger: true
+    });
+    if (!ok) return;
     try {
       const r = await fetch(`/api/conversations/${c.id}`, { method: "DELETE" });
       if (!r.ok) {
@@ -125,6 +127,7 @@ export function ChatView({ overview, canCommand }: { overview: Overview; canComm
         />
       ) : null}
       {error ? <div className="chat-error chat-error-float">{error}</div> : null}
+      {dialog}
     </div>
   );
 }

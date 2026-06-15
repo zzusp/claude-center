@@ -42,7 +42,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 }
 
 // 任务状态切换与编辑：
-// publish（草稿 → 待处理）、cancel（在途取消）、update（编辑草稿字段）、reactivate（失败/取消 → 待处理）。
+// publish（草稿 → 待处理）、cancel（在途取消）、update（编辑草稿字段）、reactivate（失败/取消 → 草稿）。
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requirePermission("task.create");
   if (gate instanceof NextResponse) {
@@ -123,7 +123,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   }
 }
 
-// 删除任务：仅限 draft / scheduled / failed / cancelled 态可删除。
+// 删除任务：仅「已认领 / 执行中」在途态禁止删除，其余状态均可删除。
 export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requirePermission("task.create");
   if (gate instanceof NextResponse) {
@@ -140,7 +140,7 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
     }
     const deleted = await deleteTask(getPool(), id);
     if (!deleted) {
-      return NextResponse.json({ error: "任务不存在或执行中不可删除" }, { status: 409 });
+      return NextResponse.json({ error: "任务不存在，或已认领/执行中不可删除" }, { status: 409 });
     }
     return NextResponse.json({ deleted: true });
   } catch (error) {
