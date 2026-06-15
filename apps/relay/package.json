@@ -5,6 +5,7 @@
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
+    "predev": "npm -w @claude-center/relay-client run build",
     "prebuild": "npm -w @claude-center/relay-client run build",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
