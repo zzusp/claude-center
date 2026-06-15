@@ -30,7 +30,8 @@ import {
   type CurrentUser, type Health, type Overview, type ViewKey
 } from "./dashboard-shared";
 import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
-import { Drawer, Select } from "./controls";
+import { Drawer, Select, useConfirm } from "./controls";
+import { TaskEditForm } from "./task-detail";
 
 
 type ListResponse = { tasks: Task[]; total: number; page: number; pageSize: number };
@@ -80,6 +81,22 @@ function TasksView({
   const [page, setPage] = useState(1);
   const [data, setData] = useState<ListResponse>({ tasks: [], total: 0, page: 1, pageSize: 20 });
   const [loading, setLoading] = useState(true);
+  // 列表内编辑/删除：编辑套用详情页同款 TaskEditForm（抽屉），删除走非原生确认弹框。
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const { confirm, dialog } = useConfirm();
+
+  async function handleDelete(task: Task) {
+    const ok = await confirm({
+      title: "删除任务",
+      message: `确认删除任务「${task.title}」？此操作不可撤销。`,
+      confirmText: "删除任务",
+      danger: true
+    });
+    if (!ok) return;
+    const response = await fetch(`/api/tasks/${task.id}`, { method: "DELETE" });
+    if (response.ok) setRefreshKey((prev) => prev + 1);
+  }
 
   // 关键词 debounce，避免每敲一个字符就发一次请求
   useEffect(() => {
@@ -113,7 +130,7 @@ function TasksView({
         if (isActive()) setLoading(false);
       }
     },
-    [status, mergeStatus, projectId, debouncedQ, dir, page, pageSize]
+    [status, mergeStatus, projectId, debouncedQ, dir, page, pageSize, refreshKey]
   );
 
   const totalPages = Math.max(1, Math.ceil(data.total / pageSize));
@@ -203,23 +220,55 @@ function TasksView({
                         {dir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
                       </span>
                     </th>
+                    {canCreateTask ? <th className="t-right">操作</th> : null}
                   </tr>
                 </thead>
                 <tbody>
-                  {data.tasks.map((task) => (
-                    <tr key={task.id} onClick={() => onOpenTask(task)}>
-                      <td>
-                        <StatusBadge status={task.status} />
-                      </td>
-                      <td>
-                        <span className="t-title">{task.title}</span>
-                      </td>
-                      <td className="t-meta">{task.project_name ?? task.project_id}</td>
-                      <td className="mono">{task.work_branch}</td>
-                      <td><MergeStatusBadge status={task.merge_status} /></td>
-                      <td className="t-right t-num">{fmtDateTime(task.updated_at)}</td>
-                    </tr>
-                  ))}
+                  {data.tasks.map((task) => {
+                    const rowCanEdit = task.status === "draft" || task.status === "scheduled";
+                    const rowCanDelete = task.status !== "claimed" && task.status !== "running";
+                    return (
+                      <tr key={task.id} onClick={() => onOpenTask(task)}>
+                        <td>
+                          <StatusBadge status={task.status} />
+                        </td>
+                        <td>
+                          <span className="t-title">{task.title}</span>
+                        </td>
+                        <td className="t-meta">{task.project_name ?? task.project_id}</td>
+                        <td className="mono">{task.work_branch}</td>
+                        <td><MergeStatusBadge status={task.merge_status} /></td>
+                        <td className="t-right t-num">{fmtDateTime(task.updated_at)}</td>
+                        {canCreateTask ? (
+                          <td className="t-right">
+                            <div className="row-actions" onClick={(event) => event.stopPropagation()}>
+                              {rowCanEdit ? (
+                                <button
+                                  type="button"
+                                  className="icon-btn"
+                                  title="编辑"
+                                  onClick={() => setEditingTask(task)}
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                              ) : null}
+                              {rowCanDelete ? (
+                                <button
+                                  type="button"
+                                  className="icon-btn danger"
+                                  title="删除"
+                                  onClick={() => void handleDelete(task)}
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              ) : null}
+                              {!rowCanEdit && !rowCanDelete ? <span className="t-meta">—</span> : null}
+                            </div>
+                          </td>
+                        ) : null}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -261,6 +310,26 @@ function TasksView({
           </div>
         ) : null}
       </section>
+
+      <Drawer
+        open={editingTask !== null}
+        title={editingTask ? `编辑 ${editingTask.title}` : ""}
+        onClose={() => setEditingTask(null)}
+      >
+        {editingTask ? (
+          <TaskEditForm
+            key={editingTask.id}
+            task={editingTask}
+            onSaved={() => {
+              setEditingTask(null);
+              setRefreshKey((prev) => prev + 1);
+            }}
+            onCancel={() => setEditingTask(null)}
+          />
+        ) : null}
+      </Drawer>
+
+      {dialog}
     </>
   );
 }

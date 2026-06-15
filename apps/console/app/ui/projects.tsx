@@ -5,7 +5,7 @@ import { FolderGit2, GitBranch, Pencil, Plus, Save, Trash2 } from "lucide-react"
 import { FormEvent, useState } from "react";
 import { Empty, fmtTime } from "./shared";
 import { type Overview } from "./dashboard-shared";
-import { Drawer } from "./controls";
+import { Drawer, useConfirm } from "./controls";
 
 
 function ProjectsView({
@@ -22,9 +22,16 @@ function ProjectsView({
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { confirm, dialog } = useConfirm();
 
   async function handleDelete(project: Project) {
-    if (!window.confirm(`确认删除项目「${project.name}」？其下所有任务记录将一并级联删除，且不可恢复。`)) return;
+    const ok = await confirm({
+      title: "删除项目",
+      message: `确认删除项目「${project.name}」？其下所有任务记录将一并级联删除，且不可恢复。`,
+      confirmText: "删除项目",
+      danger: true
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       const response = await fetch(`/api/projects/${project.id}`, { method: "DELETE" });
@@ -181,6 +188,8 @@ function ProjectsView({
           />
         ) : null}
       </Drawer>
+
+      {dialog}
     </>
   );
 }

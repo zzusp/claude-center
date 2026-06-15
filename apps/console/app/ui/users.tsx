@@ -30,7 +30,7 @@ import {
   type CurrentUser, type Health, type Overview, type ViewKey
 } from "./dashboard-shared";
 import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
-import { Drawer, Select } from "./controls";
+import { Drawer, Select, useConfirm } from "./controls";
 
 
 type EditableUser = UserWithProjects;
@@ -41,6 +41,7 @@ function UsersView({ overview, currentUser }: { overview: Overview; currentUser:
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { confirm, dialog } = useConfirm();
 
   async function loadUsers() {
     try {
@@ -67,7 +68,13 @@ function UsersView({ overview, currentUser }: { overview: Overview; currentUser:
   }, [overview.projects]);
 
   async function handleDelete(user: EditableUser) {
-    if (!window.confirm(`确认删除用户「${user.username}」？`)) return;
+    const ok = await confirm({
+      title: "删除用户",
+      message: `确认删除用户「${user.username}」？`,
+      confirmText: "删除用户",
+      danger: true
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       const response = await fetch(`/api/users/${user.id}`, { method: "DELETE" });
@@ -252,6 +259,8 @@ function UsersView({ overview, currentUser }: { overview: Overview; currentUser:
           />
         ) : null}
       </Drawer>
+
+      {dialog}
     </>
   );
 }
