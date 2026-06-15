@@ -14,7 +14,7 @@ import type {
 } from "@claude-center/db";
 import {
   Activity, ArrowDown, ArrowUp, Boxes, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert,
-  Clock, Cpu, Database, ExternalLink, FolderGit2, GitBranch, Inbox, LayoutGrid, ListTodo, LogOut,
+  Clock, Cpu, Database, ExternalLink, Eye, FolderGit2, GitBranch, Inbox, LayoutGrid, ListTodo, LogOut,
   MessageSquare, Network, Pencil, Plus, Power, RadioTower, RotateCcw, Save, Search, Send, Server,
   ShieldCheck, Tag, Trash2, UserRound, Users, X
 } from "lucide-react";
@@ -98,6 +98,16 @@ function TasksView({
     if (response.ok) setRefreshKey((prev) => prev + 1);
   }
 
+  // 待处理任务退回草稿：撤回尚未被认领的任务（pending → draft），便于重新编辑后再发布。
+  async function handleUnpublish(task: Task) {
+    const response = await fetch(`/api/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "unpublish" })
+    });
+    if (response.ok) setRefreshKey((prev) => prev + 1);
+  }
+
   // 关键词 debounce，避免每敲一个字符就发一次请求
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQ(q.trim()), 300);
@@ -146,7 +156,7 @@ function TasksView({
       <div className="section-head">
         <div>
           <h2 className="section-title">任务流</h2>
-          <span className="section-sub">{data.total} 个任务 · 点击行查看详情</span>
+          <span className="section-sub">{data.total} 个任务 · 点操作列「查看」进入详情</span>
         </div>
         {canCreateTask ? (
           <button
@@ -201,16 +211,15 @@ function TasksView({
             />
           ) : (
             <div className="table-wrap">
-              <table className="table">
+              <table className="table table-static">
                 <thead>
                   <tr>
-                    <th>状态</th>
                     <th>任务</th>
                     <th>项目</th>
                     <th>分支</th>
+                    <th>状态</th>
                     <th>合并</th>
                     <th
-                      className="t-right"
                       style={{ cursor: "pointer", userSelect: "none" }}
                       onClick={() => setDir((prev) => (prev === "desc" ? "asc" : "desc"))}
                       title="点击切换更新时间排序"
@@ -220,52 +229,78 @@ function TasksView({
                         {dir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
                       </span>
                     </th>
-                    {canCreateTask ? <th className="t-right">操作</th> : null}
+                    <th className="t-right">操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.tasks.map((task) => {
-                    const rowCanEdit = task.status === "draft" || task.status === "scheduled";
-                    const rowCanDelete = task.status !== "claimed" && task.status !== "running";
+                    const rowCanEdit = canCreateTask && (task.status === "draft" || task.status === "scheduled");
+                    const rowCanDelete = canCreateTask && task.status !== "claimed" && task.status !== "running";
+                    const rowCanUnpublish = canCreateTask && task.status === "pending";
                     return (
-                      <tr key={task.id} onClick={() => onOpenTask(task)}>
-                        <td>
-                          <StatusBadge status={task.status} />
-                        </td>
+                      <tr key={task.id}>
                         <td>
                           <span className="t-title">{task.title}</span>
                         </td>
-                        <td className="t-meta">{task.project_name ?? task.project_id}</td>
-                        <td className="mono">{task.work_branch}</td>
+                        <td className="t-meta">
+                          <span className="cell-icon">
+                            <FolderGit2 size={13} className="ico" />
+                            {task.project_name ?? task.project_id}
+                          </span>
+                        </td>
+                        <td className="mono">
+                          <span className="cell-icon">
+                            <GitBranch size={13} className="ico" />
+                            {task.work_branch}
+                          </span>
+                        </td>
+                        <td>
+                          <StatusBadge status={task.status} />
+                        </td>
                         <td><MergeStatusBadge status={task.merge_status} /></td>
-                        <td className="t-right t-num">{fmtDateTime(task.updated_at)}</td>
-                        {canCreateTask ? (
-                          <td className="t-right">
-                            <div className="row-actions" onClick={(event) => event.stopPropagation()}>
-                              {rowCanEdit ? (
-                                <button
-                                  type="button"
-                                  className="icon-btn"
-                                  title="编辑"
-                                  onClick={() => setEditingTask(task)}
-                                >
-                                  <Pencil size={14} />
-                                </button>
-                              ) : null}
-                              {rowCanDelete ? (
-                                <button
-                                  type="button"
-                                  className="icon-btn danger"
-                                  title="删除"
-                                  onClick={() => void handleDelete(task)}
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              ) : null}
-                              {!rowCanEdit && !rowCanDelete ? <span className="t-meta">—</span> : null}
-                            </div>
-                          </td>
-                        ) : null}
+                        <td className="t-num">{fmtDateTime(task.updated_at)}</td>
+                        <td className="t-right">
+                          <div className="row-actions">
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              title="查看"
+                              onClick={() => onOpenTask(task)}
+                            >
+                              <Eye size={14} />
+                            </button>
+                            {rowCanUnpublish ? (
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                title="退回草稿"
+                                onClick={() => void handleUnpublish(task)}
+                              >
+                                <RotateCcw size={14} />
+                              </button>
+                            ) : null}
+                            {rowCanEdit ? (
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                title="编辑"
+                                onClick={() => setEditingTask(task)}
+                              >
+                                <Pencil size={14} />
+                              </button>
+                            ) : null}
+                            {rowCanDelete ? (
+                              <button
+                                type="button"
+                                className="icon-btn danger"
+                                title="删除"
+                                onClick={() => void handleDelete(task)}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            ) : null}
+                          </div>
+                        </td>
                       </tr>
                     );
                   })}
