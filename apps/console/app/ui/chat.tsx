@@ -9,7 +9,17 @@ import { ChatThread, NewConversationPanel } from "./chat-thread";
 
 // 实时直连对话视图：左侧会话列表 + 新建（项目/分支/worker/模型），右侧消息线（SSE 流式打字机）+ 输入框。
 // 独立于任务流，独立数据通道。详见 docs/spec/worker-direct-chat.md
-export function ChatView({ projects, workers, canCommand }: { projects: Project[]; workers: Worker[]; canCommand: boolean }) {
+export function ChatView({
+  projects,
+  workers,
+  canCommand,
+  onRequestRefresh
+}: {
+  projects: Project[];
+  workers: Worker[];
+  canCommand: boolean;
+  onRequestRefresh: () => void;
+}) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
@@ -65,7 +75,14 @@ export function ChatView({ projects, workers, canCommand }: { projects: Project[
         <div className="chat-list-head">
           <span>会话</span>
           {canCommand ? (
-            <button className="btn btn-sm btn-primary" type="button" onClick={() => setComposing(true)}>
+            <button
+              className="btn btn-sm btn-primary"
+              type="button"
+              onClick={() => {
+                onRequestRefresh();
+                setComposing(true);
+              }}
+            >
               <Plus size={14} /> 新建
             </button>
           ) : null}

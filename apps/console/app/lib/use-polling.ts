@@ -17,11 +17,17 @@ const RELAY_COALESCE_MS = 200;
 //
 // 防堆积：① relay 事件 200ms 去抖合并（爆发事件 → 1 次刷新）；② inflight 锁——上次还在飞则
 // 仅记录"待跑一次"，回来后再单跑一次，避免慢响应窗口里多次触发把并发请求堆叠成雪球。
+//
+// options.relay：是否订阅 relay 推送做快线刷新，默认 true。对于慢漂移、与消息流无关的数据
+// （如 worker 套餐 usage 时间窗位移），传 false 仅靠 setInterval 兜底，避免每条消息事件都
+// 顺手刷一遍无关接口。
 export function usePolling(
   effect: (isActive: () => boolean) => void | Promise<void>,
   deps: DependencyList,
-  intervalMs: number = POLL_INTERVAL_MS
+  intervalMs: number = POLL_INTERVAL_MS,
+  options: { relay?: boolean } = {}
 ): void {
+  const relayEnabled = options.relay ?? true;
   useEffect(() => {
     let active = true;
     let inflight = false;
@@ -64,13 +70,16 @@ export function usePolling(
       }, Math.floor(Math.random() * intervalMs));
 
       // 快线：relay 事件密集到达时合并到 200ms 窗口内只跑 1 次。窗内首事件起表，后续吞掉。
-      unregister = registerRelayListener(() => {
-        if (!active || coalesceTimer !== null) return;
-        coalesceTimer = window.setTimeout(() => {
-          coalesceTimer = null;
-          void run();
-        }, RELAY_COALESCE_MS);
-      });
+      // options.relay=false 时跳过订阅——慢漂移数据不需要被消息流事件叫醒。
+      if (relayEnabled) {
+        unregister = registerRelayListener(() => {
+          if (!active || coalesceTimer !== null) return;
+          coalesceTimer = window.setTimeout(() => {
+            coalesceTimer = null;
+            void run();
+          }, RELAY_COALESCE_MS);
+        });
+      }
     }
 
     return () => {

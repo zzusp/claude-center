@@ -50,7 +50,8 @@ export function ChatThread({
   }, [id]);
 
   // 轮询对话详情拿 worker 快照（claude_version / subscription / usage）。
-  // worker 本身不会换、变化是 usage 时间窗位移；3s 节奏与其它面板一致，relay 事件也会触发额外刷新。
+  // worker 本身不会换、变化是 5h/7d 套餐窗位移（分钟级漂移），消息流事件与 usage 无关：
+  // 不订阅 relay，节奏拉到 15s，避免每条消息事件都顺手刷一遍这个无关接口。
   usePolling(
     async (isActive) => {
       try {
@@ -63,7 +64,9 @@ export function ChatThread({
         /* 轮询失败静默 */
       }
     },
-    [id]
+    [id],
+    15_000,
+    { relay: false }
   );
 
   // 轮询对话 session transcript（active 持续；closed 取一次即停）。Worker 周期 3s + 终态把 jsonl 同步到库。
