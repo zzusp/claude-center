@@ -161,6 +161,9 @@ export type Task = {
   scheduled_at: string | null;
   // 取消请求时间戳：Console 对在途任务打此戳；Worker 扫到后杀进程并翻为 cancelled。未请求为 null。
   cancel_requested_at: string | null;
+  // 重试请求时间戳：用户对 failed/cancelled 任务点「重试」时打此戳；Worker 的 claimNextRetryableTask
+  // 据此续接重跑并清空。未请求为 null。
+  retry_requested_at: string | null;
   // 前置任务 id（listRecentTasks 聚合填充；其余查询不返回，故可选）。
   depends_on?: string[];
   // 存在「状态非 accepted 的前置」时为 true，用于 UI 提示阻塞（同上，可选）。

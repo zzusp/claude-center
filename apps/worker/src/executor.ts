@@ -282,6 +282,15 @@ function rejectionPrompt(task: Task, feedback: string): string {
   ].join("\n");
 }
 
+// 续接重试 prompt:failed 任务带上次失败原因(error_message);cancelled 任务无 error_message,
+// 用「此前被中断」措辞。让 Claude 带着「上次为什么没成」在当前分支接着干。
+function retryPrompt(task: Task): string {
+  const head = task.error_message?.trim()
+    ? ["Your previous run failed with this error:", "", task.error_message.trim(), "", "Fix the cause and complete the task on the current branch."]
+    : ["Your previous run was interrupted before completing.", "", "Continue and complete the task on the current branch."];
+  return [...head, "", ...replyDirective(task)].join("\n");
+}
+
 function prBody(task: Task, claudeOutput: string): string {
   return [
     `ClaudeCenter task: ${task.id}`,
@@ -319,6 +328,11 @@ async function handleClaudeTurn(
   }
 
   const question = extractQuestion(turn.result);
+  // 本轮 Claude 结束:细颗粒度时间线节点(逐轮对话富展示在「Claude Code 执行」Tab,这里只记里程碑)。
+  await addTaskEvent(pool, task.id, config.workerId, "claude_turn_finished", question ? "本轮结束·请求确认" : "本轮执行结束", {
+    hitSentinel: Boolean(question),
+    resultPreview: turn.result.slice(0, 500)
+  });
   if (question) {
     // 哨兵命中：先把问题落成 worker 评论（不论是否 auto_reply 都留审计）。
     await addTaskComment(pool, { taskId: task.id, author: "worker", workerId: config.workerId, body: question });
@@ -528,6 +542,10 @@ export async function executeTask(config: WorkerConfig, task: Task, hooks?: Exec
       baseRef: `origin/${task.base_branch}`,
       fresh: true
     });
+    await addTaskEvent(pool, task.id, config.workerId, "worktree_prepared", "工作树就绪", {
+      workBranch: task.work_branch,
+      fresh: true
+    });
 
     const turn = await runTaskClaude(config, task.id, {
       prompt: taskPrompt(task),
@@ -537,12 +555,11 @@ export async function executeTask(config: WorkerConfig, task: Task, hooks?: Exec
     });
     await handleClaudeTurn(config, task, localPath, wtPath, turn);
   } catch (error) {
+    // 失败保留工作树:供「续接重试」精确恢复未提交改动(见 docs/spec/task-event-timeline-retry.md §4.3);
+    // 不重试也不激活的残留树由 GC 在任务离开 failed/cancelled 后回收。
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
       failedAt: new Date().toISOString()
     });
-    if (localPath) {
-      await removeWorktree(localPath, worktreePathFor(localPath, task.id));
-    }
   }
 }
 
@@ -571,6 +588,11 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
     const wtPath = worktreePathFor(localPath, task.id);
     // 复用工作树；若已被清理（如曾 GC）则从 work_branch 重建。
     await ensureWorktree(localPath, wtPath, { workBranch: task.work_branch, fresh: false });
+    await addTaskEvent(pool, task.id, config.workerId, "worktree_prepared", "工作树就绪", {
+      workBranch: task.work_branch,
+      fresh: false
+    });
+    await addTaskEvent(pool, task.id, config.workerId, "resumed", "用户回复，续接执行", {});
     const turn = await runTaskClaude(config, task.id, {
       prompt: resumePrompt(task, reply),
       cwd: wtPath,
@@ -580,12 +602,10 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
     });
     await handleClaudeTurn(config, task, localPath, wtPath, turn);
   } catch (error) {
+    // 失败保留工作树(供续接重试),不删树。
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
       failedAt: new Date().toISOString()
     });
-    if (localPath) {
-      await removeWorktree(localPath, worktreePathFor(localPath, task.id));
-    }
   }
 }
 
@@ -613,6 +633,11 @@ export async function rerunRejectedTask(config: WorkerConfig, task: Task, hooks?
     const wtPath = worktreePathFor(localPath, task.id);
     await runCommand("git", ["-C", localPath, "fetch", "origin"], { timeoutMs: 10 * 60_000 });
     await ensureWorktree(localPath, wtPath, { workBranch: task.work_branch, fresh: false });
+    await addTaskEvent(pool, task.id, config.workerId, "worktree_prepared", "工作树就绪", {
+      workBranch: task.work_branch,
+      fresh: false
+    });
+    await addTaskEvent(pool, task.id, config.workerId, "rerun_started", "打回重跑，续接执行", {});
 
     const turn = await runTaskClaude(config, task.id, {
       prompt: rejectionPrompt(task, feedback),
@@ -623,12 +648,58 @@ export async function rerunRejectedTask(config: WorkerConfig, task: Task, hooks?
     });
     await handleClaudeTurn(config, task, localPath, wtPath, turn);
   } catch (error) {
+    // 失败保留工作树(供续接重试),不删树。
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
       failedAt: new Date().toISOString()
     });
-    if (localPath) {
-      await removeWorktree(localPath, worktreePathFor(localPath, task.id));
+  }
+}
+
+// 失败/取消续接重试：用户对 failed/cancelled 任务点「重试」(claimNextRetryableTask 已翻 running)。
+// 失败/取消时保留了工作树,故默认复用(含未提交改动);仅当工作树确被 GC 清理且无会话可续时退化全新执行。
+// - 有 claude_session_id:resume 同一会话 + retryPrompt(带失败原因/中断点),复用工作树。
+// - 无 session(Claude 还没跑就失败/取消):从 origin/<base> 全新重建 + taskPrompt,等同初次。
+export async function retryFailedTask(config: WorkerConfig, task: Task, hooks?: ExecHooks): Promise<void> {
+  const pool = getPool();
+
+  let localPath: string | null = null;
+  try {
+    ensureClaudeAvailable(hooks);
+    localPath = await getTaskLocalPath(pool, task.id, config.workerId);
+    if (!localPath) {
+      throw new Error(`No local path linked for task ${task.id}`);
     }
+
+    const resume = Boolean(task.claude_session_id);
+    const wtPath = worktreePathFor(localPath, task.id);
+    await runCommand("git", ["-C", localPath, "fetch", "origin"], { timeoutMs: 10 * 60_000 });
+    await ensureWorktree(
+      localPath,
+      wtPath,
+      resume
+        ? { workBranch: task.work_branch, fresh: false }
+        : { workBranch: task.work_branch, baseRef: `origin/${task.base_branch}`, fresh: true }
+    );
+    await addTaskEvent(pool, task.id, config.workerId, "worktree_prepared", "工作树就绪", {
+      workBranch: task.work_branch,
+      fresh: !resume
+    });
+    await addTaskEvent(pool, task.id, config.workerId, "retry_started", resume ? "续接重试（恢复会话）" : "续接重试（全新执行）", {
+      resume
+    });
+
+    const turn = await runTaskClaude(config, task.id, {
+      prompt: resume ? retryPrompt(task) : taskPrompt(task),
+      cwd: wtPath,
+      resumeSessionId: task.claude_session_id ?? undefined,
+      model: task.model,
+      onSpawn: hooks?.onClaudeSpawn
+    });
+    await handleClaudeTurn(config, task, localPath, wtPath, turn);
+  } catch (error) {
+    await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
+      failedAt: new Date().toISOString()
+    });
   }
 }
 

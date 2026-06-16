@@ -1,0 +1,15 @@
+case_id,描述,round-1,备注
+C1,typecheck 五包,PASS,全部 tsc --noEmit 通过
+C2,build 五包(含 next build),PASS,next build 7 页全过
+C3,ephemeral 干净库:22 迁移(含 022)全量应用 + verify:console 401→200 + DROP,PASS,health.db.ok=true scheduler.ok=true
+C4,DB:publish 落 published 事件 + claim 落 claimed 事件,PASS,retry-statemachine.mjs [1]
+C5,DB:failed→requestTaskRetry(置戳+事件,状态仍 failed)→claimNextRetryableTask(翻 running+清戳),PASS,retry-statemachine.mjs [2]
+C6,DB:机器锁定(别的 worker 认领不到本机失败任务),PASS,retry-statemachine.mjs [2]
+C7,DB:reactivate 清空 retry_requested_at + claimed_by + 回 draft,PASS,retry-statemachine.mjs [3]
+C8,DB:cancelled 可 requestTaskRetry + claimNextRetryableTask 续接,PASS,retry-statemachine.mjs [4]
+C9,DB:非 failed/cancelled(draft/running)requestTaskRetry 守卫返回 null,PASS,retry-statemachine.mjs [5]
+C10,Worker 执行埋点(resumed/rerun_started/retry_started/worktree_prepared/claude_turn_finished)端到端落库,N/R,需 live Worker+Claude;typecheck+build 过+逻辑审查
+C11,Worker 失败/取消保留工作树 + retryFailedTask 复用树续接,N/R,需 live Worker;逻辑审查
+C12,前端时间线轮次分组/折叠/失败节点重试/payload 展开/跳执行 Tab,N/R,需浏览器交互;next build 过
+C13,Console 详情续接重试/激活回草稿双按钮 + action=retry 全链,N/R,需浏览器交互;route typecheck 过
+C14,Worker 桌面端 failed/cancelled 重试按钮 + IPC,N/R,需 Electron 运行

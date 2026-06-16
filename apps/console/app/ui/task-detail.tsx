@@ -1,7 +1,7 @@
 "use client";
 
 import type { Task, TaskEvent, TaskPredecessor } from "@claude-center/db";
-import { ChevronLeft, ExternalLink, Pencil, RefreshCw, Send, Trash2, X } from "lucide-react";
+import { ChevronLeft, ExternalLink, Pencil, RefreshCw, RotateCcw, Send, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { StatusBadge, fmtTime } from "./shared";
@@ -37,6 +37,7 @@ export default function TaskDetailPage({
   const [cancelling, setCancelling] = useState(false);
   const [editing, setEditing] = useState(false);
   const [reactivating, setReactivating] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   // Tab 化后顶栏 actions：编辑走 Drawer、删除走 useConfirm，与列表页一致。
   const [activeTab, setActiveTab] = useState<DetailTabKey>("overview");
   const { confirm, dialog } = useConfirm();
@@ -130,6 +131,7 @@ export default function TaskDetailPage({
     }
   }
 
+  // 激活回草稿：清空运行态、退回 draft，由用户重新发布——推倒重来。
   async function reactivate() {
     setReactivating(true);
     try {
@@ -146,6 +148,23 @@ export default function TaskDetailPage({
     }
   }
 
+  // 续接重试：保留工作树 + Claude 会话，带着失败原因/中断点接着干（不回草稿）。Worker 下一轮认领续接。
+  async function retry() {
+    setRetrying(true);
+    try {
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "retry" })
+      });
+      if (response.ok) {
+        await loadTask();
+      }
+    } finally {
+      setRetrying(false);
+    }
+  }
+
   const isBlocked = task.status === "pending" && (task.blocked ?? false);
   const canPublish = (task.status === "draft" || task.status === "scheduled") && canCreateTask;
   const canReview = task.status === "success" && canCreateTask;
@@ -155,8 +174,9 @@ export default function TaskDetailPage({
   const canEdit = (task.status === "draft" || task.status === "scheduled") && canCreateTask;
   // 仅「已认领 / 执行中」在途态禁止删除，其余状态均可删除。
   const canDelete = task.status !== "claimed" && task.status !== "running" && canCreateTask;
-  // 失败/已取消可重新激活（退回草稿后重新发布）。
-  const canReactivate = (task.status === "failed" || task.status === "cancelled") && canCreateTask;
+  // 失败/已取消可续接重试（保留工作树/会话，接着干）或激活回草稿（清空重写）。
+  const canRetry = (task.status === "failed" || task.status === "cancelled") && canCreateTask;
+  const canReactivate = canRetry;
 
   const lifecycle: { label: string; time: string | null; state: "done" | "active" | "idle" }[] = [
     { label: "已创建", time: task.created_at, state: "done" },
@@ -226,10 +246,16 @@ export default function TaskDetailPage({
                 编辑
               </button>
             ) : null}
+            {canRetry ? (
+              <button type="button" className="btn btn-primary btn-sm" disabled={retrying} onClick={() => void retry()}>
+                <RotateCcw size={14} />
+                {retrying ? "重试中…" : "续接重试"}
+              </button>
+            ) : null}
             {canReactivate ? (
               <button type="button" className="btn btn-sm" disabled={reactivating} onClick={() => void reactivate()}>
                 <RefreshCw size={14} />
-                {reactivating ? "重试中…" : "重试"}
+                {reactivating ? "激活中…" : "激活回草稿"}
               </button>
             ) : null}
             {isCancellable && canCreateTask ? (
@@ -308,7 +334,14 @@ export default function TaskDetailPage({
         ) : null}
 
         {activeTab === "timeline" ? (
-          <TimelineTab events={events} lifecycle={lifecycle} />
+          <TimelineTab
+            events={events}
+            lifecycle={lifecycle}
+            task={task}
+            canRetry={canRetry}
+            onRetry={retry}
+            onJumpToExecution={() => setActiveTab("execution")}
+          />
         ) : null}
 
         {activeTab === "chat" ? (
