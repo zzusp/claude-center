@@ -216,6 +216,8 @@ export type Task = {
   depends_on?: string[];
   // 存在「状态非 accepted 的前置」时为 true，用于 UI 提示阻塞（同上，可选）。
   blocked?: boolean;
+  // 附件元数据（getTaskWithDeps 聚合填充；列表查询不返回，故可选）。详见 docs/spec/task-attachments.md。
+  attachments?: AttachmentMeta[];
   created_at: string;
   updated_at: string;
 };
@@ -238,6 +240,8 @@ export type TaskComment = {
   author: TaskCommentAuthor;
   worker_id: string | null;
   body: string;
+  // 附件元数据（listTaskComments 聚合填充）。详见 docs/spec/task-attachments.md。
+  attachments?: AttachmentMeta[];
   created_at: string;
 };
 
@@ -255,6 +259,29 @@ export type DirectCommand = {
   result: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+};
+
+// ===== 附件（任务/评论附件）。详见 docs/spec/task-attachments.md =====
+export type AttachmentKind = "image" | "file";
+
+// 附件元数据视图：UI 与 Worker 都用这个（不含二进制；二进制走 GET /api/attachments/:id 或
+// Worker 端 getAttachmentBlob 直接 SELECT 拉取）。
+export type AttachmentMeta = {
+  id: string;
+  kind: AttachmentKind;
+  mime: string;
+  size_bytes: number;
+  sha256: string;
+  original_name: string;
+  created_at: string;
+};
+
+// 服务端完整行（含归属字段），仅 Console / queries 内部用。
+// 注意：bytea 数据另存 attachment_blobs 表，避免 SELECT * 误拖大对象。
+export type Attachment = AttachmentMeta & {
+  task_id: string | null;
+  task_comment_id: string | null;
+  owner_user_id: string | null;
 };
 
 // ===== 实时直连对话（Worker Direct Chat）：独立于任务流的问答通道。详见 docs/spec/worker-direct-chat.md =====

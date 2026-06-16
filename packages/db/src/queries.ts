@@ -9,6 +9,9 @@ import {
   sqlInList
 } from "./task-state.js";
 import type {
+  Attachment,
+  AttachmentKind,
+  AttachmentMeta,
   Conversation,
   ConversationMessage,
   ConversationMessageRole,
@@ -402,6 +405,7 @@ export async function getTaskWithDeps(
     // 保持 depends_on 原顺序；已删除的前置任务在结果中缺失，由调用方按 depends_on 长度差识别。
     predecessors = ids.map((id) => byId.get(id)).filter((row): row is TaskPredecessor => Boolean(row));
   }
+  task.attachments = await listAttachmentsForTask(client, task.id);
   return { task, predecessors };
 }
 
@@ -1421,7 +1425,19 @@ export async function listTaskComments(
     `SELECT * FROM task_comments WHERE task_id = $1 ORDER BY created_at ASC`,
     [taskId]
   );
-  return result.rows;
+  const comments = result.rows;
+  if (comments.length === 0) {
+    return comments;
+  }
+  // 一次性按 task 维度拉所有 comment 的附件，再按 task_comment_id 分桶——避免 N+1。
+  const byComment = await listAttachmentsByCommentIds(
+    client,
+    comments.map((c) => c.id)
+  );
+  for (const c of comments) {
+    c.attachments = byComment.get(c.id) ?? [];
+  }
+  return comments;
 }
 
 // 取「最后一条 worker 评论之后」的所有 user 评论，按时间拼接为续接回复。
@@ -2293,4 +2309,276 @@ export async function updateTaskRepoPrUrl(
     `UPDATE task_repos SET pr_url = $2, updated_at = now() WHERE id = $1`,
     [taskRepoId, prUrl]
   );
+}
+
+// =============================================================================
+// 附件（任务/评论附件）。详见 docs/spec/task-attachments.md
+//
+// - DB 仅元数据 + storage_path（相对 CLAUDE_CENTER_UPLOAD_DIR）；二进制不入库。
+// - 两阶段：上传时落 owner_user_id（task_id/comment_id 均 NULL）→ 创建 task / comment 时事务里绑定。
+// - listAttachmentsByCommentIds 是 listTaskComments 的 N+1 防御，列表/详情都走它。
+// =============================================================================
+
+// 元数据 SELECT 共用列：不暴露 storage_path / 归属字段给 UI 与 Worker。
+const ATTACHMENT_META_COLS =
+  `id, kind, mime, size_bytes, sha256, original_name, created_at`;
+
+// Attachment 行不暴露 bytea；元数据列固定，避免 SELECT * 习惯性误拖大对象。
+const ATTACHMENT_ROW_COLS =
+  `id, task_id, task_comment_id, owner_user_id, ${ATTACHMENT_META_COLS}`;
+
+export async function createAttachment(
+  client: pg.Pool | pg.PoolClient,
+  input: {
+    ownerUserId: string;
+    kind: AttachmentKind;
+    mime: string;
+    sizeBytes: number;
+    sha256: string;
+    originalName: string;
+    data: Buffer;
+  }
+): Promise<Attachment> {
+  // 元数据 + blob 同事务两步插入；任一失败回滚到原状态。bytea 经 node-postgres 直传 Buffer。
+  const meta = await client.query<Attachment>(
+    `INSERT INTO attachments
+       (owner_user_id, kind, mime, size_bytes, sha256, original_name)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING ${ATTACHMENT_ROW_COLS}`,
+    [
+      input.ownerUserId,
+      input.kind,
+      input.mime,
+      input.sizeBytes,
+      input.sha256,
+      input.originalName
+    ]
+  );
+  const row = meta.rows[0]!;
+  await client.query(`INSERT INTO attachment_blobs (attachment_id, data) VALUES ($1, $2)`, [
+    row.id,
+    input.data
+  ]);
+  return row;
+}
+
+export async function getAttachment(
+  client: pg.Pool | pg.PoolClient,
+  id: string
+): Promise<Attachment | null> {
+  const result = await client.query<Attachment>(
+    `SELECT ${ATTACHMENT_ROW_COLS} FROM attachments WHERE id = $1 LIMIT 1`,
+    [id]
+  );
+  return result.rows[0] ?? null;
+}
+
+// 取元数据 + bytea：Console download 路由与 Worker 直读用。
+// bytea 经 node-postgres 默认作 Buffer 返回。
+export async function getAttachmentBlob(
+  client: pg.Pool | pg.PoolClient,
+  id: string
+): Promise<{ meta: Attachment; data: Buffer } | null> {
+  const result = await client.query<Attachment & { data: Buffer }>(
+    `SELECT ${ATTACHMENT_ROW_COLS}, b.data AS data
+       FROM attachments a JOIN attachment_blobs b ON b.attachment_id = a.id
+      WHERE a.id = $1
+      LIMIT 1`,
+    [id]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  const { data, ...meta } = row;
+  return { meta: meta as Attachment, data };
+}
+
+export async function listAttachmentsForTask(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string
+): Promise<AttachmentMeta[]> {
+  const result = await client.query<AttachmentMeta>(
+    `SELECT ${ATTACHMENT_META_COLS} FROM attachments
+      WHERE task_id = $1
+      ORDER BY created_at ASC`,
+    [taskId]
+  );
+  return result.rows;
+}
+
+export async function listAttachmentsForComment(
+  client: pg.Pool | pg.PoolClient,
+  commentId: string
+): Promise<AttachmentMeta[]> {
+  const result = await client.query<AttachmentMeta>(
+    `SELECT ${ATTACHMENT_META_COLS} FROM attachments
+      WHERE task_comment_id = $1
+      ORDER BY created_at ASC`,
+    [commentId]
+  );
+  return result.rows;
+}
+
+// 一次性按 comment_id 集合拉附件，按 comment_id 分桶——listTaskComments / Worker 详情拉取共用。
+export async function listAttachmentsByCommentIds(
+  client: pg.Pool | pg.PoolClient,
+  commentIds: string[]
+): Promise<Map<string, AttachmentMeta[]>> {
+  const map = new Map<string, AttachmentMeta[]>();
+  if (commentIds.length === 0) {
+    return map;
+  }
+  const result = await client.query<AttachmentMeta & { task_comment_id: string }>(
+    `SELECT ${ATTACHMENT_META_COLS}, task_comment_id FROM attachments
+      WHERE task_comment_id = ANY($1::uuid[])
+      ORDER BY created_at ASC`,
+    [commentIds]
+  );
+  for (const row of result.rows) {
+    const list = map.get(row.task_comment_id);
+    const meta: AttachmentMeta = {
+      id: row.id,
+      kind: row.kind,
+      mime: row.mime,
+      size_bytes: row.size_bytes,
+      sha256: row.sha256,
+      original_name: row.original_name,
+      created_at: row.created_at
+    };
+    if (list) {
+      list.push(meta);
+    } else {
+      map.set(row.task_comment_id, [meta]);
+    }
+  }
+  return map;
+}
+
+// 绑定附件到任务。仅未绑定 + 归属本用户的行才能绑（管理员通过 ownerUserId=null 绕过 owner 检查）。
+// 命中 < ids.length 时抛错（事务回滚）。
+export async function bindAttachmentsToTask(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  attachmentIds: string[],
+  ownerUserId: string | null
+): Promise<void> {
+  if (attachmentIds.length === 0) {
+    return;
+  }
+  const unique = [...new Set(attachmentIds)];
+  const ownerClause = ownerUserId ? `AND owner_user_id = $3` : "";
+  const params: unknown[] = [unique, taskId];
+  if (ownerUserId) {
+    params.push(ownerUserId);
+  }
+  const result = await client.query(
+    `UPDATE attachments
+        SET task_id = $2
+      WHERE id = ANY($1::uuid[])
+        AND task_id IS NULL
+        AND task_comment_id IS NULL
+        ${ownerClause}`,
+    params
+  );
+  if ((result.rowCount ?? 0) !== unique.length) {
+    throw new Error("部分附件不存在、已被绑定或无权使用");
+  }
+}
+
+// 绑定附件到评论：同 bindAttachmentsToTask。
+export async function bindAttachmentsToComment(
+  client: pg.Pool | pg.PoolClient,
+  commentId: string,
+  attachmentIds: string[],
+  ownerUserId: string | null
+): Promise<void> {
+  if (attachmentIds.length === 0) {
+    return;
+  }
+  const unique = [...new Set(attachmentIds)];
+  const ownerClause = ownerUserId ? `AND owner_user_id = $3` : "";
+  const params: unknown[] = [unique, commentId];
+  if (ownerUserId) {
+    params.push(ownerUserId);
+  }
+  const result = await client.query(
+    `UPDATE attachments
+        SET task_comment_id = $2
+      WHERE id = ANY($1::uuid[])
+        AND task_id IS NULL
+        AND task_comment_id IS NULL
+        ${ownerClause}`,
+    params
+  );
+  if ((result.rowCount ?? 0) !== unique.length) {
+    throw new Error("部分附件不存在、已被绑定或无权使用");
+  }
+}
+
+// 删除未绑定附件（撤销刚上传的草稿）。FK CASCADE 保证 attachment_blobs 同步删。
+// ownerUserId=null 表示 admin 强删；其他用户仅能删自己上传且未绑定的行。返回 true=命中。
+export async function deleteUnboundAttachment(
+  client: pg.Pool | pg.PoolClient,
+  id: string,
+  ownerUserId: string | null
+): Promise<boolean> {
+  const ownerClause = ownerUserId ? `AND owner_user_id = $2` : "";
+  const params: unknown[] = [id];
+  if (ownerUserId) {
+    params.push(ownerUserId);
+  }
+  const result = await client.query(
+    `DELETE FROM attachments
+      WHERE id = $1
+        AND task_id IS NULL
+        AND task_comment_id IS NULL
+        ${ownerClause}`,
+    params
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// 批量清理过期未绑定孤儿（worker 定期清理用）。FK CASCADE 同时删 blob。
+export async function deleteOrphanedAttachments(
+  client: pg.Pool | pg.PoolClient,
+  olderThanHours: number,
+  limit = 500
+): Promise<number> {
+  const result = await client.query(
+    `DELETE FROM attachments
+      WHERE id IN (
+        SELECT id FROM attachments
+         WHERE task_id IS NULL
+           AND task_comment_id IS NULL
+           AND created_at < now() - ($1 || ' hours')::interval
+         ORDER BY created_at ASC
+         LIMIT $2
+      )`,
+    [String(olderThanHours), limit]
+  );
+  return result.rowCount ?? 0;
+}
+
+// Worker resume / rerun-rejected 路径用：聚合「最后一条 worker 评论之后」所有 user 评论的附件。
+// 跟 getPendingReply 的文本逻辑配套：那边返回拼接 body，这边返回拼接 attachments。
+export async function listPendingReplyAttachments(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string
+): Promise<AttachmentMeta[]> {
+  const result = await client.query<AttachmentMeta>(
+    `SELECT ${ATTACHMENT_META_COLS}
+       FROM attachments a
+      WHERE a.task_comment_id IN (
+        SELECT id FROM task_comments
+         WHERE task_id = $1
+           AND author = 'user'
+           AND created_at > COALESCE(
+             (SELECT max(created_at) FROM task_comments WHERE task_id = $1 AND author = 'worker'),
+             'epoch'::timestamptz)
+      )
+      ORDER BY a.created_at ASC`,
+    [taskId]
+  );
+  return result.rows;
 }

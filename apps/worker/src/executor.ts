@@ -3,11 +3,14 @@ import {
   addTaskEvent,
   failConversationTurn,
   finalizeConversationTurn,
+  getAttachmentBlob,
   getConversationLocalPath,
   getConversationPrompt,
   getPendingReply,
   getPool,
   getTaskLocalPath,
+  listAttachmentsForTask,
+  listPendingReplyAttachments,
   listProjectRepos,
   listTaskRepos,
   markDirectCommandFailed,
@@ -22,6 +25,7 @@ import {
   setTaskWaiting,
   updateTaskRepoPrUrl,
   updateTaskRepoStatus,
+  type AttachmentMeta,
   type Conversation,
   type ConversationMessage,
   type DirectCommand,
@@ -29,7 +33,8 @@ import {
   type TaskRepo
 } from "@claude-center/db";
 import type { ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { WorkerConfig } from "./config.js";
 import { runCommand, type CommandResult } from "./shell.js";
@@ -74,6 +79,53 @@ function ensureClaudeAvailable(hooks?: ExecHooks): void {
 // Claude 在 headless 模式下没有内建「需要提问」信号，约定这个哨兵：需要用户确认时
 // Claude 在回复末尾输出该串 + 问题后停止，Worker 解析后落为评论并等待回复。
 const NEEDS_INPUT_SENTINEL = "<<CLAUDE_CENTER_NEEDS_INPUT>>";
+
+// 附件子目录：在主仓 worktree 根下创建 `.claude-attachments/`，用相对路径写进 prompt 让 Claude 读。
+// 整目录随 worktree GC 一并销毁；不持久化（详见 docs/spec/task-attachments.md §Worker 流程）。
+const ATTACHMENT_DIR_RELATIVE = ".claude-attachments";
+
+// 文件名规则：`<sha256前8位>-<清洗过的原名>`，便于 sha256 跨轮判存（避免重复落盘）。
+function attachmentFileName(meta: AttachmentMeta): string {
+  const short = meta.sha256.slice(0, 8);
+  const safe = meta.original_name.replace(/[\x00-\x1f\x7f\\/]/g, "_").slice(0, 200);
+  return `${short}-${safe}`;
+}
+
+// 落盘所有附件到 worktree 内 `.claude-attachments/`。已存在同名（同 sha256）跳过 SELECT，省 PG IO。
+// 注意：Worker 直连 PG，不走 Console HTTP——是「DB bytea」抉择的直接体现。
+async function materializeAttachments(
+  wtPath: string,
+  attachments: AttachmentMeta[]
+): Promise<void> {
+  if (!attachments || attachments.length === 0) {
+    return;
+  }
+  const dir = path.join(wtPath, ATTACHMENT_DIR_RELATIVE);
+  mkdirSync(dir, { recursive: true });
+  const pool = getPool();
+  for (const meta of attachments) {
+    const target = path.join(dir, attachmentFileName(meta));
+    if (existsSync(target)) {
+      continue;
+    }
+    const blob = await getAttachmentBlob(pool, meta.id);
+    if (!blob) {
+      // 附件可能已被删（task 级联删除窗口）；跳过且继续，不阻塞主流程。
+      continue;
+    }
+    await writeFile(target, blob.data);
+  }
+}
+
+// 任务原始附件（绑定到 task_id）。
+async function loadTaskAttachments(taskId: string): Promise<AttachmentMeta[]> {
+  return listAttachmentsForTask(getPool(), taskId);
+}
+
+// resume / rerun 路径用：本轮回复涉及的附件（聚合最后一条 worker 评论之后所有 user 评论的附件）。
+async function loadReplyAttachments(taskId: string): Promise<AttachmentMeta[]> {
+  return listPendingReplyAttachments(getPool(), taskId);
+}
 
 // auto_reply 模式（task.auto_reply=true）的兜底常量。主防线是激进版 prompt（哨兵被重新定义为"任务被
 // 判定 blocked"），仍出哨兵时按 worktree 是否有改动分流：零改动→直接 fail；有改动→自动塞一条 user
@@ -260,7 +312,30 @@ function replyDirective(task: Task): string[] {
   return task.auto_reply ? autoReplyDirective(task) : manualReplyDirective();
 }
 
-function taskPrompt(task: Task): string {
+// 附件 prompt 段（spec docs/spec/task-attachments.md §Worker 流程 §prompt 注入）。
+// Claude CLI 支持读本地图片/文件路径；prompt 末尾列出已落盘的相对路径即可。空数组时返回空段。
+function attachmentSection(attachments: AttachmentMeta[]): string[] {
+  if (!attachments || attachments.length === 0) {
+    return [];
+  }
+  const lines = attachments.map((a) => {
+    const fname = attachmentFileName(a);
+    return `- ./${ATTACHMENT_DIR_RELATIVE}/${fname} (${a.mime}, ${fmtAttachSize(a.size_bytes)})`;
+  });
+  return [
+    "",
+    "Attached files (already saved locally in the working tree, read them as needed):",
+    ...lines
+  ];
+}
+
+function fmtAttachSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function taskPrompt(task: Task, attachments: AttachmentMeta[]): string {
   return [
     `ClaudeCenter task: ${task.title}`,
     "",
@@ -268,30 +343,33 @@ function taskPrompt(task: Task): string {
     task.description,
     "",
     "Work directly in the current repository. Implement the requested code changes, keep edits scoped, and run the most relevant local verification command when possible.",
+    ...attachmentSection(attachments),
     "",
     ...replyDirective(task)
   ].join("\n");
 }
 
-function resumePrompt(task: Task, reply: string): string {
+function resumePrompt(task: Task, reply: string, attachments: AttachmentMeta[]): string {
   return [
     "The user replied to your question:",
     "",
     reply,
     "",
     "Continue the ClaudeCenter task using this answer.",
+    ...attachmentSection(attachments),
     "",
     ...replyDirective(task)
   ].join("\n");
 }
 
-function rejectionPrompt(task: Task, feedback: string): string {
+function rejectionPrompt(task: Task, feedback: string, attachments: AttachmentMeta[]): string {
   return [
     "Your previous implementation was reviewed by the user and sent back for revision. Reviewer feedback:",
     "",
     feedback,
     "",
     "Revise the implementation on the current branch to address this feedback. Your changes will update the existing PR.",
+    ...attachmentSection(attachments),
     "",
     ...replyDirective(task)
   ].join("\n");
@@ -299,11 +377,11 @@ function rejectionPrompt(task: Task, feedback: string): string {
 
 // 续接重试 prompt:failed 任务带上次失败原因(error_message);cancelled 任务无 error_message,
 // 用「此前被中断」措辞。让 Claude 带着「上次为什么没成」在当前分支接着干。
-function retryPrompt(task: Task): string {
+function retryPrompt(task: Task, attachments: AttachmentMeta[]): string {
   const head = task.error_message?.trim()
     ? ["Your previous run failed with this error:", "", task.error_message.trim(), "", "Fix the cause and complete the task on the current branch."]
     : ["Your previous run was interrupted before completing.", "", "Continue and complete the task on the current branch."];
-  return [...head, "", ...replyDirective(task)].join("\n");
+  return [...head, ...attachmentSection(attachments), "", ...replyDirective(task)].join("\n");
 }
 
 function prBody(task: Task, claudeOutput: string): string {
@@ -821,8 +899,13 @@ export async function executeTask(config: WorkerConfig, task: Task, hooks?: Exec
     const wtPath = worktreePathFor(localPath, task.id);
     const ctxs = await prepareAllRepoWorktrees(task, localPath, true, config.workerId);
 
+    // 附件落盘（spec docs/spec/task-attachments.md §Worker 流程）：写到 wtPath/.claude-attachments/，
+    // prompt 末尾列相对路径让 Claude 读。
+    const taskAtts = await loadTaskAttachments(task.id);
+    await materializeAttachments(wtPath, taskAtts);
+
     const turn = await runTaskClaude(config, task.id, {
-      prompt: taskPrompt(task),
+      prompt: taskPrompt(task, taskAtts),
       cwd: wtPath,
       model: task.model,
       onSpawn: hooks?.onClaudeSpawn
@@ -862,9 +945,13 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
     const wtPath = worktreePathFor(localPath, task.id);
     // 多仓续接：所有参与仓的 worktree 各自复用（被 GC 清理过则按 work_branch 重建）。
     const ctxs = await prepareAllRepoWorktrees(task, localPath, false, config.workerId);
+    // 落本轮回复的附件（已存在同 sha256 跳过）；任务原始附件可能在初轮已落但 GC 后会丢，所以一并补落。
+    const replyAtts = await loadReplyAttachments(task.id);
+    const taskAtts = await loadTaskAttachments(task.id);
+    await materializeAttachments(wtPath, [...taskAtts, ...replyAtts]);
     await addTaskEvent(pool, task.id, config.workerId, "resumed", "用户回复，续接执行", {});
     const turn = await runTaskClaude(config, task.id, {
-      prompt: resumePrompt(task, reply),
+      prompt: resumePrompt(task, reply, replyAtts),
       cwd: wtPath,
       resumeSessionId: task.claude_session_id,
       model: task.model,
@@ -904,10 +991,14 @@ export async function rerunRejectedTask(config: WorkerConfig, task: Task, hooks?
     // 多仓打回重跑：所有参与仓的 worktree 复用；每仓独立判断 task_repos.pr_url 是否已存
     // 决定 finalize 时是否跳过 gh pr create（见 finalizeTaskMultiRepo）。
     const ctxs = await prepareAllRepoWorktrees(task, localPath, false, config.workerId);
+    // 落本轮反馈附件（user 在打回意见里贴的图）+ 任务原始附件（worktree 可能已 GC）。
+    const replyAtts = await loadReplyAttachments(task.id);
+    const taskAtts = await loadTaskAttachments(task.id);
+    await materializeAttachments(wtPath, [...taskAtts, ...replyAtts]);
     await addTaskEvent(pool, task.id, config.workerId, "rerun_started", "打回重跑，续接执行", {});
 
     const turn = await runTaskClaude(config, task.id, {
-      prompt: rejectionPrompt(task, feedback),
+      prompt: rejectionPrompt(task, feedback, replyAtts),
       cwd: wtPath,
       resumeSessionId: task.claude_session_id,
       model: task.model,
@@ -941,12 +1032,15 @@ export async function retryFailedTask(config: WorkerConfig, task: Task, hooks?: 
     const wtPath = worktreePathFor(localPath, task.id);
     // 多仓重试：有 session 复用所有仓 worktree；无 session 所有仓 fresh:true 重建。
     const ctxs = await prepareAllRepoWorktrees(task, localPath, !resume, config.workerId);
+    // 重试一律重落任务原始附件（无论 resume / fresh）；fresh 时 worktree 全新没附件，resume 时也补落兜底。
+    const taskAtts = await loadTaskAttachments(task.id);
+    await materializeAttachments(wtPath, taskAtts);
     await addTaskEvent(pool, task.id, config.workerId, "retry_started", resume ? "续接重试（恢复会话）" : "续接重试（全新执行）", {
       resume
     });
 
     const turn = await runTaskClaude(config, task.id, {
-      prompt: resume ? retryPrompt(task) : taskPrompt(task),
+      prompt: resume ? retryPrompt(task, taskAtts) : taskPrompt(task, taskAtts),
       cwd: wtPath,
       resumeSessionId: task.claude_session_id ?? undefined,
       model: task.model,
