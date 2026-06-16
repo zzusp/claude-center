@@ -12,6 +12,7 @@ import {
   Network,
   Pencil,
   Power,
+  Send,
   Server,
   Terminal,
   Trash2,
@@ -22,6 +23,7 @@ import { ReactNode, useEffect, useState } from "react";
 import { KvRow, StatusBadge, StatusDot, fmtDateTime, postJson } from "./shared";
 import { fmtAgo } from "./dashboard-shared";
 import { isPlanSubscription, subscriptionLabel, UsageBlock, WorkingStateBadge } from "./worker-shared";
+import { WorkerCommandPanel } from "./worker-command";
 import { usePolling } from "../lib/use-polling";
 
 function Section({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
@@ -375,6 +377,16 @@ export default function WorkerDetailPage({
             ) : null}
           </div>
         </Section>
+
+        {canCommand ? (
+          <Section icon={<Send size={15} />} title="下发命令">
+            <WorkerCommandPanel
+              workerId={workerId}
+              terminalCommand={worker.terminal_command}
+              preCommand={worker.claude_pre_command}
+            />
+          </Section>
+        ) : null}
 
         {canCommand ? (
           <Section icon={<Trash2 size={15} />} title="危险操作">

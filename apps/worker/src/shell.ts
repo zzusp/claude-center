@@ -134,19 +134,3 @@ export function formatCommandFailure(result: CommandResult): string {
   }
   return lines.join("\n");
 }
-
-export function runPowerShell(
-  script: string,
-  options: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv; onSpawn?: (child: ChildProcess) => void } = {}
-): Promise<CommandResult> {
-  // Spawn PowerShell directly (shell: false) so the script reaches it as a
-  // single argv element — going through cmd.exe (shell: true) would re-parse
-  // embedded quotes / `;` / `&` and corrupt it.
-  return runCommand("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
-    cwd: options.cwd,
-    timeoutMs: options.timeoutMs ?? 20 * 60_000,
-    env: options.env,
-    shell: false,
-    onSpawn: options.onSpawn
-  });
-}

@@ -27,9 +27,10 @@ import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { WorkerConfig } from "./config.js";
-import { runCommand, runPowerShell, type CommandResult } from "./shell.js";
+import { runCommand, type CommandResult } from "./shell.js";
 import {
   buildClaudeScript,
+  buildTerminalScript,
   CLAUDE_ENV,
   defaultTerminalCommand,
   isWsl,
@@ -40,6 +41,8 @@ import { conversationWorktreePathFor, ensureWorktree, removeWorktree, worktreePa
 import { startConversationSessionSync, startTaskSessionSync } from "./session.js";
 
 const CLAUDE_TIMEOUT_MS = 60 * 60_000;
+// 定向 shell 指令的执行上限（沿用原 runPowerShell 的 20 分钟）。
+const SHELL_COMMAND_TIMEOUT_MS = 20 * 60_000;
 
 // runner 注入的执行钩子:onClaudeSpawn 暴露 Claude 子进程供取消时杀进程树;
 // claudeAvailable 来自启动能力自检,false 时任务在跑 Claude 前就以清晰错误失败。
@@ -787,6 +790,21 @@ function runClaude(config: WorkerConfig, prompt: string, cwd?: string): Promise<
   return spawnClaude(config, { prompt, cwd, full: false });
 }
 
+// 定向 shell 指令：在 worker 配置的运行终端里执行（与 claude 同款终端形态）。前置命令先行，故其设置的
+// 环境（代理 / VPN / 登录）被命令继承；命令文本按所选终端家族语法书写、内联进脚本（与前置命令同款约定）。
+// 终端可执行文件 shell:false spawn（含空格全路径安全，脚本作单参不被二次解析）。空配置回退平台默认终端。
+function runShellInTerminal(config: WorkerConfig, command: string, cwd?: string): Promise<CommandResult> {
+  const terminalCommand = config.terminalCommand || defaultTerminalCommand();
+  const family = shellFamily(terminalCommand);
+  const script = buildTerminalScript(family, config.claudePreCommand, command);
+  const launch = terminalLaunch(terminalCommand, script);
+  return runCommand(launch.cmd, launch.args, {
+    cwd,
+    timeoutMs: SHELL_COMMAND_TIMEOUT_MS,
+    shell: false
+  });
+}
+
 export async function executeDirectCommand(config: WorkerConfig, command: DirectCommand): Promise<void> {
   const pool = getPool();
   await markDirectCommandRunning(pool, command.id, config.workerId);
@@ -795,7 +813,7 @@ export async function executeDirectCommand(config: WorkerConfig, command: Direct
     const text = payloadText(command);
     const cwd = payloadCwd(command);
     const result =
-      command.command === "shell" ? await runPowerShell(text, { cwd }) : await runClaude(config, text, cwd);
+      command.command === "shell" ? await runShellInTerminal(config, text, cwd) : await runClaude(config, text, cwd);
 
     await markDirectCommandSuccess(pool, command.id, config.workerId, {
       stdout: result.stdout,

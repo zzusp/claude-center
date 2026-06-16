@@ -1473,6 +1473,23 @@ export async function listRecentDirectCommands(
   return result.rows;
 }
 
+// 某 worker 的指令历史（Console 详情页「下发命令」面板回显结果）。按下发时间倒序。
+export async function listWorkerDirectCommands(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string,
+  limit = 20
+): Promise<DirectCommand[]> {
+  const result = await client.query<DirectCommand>(
+    `SELECT *
+       FROM direct_commands
+      WHERE worker_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [workerId, limit]
+  );
+  return result.rows;
+}
+
 export async function claimNextDirectCommand(
   client: pg.Pool | pg.PoolClient,
   workerId: string
