@@ -17,12 +17,12 @@ const EMPTY_COUNTS: Counts = { tasks: 0, workers: 0, projects: 0 };
 type NavItem = { href: string; label: string; icon: ReactNode; countKey?: keyof Counts; adminOnly?: boolean };
 
 const NAV: NavItem[] = [
-  { href: "/", label: "总览", icon: <LayoutGrid size={20} /> },
-  { href: "/tasks", label: "任务调度", icon: <ListTodo size={20} />, countKey: "tasks" },
-  { href: "/chat", label: "实时对话", icon: <MessageSquare size={20} /> },
-  { href: "/workers", label: "执行机群", icon: <Server size={20} />, countKey: "workers" },
-  { href: "/projects", label: "代码项目", icon: <FolderGit2 size={20} />, countKey: "projects" },
-  { href: "/users", label: "用户权限", icon: <Users size={20} />, adminOnly: true }
+  { href: "/", label: "总览", icon: <LayoutGrid size={16} strokeWidth={1.5} /> },
+  { href: "/tasks", label: "任务调度", icon: <ListTodo size={16} strokeWidth={1.5} />, countKey: "tasks" },
+  { href: "/chat", label: "实时对话", icon: <MessageSquare size={16} strokeWidth={1.5} /> },
+  { href: "/workers", label: "执行机群", icon: <Server size={16} strokeWidth={1.5} />, countKey: "workers" },
+  { href: "/projects", label: "代码项目", icon: <FolderGit2 size={16} strokeWidth={1.5} />, countKey: "projects" },
+  { href: "/users", label: "用户权限", icon: <Users size={16} strokeWidth={1.5} />, adminOnly: true }
 ];
 
 // 全站外壳：仅侧边栏 + 主内容区。页面标题由各页 section-head 渲染，topbar 已下线避免两层 header。
