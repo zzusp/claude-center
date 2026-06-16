@@ -35,7 +35,7 @@ import { TaskEditForm } from "./task-detail";
 import { TaskDrawer } from "./tasks-compose";
 
 
-type ListResponse = { tasks: Task[]; total: number; page: number; pageSize: number };
+type ListResponse = { tasks: Task[]; total: number; page: number; pageSize: number; stats?: TaskStatsPayload };
 
 type TaskStatsPayload = {
   total: number;
@@ -112,6 +112,7 @@ function TasksView({
   const [refreshKey, setRefreshKey] = useState(0);
   // 右侧栏 worker 下拉与统计：上层共享下拉数据源。
   const [workers, setWorkers] = useState<Worker[]>([]);
+  const [sidebarStats, setSidebarStats] = useState<TaskStatsPayload | null>(null);
   const { confirm, dialog } = useConfirm();
 
   async function handleDelete(task: Task) {
@@ -173,7 +174,10 @@ function TasksView({
         const response = await fetch(`/api/tasks?${params.toString()}`, { cache: "no-store" });
         if (!response.ok) return;
         const json = (await response.json()) as ListResponse;
-        if (isActive()) setData(json);
+        if (isActive()) {
+          setData(json);
+          if (json.stats) setSidebarStats(json.stats);
+        }
       } catch {
         /* 轮询失败静默，下次重试 */
       } finally {
@@ -422,7 +426,7 @@ function TasksView({
         </main>
 
         <aside className="page-grid-aside">
-          <TasksSidebar />
+          <TasksSidebar stats={sidebarStats} />
         </aside>
       </div>
 
@@ -449,21 +453,8 @@ function TasksView({
   );
 }
 
-// 任务流右侧栏：任务概览 / 状态分布 / 今日统计。轮询 /api/tasks/stats，failure 时保持上次值。
-function TasksSidebar() {
-  const [stats, setStats] = useState<TaskStatsPayload | null>(null);
-
-  usePolling(async (isActive) => {
-    try {
-      const response = await fetch("/api/tasks/stats", { cache: "no-store" });
-      if (!response.ok) return;
-      const json = (await response.json()) as TaskStatsPayload;
-      if (isActive()) setStats(json);
-    } catch {
-      /* 轮询失败静默 */
-    }
-  }, [], 5000);
-
+// 任务流右侧栏：任务概览 / 状态分布 / 今日统计。stats 由父组件 TasksView 随任务列表刷新一并传入。
+function TasksSidebar({ stats }: { stats: TaskStatsPayload | null }) {
   const byStatus = stats?.byStatus ?? {};
   const total = stats?.total ?? 0;
   const running = (byStatus.running ?? 0) + (byStatus.claimed ?? 0);

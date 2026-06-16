@@ -6,6 +6,7 @@ import {
   getPool,
   listProjectRepos,
   listTasks,
+  listTaskStatsForUser,
   listUserProjectIds,
   userHasProject,
   TASK_STATUSES,
@@ -62,19 +63,25 @@ export async function GET(request: NextRequest) {
     // 项目级隔离：非 admin 只返回分配给自己项目的任务（projectIds 与单项目筛选 AND 叠加）。
     const projectIds = user.role === "admin" ? null : await listUserProjectIds(getPool(), user.id);
 
-    const { tasks, total } = await listTasks(getPool(), {
-      status,
-      mergeStatus,
-      projectId,
-      workerId,
-      projectIds,
-      q,
-      dir,
-      limit: pageSize,
-      offset: (page - 1) * pageSize
-    });
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
 
-    return NextResponse.json({ tasks, total, page, pageSize });
+    const [{ tasks, total }, stats] = await Promise.all([
+      listTasks(getPool(), {
+        status,
+        mergeStatus,
+        projectId,
+        workerId,
+        projectIds,
+        q,
+        dir,
+        limit: pageSize,
+        offset: (page - 1) * pageSize
+      }),
+      listTaskStatsForUser(getPool(), user, todayStart.toISOString())
+    ]);
+
+    return NextResponse.json({ tasks, total, page, pageSize, stats });
   } catch (error) {
     return errorResponse(error);
   }
