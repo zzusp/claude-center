@@ -20,6 +20,8 @@ export default function DashboardClient() {
   });
   const [synced, setSynced] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  // 首次成功响应前不渲染 emptyOverview 派生出的"未连接 / 未启动 / 失败任务 0"（会被误读为系统异常），由下游骨架兜底。
+  const [loaded, setLoaded] = useState(false);
 
   usePolling(async (isActive) => {
     try {
@@ -39,6 +41,7 @@ export default function DashboardClient() {
       }));
       setSynced(true);
       setLastSyncAt(new Date().toISOString());
+      setLoaded(true);
     } catch {
       if (isActive()) setSynced(false);
     }
@@ -57,6 +60,7 @@ export default function DashboardClient() {
       statusCounts={statusCounts}
       synced={synced}
       lastSyncAt={lastSyncAt}
+      loaded={loaded}
       onOpenTask={(task: Task) => router.push(`/tasks/${task.id}`)}
     />
   );

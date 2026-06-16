@@ -40,6 +40,7 @@ function DashboardView({
   statusCounts,
   synced,
   lastSyncAt,
+  loaded,
   onOpenTask
 }: {
   overview: Overview;
@@ -47,8 +48,15 @@ function DashboardView({
   statusCounts: Record<string, number>;
   synced: boolean;
   lastSyncAt: string | null;
+  loaded: boolean;
   onOpenTask: (task: Task) => void;
 }) {
+  // 首次响应未到达：渲染骨架而非 emptyOverview 派生出的"失败任务 0 / 未连接 / 暂无任务"——
+  // 那些是确定结论的视觉，会让用户误以为系统已坏 / 没数据，应当区分"加载中"与"真实空态/异常"。
+  if (!loaded) {
+    return <DashboardSkeleton />;
+  }
+
   const recentTasks = overview.tasks.slice(0, 7);
   const failedTasks = overview.tasks.filter((task) => task.status === "failed").slice(0, 4);
 
@@ -252,6 +260,147 @@ function DashboardView({
       <RelayConnectionsCard />
     </>
   );
+}
+
+// 总览骨架：与真实版式严格对齐（page-head + grid-stats + health-section + grid-2），
+// 仅替换字段为灰块占位 + cc-skeleton 呼吸闪烁动画，避免"未连接 / 失败任务 0 / 暂无任务"误读。
+function DashboardSkeleton() {
+  return (
+    <div aria-busy="true" aria-live="polite" style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div className="page-head">
+        <div className="page-head-title-wrap">
+          <span style={skeletonStyle(120, 28)} />
+          <span style={skeletonStyle(160, 13)} />
+        </div>
+      </div>
+
+      <div className="grid-stats">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <article className="stat-card" key={i}>
+            <div className="stat-head">
+              <span style={skeletonStyle(16, 16, "50%")} />
+              <span style={skeletonStyle(72, 13)} />
+            </div>
+            <div className="stat-value">
+              <span style={skeletonStyle(56, 32)} />
+            </div>
+            <div className="stat-foot">
+              <span style={skeletonStyle(80, 12)} />
+              <span style={skeletonStyle(96, 24)} />
+            </div>
+          </article>
+        ))}
+      </div>
+
+      <section className="health-section">
+        <div className="section-head">
+          <span style={skeletonStyle(120, 16)} />
+          <span style={skeletonStyle(160, 13)} />
+        </div>
+        <div className="grid-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <section className="card" key={i}>
+              <div className="card-head">
+                <span style={skeletonStyle(120, 16)} />
+                <span style={skeletonStyle(64, 20, 999)} />
+              </div>
+              <div className="card-body health-body">
+                {Array.from({ length: 3 }).map((__, j) => (
+                  <div
+                    key={j}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 12
+                    }}
+                  >
+                    <span style={skeletonStyle(72, 12)} />
+                    <span style={skeletonStyle(96, 12)} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </section>
+
+      <div className="grid-2">
+        <div className="col">
+          <section className="card">
+            <div className="card-head">
+              <span style={skeletonStyle(112, 16)} />
+              <span style={skeletonStyle(64, 12)} />
+            </div>
+            <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div
+                  key={i}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "64px minmax(0,1fr) 120px 80px",
+                    gap: 12,
+                    alignItems: "center"
+                  }}
+                >
+                  <span style={skeletonStyle(56, 18, 999)} />
+                  <span style={skeletonStyle("80%", 14)} />
+                  <span style={skeletonStyle("100%", 12)} />
+                  <span style={skeletonStyle(60, 12)} />
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+
+        <div className="col">
+          <section className="card">
+            <div className="card-head">
+              <span style={skeletonStyle(112, 16)} />
+            </div>
+            <div
+              className="card-body"
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 24 }}
+            >
+              <span style={skeletonStyle(128, 128, "50%")} />
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 120 }}>
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <span key={i} style={skeletonStyle("100%", 12)} />
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="card-head">
+              <span style={skeletonStyle(96, 16)} />
+              <span style={skeletonStyle(48, 12)} />
+            </div>
+            <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={skeletonStyle(8, 8, "50%")} />
+                  <span style={skeletonStyle("60%", 14)} />
+                  <span style={{ ...skeletonStyle(56, 12), marginLeft: "auto" }} />
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function skeletonStyle(width: number | string, height: number, radius: number | string = 6): React.CSSProperties {
+  return {
+    display: "inline-block",
+    width: typeof width === "number" ? `${width}px` : width,
+    height: `${height}px`,
+    borderRadius: typeof radius === "number" ? `${radius}px` : radius,
+    background: "var(--surface-2)",
+    animation: "cc-skeleton 1.4s ease-in-out infinite"
+  };
 }
 
 export { DashboardView };
