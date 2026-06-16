@@ -42,7 +42,7 @@ export default function DashboardClient() {
     } catch {
       if (isActive()) setSynced(false);
     }
-  }, []);
+  }, [], 15000);
 
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};

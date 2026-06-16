@@ -184,7 +184,8 @@ function TasksView({
         if (isActive()) setLoading(false);
       }
     },
-    [status, projectId, workerId, debouncedQ, dir, page, pageSize, refreshKey]
+    [status, projectId, workerId, debouncedQ, dir, page, pageSize, refreshKey],
+    Infinity
   );
 
   const totalPages = Math.max(1, Math.ceil(data.total / pageSize));

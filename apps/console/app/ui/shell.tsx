@@ -43,7 +43,7 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
     } catch {
       /* 轮询失败静默 */
     }
-  }, [], 8000);
+  }, [], 15000);
 
   async function handleLogout() {
     try {
