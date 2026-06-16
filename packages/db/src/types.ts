@@ -102,20 +102,22 @@ export type Worker = {
   active_task_count?: number;
 };
 
-// 项目仓清单（多仓任务支持，见 docs/spec/task-multi-repo.md）：
+// 项目仓清单（多仓任务支持，见 docs/spec/task-multi-repo.md、docs/spec/project-repos-runtime-path.md）：
 // 主仓在 projects 表之外另有一行 role='main' 的 project_repos 镜像，便于循环处理；
-// 子仓 role='sub'，relative_path 是相对主仓的 POSIX 路径。
+// 子仓 role='sub'，name/description 为展示/说明字段（不再保存子仓相对主仓的本机路径——
+// 不同 worker 上文件夹名可能不同，由 worker 运行时派生，见 worker/worktree.ts::resolveSubRepoRelativePath）。
 export type ProjectRepoRole = "main" | "sub";
 
 export type ProjectRepo = {
   id: string;
   project_id: string;
   role: ProjectRepoRole;
-  // 主仓恒 '.'，子仓为非空相对路径（POSIX 风格）
-  relative_path: string;
   repo_url: string;
   default_branch: string;
-  display_name: string;
+  // UI 上的展示名（主仓行镜像 projects.name；子仓行由用户填）。
+  name: string;
+  // 可选描述。
+  description: string;
   position: number;
   created_at: string;
   updated_at: string;

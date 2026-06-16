@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync, type Dirent } from "node:fs";
 import path from "node:path";
 import { runCommand, type CommandResult } from "./shell.js";
 
@@ -97,7 +97,7 @@ export async function ensureWorktree(
   );
 }
 
-// 多仓任务支持（docs/spec/task-multi-repo.md §6）：
+// 多仓任务支持（docs/spec/task-multi-repo.md §6、docs/spec/project-repos-runtime-path.md）：
 // 子仓本地路径约定为 <mainLocal>/<relative_path>（与主仓 .gitignore 忽略路径一致）。
 // 任务执行前确保该子仓已 clone：不存在则 git clone；存在视为可复用。父目录不存在时先建。
 // clone 失败抛错（强语义下整任务 failed）。
@@ -107,6 +107,137 @@ export async function ensureSubRepoCloned(subRepoLocal: string, repoUrl: string)
   }
   mkdirSync(path.dirname(subRepoLocal), { recursive: true });
   await runCommand("git", ["clone", repoUrl, subRepoLocal], { timeoutMs: 10 * 60_000 });
+}
+
+// 把任意形态的 git 仓库 URL 归一为对等比较用 key：忽略尾 .git、协议(https/git/ssh)、user@host、端口。
+// 例：
+//   https://github.com/foo/bar.git → github.com/foo/bar
+//   git@github.com:foo/bar         → github.com/foo/bar
+//   ssh://git@github.com:22/foo/bar.git → github.com/foo/bar
+function normalizeRepoUrl(url: string): string {
+  let s = url.trim();
+  if (!s) return "";
+  s = s.replace(/\.git$/i, "");
+  // ssh://user@host:port/path 形式
+  s = s.replace(/^[a-z]+:\/\//i, "");
+  // scp 风格 user@host:path
+  s = s.replace(/^[^@/]+@/, "");
+  // 主机后的 ":" 或 "/" 统一成 "/"
+  s = s.replace(/:/, "/");
+  // 收尾斜杠
+  s = s.replace(/\/+$/, "");
+  return s.toLowerCase();
+}
+
+// 从 git URL 派生本机文件夹 basename（去尾 .git）。
+function basenameFromRepoUrl(repoUrl: string): string {
+  const cleaned = repoUrl.replace(/[\/\s]+$/, "");
+  const tail = cleaned.split(/[\/:]/).pop() ?? cleaned;
+  return tail.replace(/\.git$/i, "");
+}
+
+// 进程缓存：同 worker 多任务复用同一 (mainLocal, repoUrl) 的派生结果。
+const subRepoResolveCache = new Map<string, Promise<string>>();
+
+// 扫主仓本地的子目录（深度 ≤ MAX_DEPTH），找含 .git 且 `remote.origin.url` 与 repoUrl 等价的目录，
+// 返回相对 mainLocal 的 POSIX 路径。命中即返回；扫不到返回 null（由调用方走 basename 兜底）。
+async function findSubRepoByRemote(
+  mainLocal: string,
+  repoUrl: string,
+  maxDepth = 3
+): Promise<string | null> {
+  const target = normalizeRepoUrl(repoUrl);
+  if (!target) return null;
+  const SKIP_DIRS = new Set([
+    "node_modules", ".git", ".next", ".turbo", "dist", "build", "out",
+    ".claude", ".vscode", ".idea", "coverage"
+  ]);
+
+  type Entry = { abs: string; rel: string; depth: number };
+  const stack: Entry[] = [{ abs: mainLocal, rel: ".", depth: 0 }];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(cur.abs, { withFileTypes: true, encoding: "utf8" }) as Dirent[];
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue;
+      if (SKIP_DIRS.has(ent.name)) continue;
+      const childAbs = path.join(cur.abs, ent.name);
+      const childRel = cur.rel === "." ? ent.name : `${cur.rel}/${ent.name}`;
+      // 主仓自身（depth 0 的 .git）也会被命中——SKIP_DIRS 已排掉 .git 这一项目录；
+      // 但子目录里若藏着 .git 才是子仓候选。
+      const dotGit = path.join(childAbs, ".git");
+      if (existsSync(dotGit)) {
+        try {
+          const r = await runCommand("git", ["-C", childAbs, "config", "--get", "remote.origin.url"], {
+            timeoutMs: 10_000,
+            acceptExitCodes: [0, 1]
+          });
+          if (r.exitCode === 0) {
+            const candidate = normalizeRepoUrl(r.stdout.trim());
+            if (candidate && candidate === target) {
+              return childRel;
+            }
+          }
+        } catch {
+          // 忽略：这个候选不算数，继续扫。
+        }
+        // 子仓内部不再下钻，避免 monorepo 内嵌套吃满栈。
+        continue;
+      }
+      if (cur.depth + 1 < maxDepth) {
+        stack.push({ abs: childAbs, rel: childRel, depth: cur.depth + 1 });
+      }
+    }
+  }
+  return null;
+}
+
+// 运行时派生子仓本机相对路径（docs/spec/project-repos-runtime-path.md）：
+//   1) 优先扫主仓本地下子目录，找 remote.origin.url 等价于 repoUrl 的现存 clone → 命中复用其相对路径
+//   2) 否则用 basename(repoUrl) 作目录名；若该路径已存在但 .git 缺失或 remote 不匹配 → 抛错（让上层标 failed），
+//      不自动改名以免误伤
+//   3) 命中 (2) 且路径不存在时，仅返回相对路径——真正的 git clone 由 ensureSubRepoCloned 触发
+// 结果做进程级缓存（同 worker 多任务复用）。
+export async function resolveSubRepoRelativePath(
+  mainLocal: string,
+  repoUrl: string
+): Promise<string> {
+  const key = `${mainLocal}::${normalizeRepoUrl(repoUrl)}`;
+  const cached = subRepoResolveCache.get(key);
+  if (cached) return cached;
+
+  const promise = (async () => {
+    const found = await findSubRepoByRemote(mainLocal, repoUrl);
+    if (found) return found;
+
+    const base = basenameFromRepoUrl(repoUrl);
+    if (!base) {
+      throw new Error(`无法从 repoUrl 派生子仓本机目录名：${repoUrl}`);
+    }
+    const targetAbs = path.join(mainLocal, base);
+    if (existsSync(targetAbs)) {
+      // 路径已存在但前面 findSubRepoByRemote 没匹配上 → 不是同一仓（或缺 .git）。
+      // 抛错让用户在 worker 上手动处理（rename / 删错占的目录）。
+      throw new Error(
+        `子仓本机目录 ${base} 已被其它内容占用（在 ${mainLocal} 下），且其 remote.origin.url 与 ${repoUrl} 不匹配。请在 worker 本机重命名或删除该目录后重试。`
+      );
+    }
+    return base;
+  })();
+
+  subRepoResolveCache.set(key, promise);
+  try {
+    return await promise;
+  } catch (err) {
+    // 失败不缓存，下次重试有机会。
+    subRepoResolveCache.delete(key);
+    throw err;
+  }
 }
 
 // 多仓任务前置硬约束：主仓 .gitignore 必须忽略子仓路径，否则 git worktree add 会撞

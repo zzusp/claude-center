@@ -2,7 +2,7 @@
 
 import type { Task, TaskPredecessor, TaskRepo } from "@claude-center/db";
 import { Activity, Check, FileText, GitPullRequest, Info, ListChecks, RotateCcw } from "lucide-react";
-import { Empty, KvRow, StatusBadge, fmtTime, postJson } from "./shared";
+import { Empty, KvRow, StatusBadge, fmtTime, isPendingSubRepoPath, postJson } from "./shared";
 import { Section, type LifecycleStep } from "./task-detail-shared";
 import { AttachmentList } from "./attachment-uploader";
 import { useAsyncAction } from "../lib/use-async-action";
@@ -154,8 +154,16 @@ function MultiRepoTable({ taskRepos }: { taskRepos: TaskRepo[] }) {
             <tr key={r.id}>
               <td>
                 <div className="cell-stack">
-                  <span className="t-title">{r.role === "main" ? "主仓" : r.relative_path}</span>
-                  {r.role === "sub" ? <span className="t-meta mono">{r.relative_path}</span> : null}
+                  <span className="t-title">
+                    {r.role === "main"
+                      ? "主仓"
+                      : isPendingSubRepoPath(r.relative_path)
+                        ? "子仓（待 worker 派生路径）"
+                        : r.relative_path}
+                  </span>
+                  {r.role === "sub" && !isPendingSubRepoPath(r.relative_path) ? (
+                    <span className="t-meta mono">{r.relative_path}</span>
+                  ) : null}
                 </div>
               </td>
               <td>

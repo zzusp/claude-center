@@ -3,7 +3,7 @@
 import type { Project, ProjectRepo } from "@claude-center/db";
 import { ChevronRight, FolderGit2, GitBranch, Pencil, Plus, Save, Trash2 } from "lucide-react";
 import { Fragment, FormEvent, useEffect, useState } from "react";
-import { Empty, fmtTime } from "./shared";
+import { basenameFromRepoUrl, Empty, fmtTime } from "./shared";
 import { Drawer, useConfirm } from "./controls";
 
 // 列表项：Project + 该项目的子仓清单（由 /api/projects 一次聚合）。
@@ -354,11 +354,11 @@ function ProjectForm({
   );
 }
 
-// 项目子仓清单编辑（多仓任务，spec docs/spec/task-multi-repo.md）：
+// 项目子仓清单编辑（多仓任务，spec docs/spec/task-multi-repo.md、docs/spec/project-repos-runtime-path.md）：
 // - 主仓由 projects 表镜像维护（不在此处管理）
 // - 子仓列表 fetch /api/projects/[id]/repos，过滤 role='sub' 后展示并允许增删改
+// - 子仓本机相对路径 / 文件夹名由 **worker 运行时派生**（不同 worker 上可能不同），console 端不维护
 // - 保存按钮 PUT /api/projects/[id]/repos 整批替换；删除有任务引用的子仓后端返回 409
-// 子仓在主仓本地路径下的 relative_path **必须** 被主仓 .gitignore 忽略；UI 加一行提示
 // autoAddNew：列表行"+ 子仓"快捷入口打开抽屉时，加载完已有子仓后自动追加一行空行供填写
 // onSaved：保存成功回调，通知父组件触发列表重拉
 function ProjectSubReposEditor({
@@ -370,7 +370,7 @@ function ProjectSubReposEditor({
   autoAddNew?: boolean;
   onSaved?: (note: string) => void | Promise<void>;
 }) {
-  const [subs, setSubs] = useState<Array<{ id?: string; relativePath: string; repoUrl: string; defaultBranch: string; displayName: string }>>([]);
+  const [subs, setSubs] = useState<Array<{ id?: string; name: string; repoUrl: string; defaultBranch: string; description: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -388,14 +388,14 @@ function ProjectSubReposEditor({
           .filter((r) => r.role === "sub")
           .map((r) => ({
             id: r.id,
-            relativePath: r.relative_path,
+            name: r.name,
             repoUrl: r.repo_url,
             defaultBranch: r.default_branch,
-            displayName: r.display_name
+            description: r.description
           }));
         setSubs(
           autoAddNew
-            ? [...existing, { relativePath: "", repoUrl: "", defaultBranch: "main", displayName: "" }]
+            ? [...existing, { name: "", repoUrl: "", defaultBranch: "main", description: "" }]
             : existing
         );
         setLoading(false);
@@ -412,7 +412,7 @@ function ProjectSubReposEditor({
   }, [projectId, autoAddNew]);
 
   function add() {
-    setSubs([...subs, { relativePath: "", repoUrl: "", defaultBranch: "main", displayName: "" }]);
+    setSubs([...subs, { name: "", repoUrl: "", defaultBranch: "main", description: "" }]);
   }
   function removeAt(idx: number) {
     setSubs(subs.filter((_, i) => i !== idx));
@@ -431,10 +431,10 @@ function ProjectSubReposEditor({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           subs: subs.map((s, i) => ({
-            relativePath: s.relativePath.trim(),
+            name: s.name.trim(),
             repoUrl: s.repoUrl.trim(),
             defaultBranch: s.defaultBranch.trim() || "main",
-            displayName: s.displayName.trim() || s.relativePath.trim(),
+            description: s.description.trim(),
             position: i + 1
           }))
         })
@@ -449,10 +449,10 @@ function ProjectSubReposEditor({
           .filter((r) => r.role === "sub")
           .map((r) => ({
             id: r.id,
-            relativePath: r.relative_path,
+            name: r.name,
             repoUrl: r.repo_url,
             defaultBranch: r.default_branch,
-            displayName: r.display_name
+            description: r.description
           }))
       );
       setNote("已保存子仓清单");
@@ -474,7 +474,7 @@ function ProjectSubReposEditor({
         <div>
           <h3 className="section-title" style={{ fontSize: "1em" }}>子仓清单（多仓任务）</h3>
           <span className="section-sub">
-            子仓物理上位于主仓本地路径下；relative_path 必须已被主仓 <code>.gitignore</code> 忽略
+            子仓物理上位于主仓本地路径下；本机文件夹名由 worker 运行时派生（不同 worker 可不一致）
           </span>
         </div>
         <button type="button" className="btn btn-sm" onClick={add} disabled={busy}>
@@ -490,23 +490,21 @@ function ProjectSubReposEditor({
             <div key={s.id ?? `new-${idx}`} style={{ border: "1px solid var(--border)", borderRadius: 6, padding: 8, marginBottom: 8 }}>
               <div className="form-row">
                 <div className="field">
-                  <label className="field-label">相对主仓路径</label>
-                  <input value={s.relativePath} onChange={(e) => patchAt(idx, { relativePath: e.target.value })} placeholder="packages/widgets-lib" disabled={busy} />
-                </div>
-                <div className="field">
-                  <label className="field-label">显示名（可选）</label>
-                  <input value={s.displayName} onChange={(e) => patchAt(idx, { displayName: e.target.value })} placeholder={s.relativePath || "widgets"} disabled={busy} />
-                </div>
-              </div>
-              <div className="form-row">
-                <div className="field">
-                  <label className="field-label">仓库地址</label>
-                  <input value={s.repoUrl} onChange={(e) => patchAt(idx, { repoUrl: e.target.value })} placeholder="https://github.com/acme/sub.git" disabled={busy} />
+                  <label className="field-label">项目名</label>
+                  <input value={s.name} onChange={(e) => patchAt(idx, { name: e.target.value })} placeholder="widgets-lib" disabled={busy} />
                 </div>
                 <div className="field">
                   <label className="field-label">默认分支</label>
                   <input value={s.defaultBranch} onChange={(e) => patchAt(idx, { defaultBranch: e.target.value })} placeholder="main" disabled={busy} />
                 </div>
+              </div>
+              <div className="field">
+                <label className="field-label">Git 仓库地址</label>
+                <input value={s.repoUrl} onChange={(e) => patchAt(idx, { repoUrl: e.target.value })} placeholder="https://github.com/acme/widgets-lib.git" disabled={busy} />
+              </div>
+              <div className="field">
+                <label className="field-label">描述</label>
+                <textarea value={s.description} onChange={(e) => patchAt(idx, { description: e.target.value })} rows={2} placeholder="子仓说明（可选）" disabled={busy} />
               </div>
               <div className="row-actions">
                 <button type="button" className="icon-btn danger" title="删除" onClick={() => removeAt(idx)} disabled={busy}>
@@ -535,17 +533,16 @@ function SubReposInlineList({ subRepos }: { subRepos: ProjectRepo[] }) {
       <table className="table" style={{ background: "var(--surface-1)" }}>
         <thead>
           <tr>
-            <th>显示名</th>
-            <th>相对路径</th>
+            <th>项目名</th>
             <th>仓库</th>
             <th>默认分支</th>
+            <th>描述</th>
           </tr>
         </thead>
         <tbody>
           {subRepos.map((r) => (
             <tr key={r.id} style={{ cursor: "default" }}>
-              <td><span className="t-title">{r.display_name || r.relative_path}</span></td>
-              <td className="mono">{r.relative_path}</td>
+              <td><span className="t-title">{r.name || basenameFromRepoUrl(r.repo_url)}</span></td>
               <td className="mono">{r.repo_url}</td>
               <td>
                 <span className="tag">
@@ -553,6 +550,7 @@ function SubReposInlineList({ subRepos }: { subRepos: ProjectRepo[] }) {
                   {r.default_branch}
                 </span>
               </td>
+              <td className="t-meta">{r.description || "—"}</td>
             </tr>
           ))}
         </tbody>

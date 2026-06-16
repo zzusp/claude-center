@@ -13,9 +13,13 @@ export type TaskRepoUserInput = {
   enabled?: boolean;
 };
 
-export function subWorkBranchFor(mainWorkBranch: string, relativePath: string): string {
-  const safe = relativePath.replace(/[^a-zA-Z0-9_\-]+/g, "-").replace(/^-+|-+$/g, "");
-  return `${mainWorkBranch}-${safe || "sub"}`;
+// 子仓 work_branch 名按子仓的「name」slug 派生（旧版本用 relative_path——已下线，
+// 因为 relative_path 现在由 worker 运行时派生、console 端不再持有）。
+// fallback：name 为空时用 project_repos.id 前 8 位，保证唯一可读。
+export function subWorkBranchFor(mainWorkBranch: string, repo: { id: string; name: string }): string {
+  const slug = (repo.name ?? "").replace(/[^a-zA-Z0-9_\-]+/g, "-").replace(/^-+|-+$/g, "");
+  const tail = slug || repo.id.slice(0, 8);
+  return `${mainWorkBranch}-${tail}`;
 }
 
 export function buildTaskRepoInputs({
@@ -63,9 +67,12 @@ export function buildTaskRepoInputs({
     inputs.push({
       projectRepoId: repo.id,
       role: "sub",
-      relativePath: repo.relative_path,
+      // 占位：子仓本机相对路径由 worker prepare 阶段派生后 UPDATE 改写真实值。
+      // 形式 `*-<projectRepoId>` 保证 UNIQUE(task_id, relative_path) 不在创建期就撞，
+      // 后续 worker 端派生完成才进入正常 UNIQUE 域。
+      relativePath: `*-${repo.id}`,
       baseBranch: enabled ? input?.baseBranch?.trim() || repo.default_branch : repo.default_branch,
-      workBranch: enabled ? input?.workBranch?.trim() || subWorkBranchFor(workBranch, repo.relative_path) : "",
+      workBranch: enabled ? input?.workBranch?.trim() || subWorkBranchFor(workBranch, repo) : "",
       targetBranch: enabled ? input?.targetBranch?.trim() || repo.default_branch : repo.default_branch,
       subStatus: enabled ? "pending" : "skipped"
     });
