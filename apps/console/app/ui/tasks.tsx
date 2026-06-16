@@ -31,9 +31,9 @@ import {
 } from "./dashboard-shared";
 import { Donut } from "./overview-widgets";
 import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
-import { Drawer, Select, useConfirm } from "./controls";
+import { FormModal, Select, useConfirm } from "./controls";
 import { TaskEditForm } from "./task-detail";
-import { TaskDrawer } from "./tasks-compose";
+import { TaskComposeModal } from "./tasks-compose";
 
 
 type ListResponse = { tasks: Task[]; total: number; page: number; pageSize: number; stats?: TaskStatsPayload };
@@ -434,7 +434,7 @@ function TasksView({
         </aside>
       </div>
 
-      <Drawer
+      <FormModal
         open={editingTask !== null}
         title={editingTask ? `编辑 ${editingTask.title}` : ""}
         onClose={() => setEditingTask(null)}
@@ -450,7 +450,7 @@ function TasksView({
             onCancel={() => setEditingTask(null)}
           />
         ) : null}
-      </Drawer>
+      </FormModal>
 
       {dialog}
     </>
@@ -597,4 +597,4 @@ function TasksSidebar({ stats }: { stats: TaskStatsPayload | null }) {
   );
 }
 
-export { TasksView, TaskDrawer };
+export { TasksView, TaskComposeModal };

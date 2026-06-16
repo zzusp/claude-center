@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { postJson } from "../../ui/shared";
 import { usePolling } from "../../lib/use-polling";
-import { TasksView, TaskDrawer } from "../../ui/tasks";
+import { TasksView, TaskComposeModal } from "../../ui/tasks";
 
 // 任务调度页容器：列表由 TasksView 自轮询 /api/tasks（分页）；本容器另轮询 /api/projects（筛选/表单）
 // 与候选任务（依赖选择，取最近 100 条），并承载「发布任务」抽屉与创建逻辑（原 Dashboard.handleTaskSubmit）。
@@ -109,7 +109,7 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
         }}
         canCreateTask={canCreateTask}
       />
-      <TaskDrawer
+      <TaskComposeModal
         open={drawerOpen}
         busy={busy}
         submitError={submitError}

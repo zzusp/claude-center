@@ -2008,6 +2008,335 @@ select:focus {
   padding: 20px;
 }
 
+/* ---------------- Form modal (wide, scrollable body) ---------------- */
+
+.modal-form {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 48px);
+}
+
+.modal.modal-md { max-width: 560px; }
+.modal.modal-lg { max-width: 720px; }
+
+.modal-form-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.modal-form-head .modal-title {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.modal-close:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+.modal-form-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 22px 22px;
+}
+
+/* ---------------- Form sections ---------------- */
+
+.form-section {
+  display: grid;
+  gap: 12px;
+  padding-top: 14px;
+  margin-top: 14px;
+  border-top: 1px dashed var(--border);
+}
+
+.form-section:first-child {
+  padding-top: 0;
+  margin-top: 0;
+  border-top: 0;
+}
+
+.form-section-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+
+.form-section-title-hint {
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--text-4);
+  text-transform: none;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 14px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+/* ---------------- DateTime picker ---------------- */
+
+.dt-picker {
+  position: relative;
+  width: 100%;
+}
+
+.dt-trigger {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  color: var(--text-1);
+  cursor: pointer;
+  outline: none;
+  font: inherit;
+  text-align: left;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.dt-trigger:hover:not(:disabled) {
+  border-color: var(--text-4);
+}
+
+.dt-trigger:focus-visible,
+.dt-picker.open .dt-trigger {
+  border-color: var(--running);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.dt-trigger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.dt-trigger-ico {
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.dt-trigger-label {
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.dt-trigger-label.placeholder {
+  color: var(--text-4);
+}
+
+.dt-trigger-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.dt-trigger-clear:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+.dt-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 280px;
+  padding: 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+  animation: dt-panel-in 120ms ease;
+}
+
+@keyframes dt-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dt-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.dt-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.dt-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.dt-nav:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+.dt-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.dt-weekday {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-4);
+  padding: 4px 0;
+}
+
+.dt-cell {
+  width: 34px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-1);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
+}
+
+.dt-cell:hover:not(:disabled):not(.selected) {
+  background: var(--surface-2);
+}
+
+.dt-cell.out {
+  color: var(--text-4);
+}
+
+.dt-cell.today {
+  font-weight: 700;
+  color: var(--running);
+}
+
+.dt-cell.selected {
+  background: var(--text-1);
+  color: var(--surface-1);
+}
+
+.dt-cell.selected.today {
+  color: var(--surface-1);
+}
+
+.dt-cell:disabled {
+  color: var(--text-4);
+  opacity: 0.4;
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+
+.dt-time-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.dt-time-ico {
+  color: var(--text-3);
+  margin-right: 2px;
+}
+
+.dt-time-select {
+  width: auto;
+  padding: 4px 6px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  border-radius: var(--r-sm);
+}
+
+.dt-time-colon {
+  color: var(--text-3);
+  font-weight: 700;
+}
+
+.dt-time-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 8px;
+}
+
+.dt-time-link {
+  border: 0;
+  background: transparent;
+  color: var(--running);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--r-sm);
+}
+
+.dt-time-link:hover {
+  background: var(--surface-2);
+}
+
 /* ---------------- Responsive ---------------- */
 
 @media (max-width: 1200px) {
@@ -2079,6 +2408,19 @@ select:focus {
   .drawer {
     width: 100%;
     max-width: 100%;
+  }
+  .modal-form {
+    max-height: calc(100vh - 16px);
+  }
+  .modal-form-head,
+  .modal-form-body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .dt-panel {
+    left: 0;
+    right: 0;
+    min-width: 0;
   }
 }
 
