@@ -1,10 +1,15 @@
 "use client";
 
-import type { Project, Task } from "@claude-center/db";
+import type { Project, ProjectRepo, Task } from "@claude-center/db";
 import { Send } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { metaOf } from "./shared";
 import { Drawer, Select } from "./controls";
+
+// 子仓在创建/编辑任务表单中的受控状态。subStates[projectRepoId] 表示该子仓的勾选 + 分支配置。
+// 提交时按 enabled 输出 taskRepos[]（未启用的子仓后端会落 sub_status='skipped'）。
+type SubState = { enabled: boolean; baseBranch: string; workBranch: string; targetBranch: string };
+export type SubStatesMap = Record<string, SubState>;
 
 // 发布任务表单 + 其抽屉容器。从任务流列表抽出（仅创建任务用；详情已迁 /tasks/[id]）。
 function ComposeTaskForm({
@@ -30,28 +35,54 @@ function ComposeTaskForm({
   const [autoMergePr, setAutoMergePr] = useState(false);
   const [autoReply, setAutoReply] = useState(false);
   const [model, setModel] = useState<"default" | "opus" | "sonnet" | "haiku">("default");
+  // 多仓任务（spec docs/spec/task-multi-repo.md §UI）：项目子仓清单 + 每子仓的启用 / 分支受控状态。
+  // 主仓的 base/work/target 仍走原 baseBranch/workBranch/targetBranch input；子仓配置序列化到 hidden taskRepos 字段。
+  const [subRepos, setSubRepos] = useState<ProjectRepo[]>([]);
+  const [subStates, setSubStates] = useState<SubStatesMap>({});
 
   useEffect(() => {
     if (!selectedProjectId) {
       setBranches([]);
       setBranchState("idle");
+      setSubRepos([]);
+      setSubStates({});
       return;
     }
     let active = true;
     setBranchState("loading");
-    fetch(`/api/projects/${selectedProjectId}/branches`, { cache: "no-store" })
-      .then(async (response) => {
+    Promise.all([
+      fetch(`/api/projects/${selectedProjectId}/branches`, { cache: "no-store" }).then(async (response) => {
         if (!response.ok) throw new Error();
         const data = (await response.json()) as { branches: string[] };
-        if (active) {
-          setBranches(data.branches);
-          setBranchState("idle");
-        }
+        return data.branches;
+      }),
+      fetch(`/api/projects/${selectedProjectId}/repos`, { cache: "no-store" }).then(async (response) => {
+        if (!response.ok) throw new Error();
+        const data = (await response.json()) as { repos: ProjectRepo[] };
+        return data.repos;
+      })
+    ])
+      .then(([bs, repos]) => {
+        if (!active) return;
+        setBranches(bs);
+        setBranchState("idle");
+        const subs = repos.filter((r) => r.role === "sub");
+        setSubRepos(subs);
+        setSubStates(
+          Object.fromEntries(
+            subs.map((s) => [
+              s.id,
+              { enabled: false, baseBranch: s.default_branch, workBranch: "", targetBranch: s.default_branch }
+            ])
+          )
+        );
       })
       .catch(() => {
         if (active) {
           setBranches([]);
           setBranchState("error");
+          setSubRepos([]);
+          setSubStates({});
         }
       });
     return () => {
@@ -217,12 +248,109 @@ function ComposeTaskForm({
           </select>
         )}
       </div>
+      {subRepos.length > 0 ? (
+        <SubRepoConfigSection subRepos={subRepos} subStates={subStates} onChange={setSubStates} />
+      ) : null}
+      {/* taskRepos 序列化：父 handler 通过 FormData.get('taskRepos') 取 JSON */}
+      <input type="hidden" name="taskRepos" value={JSON.stringify(serializeTaskRepos(subStates))} readOnly />
       {submitError ? <div className="error-box">{submitError}</div> : null}
       <button className="btn btn-primary" disabled={busy || projects.length === 0} type="submit">
         <Send size={16} />
         入队
       </button>
     </form>
+  );
+}
+
+// 仅启用的子仓被序列化到 taskRepos。后端按 enabled=false / 缺省一律落 sub_status='skipped'。
+function serializeTaskRepos(subStates: SubStatesMap): Array<{
+  projectRepoId: string;
+  baseBranch: string;
+  workBranch: string;
+  targetBranch: string;
+  enabled: true;
+}> {
+  return Object.entries(subStates)
+    .filter(([, s]) => s.enabled)
+    .map(([projectRepoId, s]) => ({
+      projectRepoId,
+      baseBranch: s.baseBranch,
+      workBranch: s.workBranch,
+      targetBranch: s.targetBranch,
+      enabled: true as const
+    }));
+}
+
+// 子仓配置 section：每个子仓一行，启用 checkbox + 三个分支输入（启用后才可编辑）。
+function SubRepoConfigSection({
+  subRepos,
+  subStates,
+  onChange
+}: {
+  subRepos: ProjectRepo[];
+  subStates: SubStatesMap;
+  onChange: (next: SubStatesMap) => void;
+}) {
+  return (
+    <div className="field">
+      <label className="field-label">
+        子仓配置 <span className="field-hint">勾选要参与本任务的子仓；未勾选的子仓会被跳过（不签出、不提交）</span>
+      </label>
+      <div className="sub-repo-list">
+        {subRepos.map((repo) => {
+          const state = subStates[repo.id] ?? {
+            enabled: false,
+            baseBranch: repo.default_branch,
+            workBranch: "",
+            targetBranch: repo.default_branch
+          };
+          function patch(p: Partial<SubState>) {
+            onChange({ ...subStates, [repo.id]: { ...state, ...p } });
+          }
+          return (
+            <div className="sub-repo-row" key={repo.id} style={{ border: "1px solid var(--border)", borderRadius: 6, padding: 8, marginBottom: 8 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: state.enabled ? 8 : 0 }}>
+                <input
+                  type="checkbox"
+                  checked={state.enabled}
+                  onChange={(e) => patch({ enabled: e.target.checked })}
+                />
+                <span className="t-title">{repo.display_name || repo.relative_path}</span>
+                <span className="t-meta mono" style={{ fontSize: "0.85em", opacity: 0.7 }}>{repo.relative_path}</span>
+              </label>
+              {state.enabled ? (
+                <div className="form-row">
+                  <div className="field">
+                    <label className="field-label">签出分支</label>
+                    <input
+                      value={state.baseBranch}
+                      onChange={(e) => patch({ baseBranch: e.target.value })}
+                      placeholder={repo.default_branch}
+                    />
+                  </div>
+                  <div className="field">
+                    <label className="field-label">工作分支 <span className="field-hint">留空自动派生</span></label>
+                    <input
+                      value={state.workBranch}
+                      onChange={(e) => patch({ workBranch: e.target.value })}
+                      placeholder="留空自动派生"
+                    />
+                  </div>
+                  <div className="field">
+                    <label className="field-label">PR 目标分支</label>
+                    <input
+                      value={state.targetBranch}
+                      onChange={(e) => patch({ targetBranch: e.target.value })}
+                      placeholder={repo.default_branch}
+                    />
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

@@ -1,7 +1,9 @@
 import {
   addTaskDependencies,
   createTask,
+  createTaskRepos,
   getPool,
+  listProjectRepos,
   listTasks,
   listUserProjectIds,
   userHasProject,
@@ -13,6 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../lib/session";
 import { errorResponse, badRequest } from "../../lib/api";
 import { projectChannel, publishRelay } from "../../lib/relay-publish";
+import { buildTaskRepoInputs, type TaskRepoUserInput } from "../../lib/task-repos-input";
 
 export const dynamic = "force-dynamic";
 
@@ -105,6 +108,9 @@ export async function POST(request: NextRequest) {
       model?: string;
       dependsOn?: string[];
       scheduledAt?: string;
+      // 多仓任务（spec docs/spec/task-multi-repo.md §UI）：每个项目仓的 base/work/target 与启用标志。
+      // 缺省时按主仓单行生成（其它子仓默认 sub_status='skipped'），兼容旧前端。
+      taskRepos?: TaskRepoUserInput[];
     };
 
     if (!body.projectId || !body.title?.trim() || !body.description?.trim()) {
@@ -144,7 +150,22 @@ export async function POST(request: NextRequest) {
 
     const dependsOn = Array.isArray(body.dependsOn) ? body.dependsOn.filter((id) => typeof id === "string") : [];
 
-    // 任务与其前置依赖须原子入库：依赖校验失败（跨项目 / 不存在）应整体回滚。
+    // 多仓任务：解析 taskRepos[] 或按主仓单行兜底。在 createTask 同事务里插入 task_repos。
+    const projectRepos = await listProjectRepos(getPool(), body.projectId);
+    if (projectRepos.length === 0) {
+      return badRequest("项目仓清单为空（异常状态：主仓行应已由 createProject 自动同步）");
+    }
+    const workBranch = body.workBranch?.trim() || defaultWorkBranch(body.title);
+    const targetBranch = body.targetBranch?.trim() || baseBranch;
+    const taskRepoInputs = buildTaskRepoInputs({
+      projectRepos,
+      body,
+      baseBranch,
+      workBranch,
+      targetBranch
+    });
+
+    // 任务与其前置依赖、task_repos 须原子入库：任一校验失败应整体回滚。
     const client = await getPool().connect();
     try {
       await client.query("BEGIN");
@@ -153,8 +174,8 @@ export async function POST(request: NextRequest) {
         title: body.title.trim(),
         description: body.description.trim(),
         baseBranch,
-        workBranch: body.workBranch?.trim() || defaultWorkBranch(body.title),
-        targetBranch: body.targetBranch?.trim() || baseBranch,
+        workBranch,
+        targetBranch,
         submitMode,
         autoMergePr,
         autoReply,
@@ -163,6 +184,7 @@ export async function POST(request: NextRequest) {
         scheduledAt
       });
       await addTaskDependencies(client, task.id, dependsOn);
+      await createTaskRepos(client, task.id, taskRepoInputs);
       await client.query("COMMIT");
       publishRelay({
         channel: projectChannel(task.project_id),

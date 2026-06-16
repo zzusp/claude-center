@@ -1,15 +1,16 @@
 "use client";
 
-import type { Task, TaskPredecessor } from "@claude-center/db";
-import { Activity, Check, FileText, Info, ListChecks, RotateCcw } from "lucide-react";
+import type { Task, TaskPredecessor, TaskRepo } from "@claude-center/db";
+import { Activity, Check, FileText, GitPullRequest, Info, ListChecks, RotateCcw } from "lucide-react";
 import { Empty, KvRow, StatusBadge, fmtTime, postJson } from "./shared";
 import { Section, type LifecycleStep } from "./task-detail-shared";
 import { useAsyncAction } from "../lib/use-async-action";
 import { useState } from "react";
 
-// 概览 Tab：高亮验收行（success 态） + 描述/错误 + 信息 + 前置任务。
+// 概览 Tab：高亮验收行（success 态） + 描述/错误 + 信息 + 前置任务 + 多仓 PR 表。
 export function OverviewTab({
   task,
+  taskRepos,
   lifecycle,
   modelLabel,
   depIds,
@@ -18,6 +19,7 @@ export function OverviewTab({
   onReviewed
 }: {
   task: Task;
+  taskRepos: TaskRepo[];
   lifecycle: LifecycleStep[];
   modelLabel: string;
   depIds: string[];
@@ -25,6 +27,9 @@ export function OverviewTab({
   canReview: boolean;
   onReviewed: () => void | Promise<void>;
 }) {
+  // 多仓：active 仓 > 1 时改用多仓 PR 表；单仓仍走老 KvRow PR 单条（向后兼容观感）。
+  const activeRepos = taskRepos.filter((r) => r.sub_status !== "skipped");
+  const isMultiRepo = activeRepos.length > 1;
   return (
     <div className="detail-grid">
       <div className="detail-main">
@@ -40,6 +45,12 @@ export function OverviewTab({
           <p className="detail-desc">{task.description || "（无描述）"}</p>
           {task.error_message ? <div className="error-box">{task.error_message}</div> : null}
         </Section>
+
+        {isMultiRepo ? (
+          <Section icon={<GitPullRequest size={15} />} title="多仓 PR / 提交状态">
+            <MultiRepoTable taskRepos={taskRepos} />
+          </Section>
+        ) : null}
 
         <Section icon={<Activity size={15} />} title="执行进度">
           <div className="lifecycle-bar">
@@ -74,7 +85,7 @@ export function OverviewTab({
             <KvRow k="执行模型" v={modelLabel} />
             <KvRow k="Worker" v={task.worker_name ?? "—"} />
             <KvRow k="Session ID" v={task.claude_session_id ?? "—"} mono />
-            {task.pr_url ? (
+            {task.pr_url && !isMultiRepo ? (
               <KvRow
                 k="PR"
                 v={
@@ -84,6 +95,7 @@ export function OverviewTab({
                 }
               />
             ) : null}
+            {isMultiRepo ? <KvRow k="参与仓" v={`${activeRepos.length} 个（详见左侧表格）`} /> : null}
             {task.scheduled_at ? (
               <KvRow
                 k="定时发布"
@@ -121,6 +133,66 @@ export function OverviewTab({
       </aside>
     </div>
   );
+}
+
+// 多仓 PR 表：每行展示仓名 / 子状态 / base→target / PR / 错误。
+function MultiRepoTable({ taskRepos }: { taskRepos: TaskRepo[] }) {
+  return (
+    <div className="table-wrap">
+      <table className="table">
+        <thead>
+          <tr>
+            <th>仓</th>
+            <th>状态</th>
+            <th>分支</th>
+            <th>PR</th>
+          </tr>
+        </thead>
+        <tbody>
+          {taskRepos.map((r) => (
+            <tr key={r.id}>
+              <td>
+                <div className="cell-stack">
+                  <span className="t-title">{r.role === "main" ? "主仓" : r.relative_path}</span>
+                  {r.role === "sub" ? <span className="t-meta mono">{r.relative_path}</span> : null}
+                </div>
+              </td>
+              <td>
+                <span className="tag">{subStatusLabel(r.sub_status)}</span>
+                {r.error_message ? (
+                  <div className="t-meta" style={{ color: "var(--danger, #d33)" }}>{r.error_message.slice(0, 200)}</div>
+                ) : null}
+              </td>
+              <td className="mono" style={{ fontSize: "0.85em" }}>
+                {r.work_branch || "—"} → {r.target_branch || "—"}
+              </td>
+              <td>
+                {r.pr_url ? (
+                  <a href={r.pr_url} target="_blank" rel="noreferrer">PR</a>
+                ) : (
+                  <span className="t-meta">—</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function subStatusLabel(s: TaskRepo["sub_status"]): string {
+  switch (s) {
+    case "pending": return "待执行";
+    case "no_changes": return "无改动";
+    case "committed": return "已提交";
+    case "pushed": return "已推送";
+    case "pr_created": return "PR 已建";
+    case "pr_merged": return "PR 已合并";
+    case "skipped": return "跳过";
+    case "failed": return "失败";
+    default: return s;
+  }
 }
 
 // 人工验收操作：accept / reject（打回需填意见，Worker 续接重跑）。

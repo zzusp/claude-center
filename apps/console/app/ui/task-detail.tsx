@@ -1,6 +1,6 @@
 "use client";
 
-import type { Task, TaskEvent, TaskPredecessor } from "@claude-center/db";
+import type { Task, TaskEvent, TaskPredecessor, TaskRepo } from "@claude-center/db";
 import { ChevronLeft, ExternalLink, Pencil, RefreshCw, RotateCcw, Send, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -33,6 +33,9 @@ export default function TaskDetailPage({
   const [task, setTask] = useState<Task>(initialTask);
   const [predecessors, setPredecessors] = useState<TaskPredecessor[]>(initialPredecessors);
   const [events, setEvents] = useState<TaskEvent[]>([]);
+  // 多仓任务（spec docs/spec/task-multi-repo.md）：每个仓的执行快照（sub_status / pr_url / 错误），
+  // 单仓任务退化为 1 行 main，行为对老 UI 无差别。
+  const [taskRepos, setTaskRepos] = useState<TaskRepo[]>([]);
   const [publishing, setPublishing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -48,10 +51,11 @@ export default function TaskDetailPage({
     try {
       const response = await fetch(`/api/tasks/${taskId}`, { cache: "no-store" });
       if (!response.ok) return;
-      const data = (await response.json()) as { task: Task; predecessors: TaskPredecessor[]; events: TaskEvent[] };
+      const data = (await response.json()) as { task: Task; predecessors: TaskPredecessor[]; events: TaskEvent[]; taskRepos?: TaskRepo[] };
       setTask(data.task);
       setPredecessors(data.predecessors);
       setEvents(data.events);
+      setTaskRepos(data.taskRepos ?? []);
     } catch {
       /* 轮询失败静默，下次重试 */
     }
@@ -62,11 +66,12 @@ export default function TaskDetailPage({
       try {
         const response = await fetch(`/api/tasks/${taskId}`, { cache: "no-store" });
         if (!response.ok) return;
-        const data = (await response.json()) as { task: Task; predecessors: TaskPredecessor[]; events: TaskEvent[] };
+        const data = (await response.json()) as { task: Task; predecessors: TaskPredecessor[]; events: TaskEvent[]; taskRepos?: TaskRepo[] };
         if (isActive()) {
           setTask(data.task);
           setPredecessors(data.predecessors);
           setEvents(data.events);
+          setTaskRepos(data.taskRepos ?? []);
         }
       } catch {
         /* 轮询失败静默，下次重试 */
@@ -324,6 +329,7 @@ export default function TaskDetailPage({
         {activeTab === "overview" ? (
           <OverviewTab
             task={task}
+            taskRepos={taskRepos}
             lifecycle={lifecycle}
             modelLabel={modelLabel}
             depIds={depIds}

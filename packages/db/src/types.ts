@@ -102,6 +102,54 @@ export type Worker = {
   active_task_count?: number;
 };
 
+// 项目仓清单（多仓任务支持，见 docs/spec/task-multi-repo.md）：
+// 主仓在 projects 表之外另有一行 role='main' 的 project_repos 镜像，便于循环处理；
+// 子仓 role='sub'，relative_path 是相对主仓的 POSIX 路径。
+export type ProjectRepoRole = "main" | "sub";
+
+export type ProjectRepo = {
+  id: string;
+  project_id: string;
+  role: ProjectRepoRole;
+  // 主仓恒 '.'，子仓为非空相对路径（POSIX 风格）
+  relative_path: string;
+  repo_url: string;
+  default_branch: string;
+  display_name: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
+};
+
+// 单仓在某任务上的执行快照与子态。
+// 强语义聚合：任一仓 'failed' → 任务整体 failed；详见 spec 第 5/7 节。
+export type TaskRepoSubStatus =
+  | "pending"
+  | "no_changes"
+  | "committed"
+  | "pushed"
+  | "pr_created"
+  | "pr_merged"
+  | "skipped"
+  | "failed";
+
+export type TaskRepo = {
+  id: string;
+  task_id: string;
+  project_repo_id: string;
+  role: ProjectRepoRole;
+  relative_path: string;
+  base_branch: string;
+  work_branch: string;
+  target_branch: string;
+  sub_status: TaskRepoSubStatus;
+  pr_url: string | null;
+  error_message: string | null;
+  last_sync_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type WorkerProjectLink = {
   id: string;
   worker_id: string;

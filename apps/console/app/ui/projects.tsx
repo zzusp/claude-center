@@ -1,8 +1,8 @@
 "use client";
 
-import type { Project } from "@claude-center/db";
+import type { Project, ProjectRepo } from "@claude-center/db";
 import { FolderGit2, GitBranch, Pencil, Plus, Save, Trash2 } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { Empty, fmtTime } from "./shared";
 import { Drawer, useConfirm } from "./controls";
 
@@ -246,29 +246,191 @@ function ProjectForm({
   }
 
   return (
-    <form className="form" onSubmit={handleSubmit}>
-      <div className="field">
-        <label className="field-label">项目名</label>
-        <input name="name" defaultValue={project?.name ?? ""} placeholder="claude-center" required />
+    <>
+      <form className="form" onSubmit={handleSubmit}>
+        <div className="field">
+          <label className="field-label">项目名</label>
+          <input name="name" defaultValue={project?.name ?? ""} placeholder="claude-center" required />
+        </div>
+        <div className="field">
+          <label className="field-label">Git 仓库地址（主仓）</label>
+          <input name="repoUrl" defaultValue={project?.repo_url ?? ""} placeholder="https://github.com/acme/repo.git" required />
+        </div>
+        <div className="field">
+          <label className="field-label">默认分支</label>
+          <input name="defaultBranch" defaultValue={project?.default_branch ?? "main"} placeholder="main" />
+        </div>
+        <div className="field">
+          <label className="field-label">描述</label>
+          <textarea name="description" defaultValue={project?.description ?? ""} rows={3} placeholder="项目说明" />
+        </div>
+        {error ? <div className="error-box">{error}</div> : null}
+        <button className="btn btn-primary" type="submit" disabled={busy}>
+          {mode === "create" ? <Plus size={16} /> : <Save size={16} />}
+          {mode === "create" ? "创建项目" : "保存修改"}
+        </button>
+      </form>
+      {mode === "edit" && project ? <ProjectSubReposEditor projectId={project.id} /> : null}
+    </>
+  );
+}
+
+// 项目子仓清单编辑（多仓任务，spec docs/spec/task-multi-repo.md）：
+// - 主仓由 projects 表镜像维护（不在此处管理）
+// - 子仓列表 fetch /api/projects/[id]/repos，过滤 role='sub' 后展示并允许增删改
+// - 保存按钮 PUT /api/projects/[id]/repos 整批替换；删除有任务引用的子仓后端返回 409
+// 子仓在主仓本地路径下的 relative_path **必须** 被主仓 .gitignore 忽略；UI 加一行提示
+function ProjectSubReposEditor({ projectId }: { projectId: string }) {
+  const [subs, setSubs] = useState<Array<{ id?: string; relativePath: string; repoUrl: string; defaultBranch: string; displayName: string }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    fetch(`/api/projects/${projectId}/repos`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error();
+        const data = (await response.json()) as { repos: ProjectRepo[] };
+        if (!active) return;
+        setSubs(
+          data.repos
+            .filter((r) => r.role === "sub")
+            .map((r) => ({
+              id: r.id,
+              relativePath: r.relative_path,
+              repoUrl: r.repo_url,
+              defaultBranch: r.default_branch,
+              displayName: r.display_name
+            }))
+        );
+        setLoading(false);
+      })
+      .catch(() => {
+        if (active) {
+          setError("拉取子仓清单失败");
+          setLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [projectId]);
+
+  function add() {
+    setSubs([...subs, { relativePath: "", repoUrl: "", defaultBranch: "main", displayName: "" }]);
+  }
+  function removeAt(idx: number) {
+    setSubs(subs.filter((_, i) => i !== idx));
+  }
+  function patchAt(idx: number, p: Partial<(typeof subs)[number]>) {
+    setSubs(subs.map((s, i) => (i === idx ? { ...s, ...p } : s)));
+  }
+
+  async function handleSave() {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const response = await fetch(`/api/projects/${projectId}/repos`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subs: subs.map((s, i) => ({
+            relativePath: s.relativePath.trim(),
+            repoUrl: s.repoUrl.trim(),
+            defaultBranch: s.defaultBranch.trim() || "main",
+            displayName: s.displayName.trim() || s.relativePath.trim(),
+            position: i + 1
+          }))
+        })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? `保存失败：${response.status}`);
+      }
+      const data = (await response.json()) as { repos: ProjectRepo[] };
+      setSubs(
+        data.repos
+          .filter((r) => r.role === "sub")
+          .map((r) => ({
+            id: r.id,
+            relativePath: r.relative_path,
+            repoUrl: r.repo_url,
+            defaultBranch: r.default_branch,
+            displayName: r.display_name
+          }))
+      );
+      setNote("已保存子仓清单");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (loading) {
+    return <div className="t-meta" style={{ marginTop: 16 }}>正在加载子仓清单…</div>;
+  }
+
+  return (
+    <div style={{ marginTop: 24, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+      <div className="section-head">
+        <div>
+          <h3 className="section-title" style={{ fontSize: "1em" }}>子仓清单（多仓任务）</h3>
+          <span className="section-sub">
+            子仓物理上位于主仓本地路径下；relative_path 必须已被主仓 <code>.gitignore</code> 忽略
+          </span>
+        </div>
+        <button type="button" className="btn btn-sm" onClick={add} disabled={busy}>
+          <Plus size={14} />
+          新增子仓
+        </button>
       </div>
-      <div className="field">
-        <label className="field-label">Git 仓库地址</label>
-        <input name="repoUrl" defaultValue={project?.repo_url ?? ""} placeholder="https://github.com/acme/repo.git" required />
-      </div>
-      <div className="field">
-        <label className="field-label">默认分支</label>
-        <input name="defaultBranch" defaultValue={project?.default_branch ?? "main"} placeholder="main" />
-      </div>
-      <div className="field">
-        <label className="field-label">描述</label>
-        <textarea name="description" defaultValue={project?.description ?? ""} rows={3} placeholder="项目说明" />
-      </div>
-      {error ? <div className="error-box">{error}</div> : null}
-      <button className="btn btn-primary" type="submit" disabled={busy}>
-        {mode === "create" ? <Plus size={16} /> : <Save size={16} />}
-        {mode === "create" ? "创建项目" : "保存修改"}
+      {subs.length === 0 ? (
+        <div className="t-meta">暂无子仓（项目仅含主仓）</div>
+      ) : (
+        <div>
+          {subs.map((s, idx) => (
+            <div key={s.id ?? `new-${idx}`} style={{ border: "1px solid var(--border)", borderRadius: 6, padding: 8, marginBottom: 8 }}>
+              <div className="form-row">
+                <div className="field">
+                  <label className="field-label">相对主仓路径</label>
+                  <input value={s.relativePath} onChange={(e) => patchAt(idx, { relativePath: e.target.value })} placeholder="packages/widgets-lib" disabled={busy} />
+                </div>
+                <div className="field">
+                  <label className="field-label">显示名（可选）</label>
+                  <input value={s.displayName} onChange={(e) => patchAt(idx, { displayName: e.target.value })} placeholder={s.relativePath || "widgets"} disabled={busy} />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="field">
+                  <label className="field-label">仓库地址</label>
+                  <input value={s.repoUrl} onChange={(e) => patchAt(idx, { repoUrl: e.target.value })} placeholder="https://github.com/acme/sub.git" disabled={busy} />
+                </div>
+                <div className="field">
+                  <label className="field-label">默认分支</label>
+                  <input value={s.defaultBranch} onChange={(e) => patchAt(idx, { defaultBranch: e.target.value })} placeholder="main" disabled={busy} />
+                </div>
+              </div>
+              <div className="row-actions">
+                <button type="button" className="icon-btn danger" title="删除" onClick={() => removeAt(idx)} disabled={busy}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {error ? <div className="error-box" style={{ marginTop: 8 }}>{error}</div> : null}
+      {note ? <div className="t-meta" style={{ marginTop: 8 }}>{note}</div> : null}
+      <button type="button" className="btn btn-primary btn-sm" onClick={handleSave} disabled={busy} style={{ marginTop: 8 }}>
+        <Save size={14} />
+        保存子仓清单
       </button>
-    </form>
+    </div>
   );
 }
 

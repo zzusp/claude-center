@@ -53,6 +53,9 @@ export function runCommand(
     shell?: boolean;
     // 暴露子进程句柄给调用方（取消在途任务时 runner 据此杀进程树）。
     onSpawn?: (child: ChildProcess) => void;
+    // 把这些非零退出码也视为成功 resolve（少数命令用退出码表达状态而非错误，
+    // 如 `git check-ignore -q` 退出 1 表示「未被忽略」）。默认仅 0 算成功。
+    acceptExitCodes?: number[];
   } = {}
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
@@ -112,7 +115,8 @@ export function runCommand(
         stderr
       };
 
-      if (result.exitCode === 0) {
+      const accepted = options.acceptExitCodes?.includes(result.exitCode) ?? false;
+      if (result.exitCode === 0 || accepted) {
         resolve(result);
       } else {
         reject(new Error(formatCommandFailure(result)));

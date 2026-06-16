@@ -1,20 +1,26 @@
 import {
+  createTaskRepos,
   deleteTask,
+  deleteTaskRepos,
   getPool,
   getTaskWithDeps,
+  listProjectRepos,
   listTaskEvents,
+  listTaskRepos,
   publishTask,
   reactivateTask,
   requestTaskCancellation,
   requestTaskRetry,
   unpublishTask,
-  updateTask
+  updateTask,
+  type TaskRepoInput
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../../lib/session";
 import { requireTaskAccess } from "../../../lib/access";
 import { errorResponse, badRequest } from "../../../lib/api";
 import { projectChannel, publishRelay } from "../../../lib/relay-publish";
+import { buildTaskRepoInputs, type TaskRepoUserInput } from "../../../lib/task-repos-input";
 import type { Task, TaskModel, TaskSubmitMode } from "@claude-center/db";
 
 export const dynamic = "force-dynamic";
@@ -52,8 +58,11 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     if (!detail) {
       return NextResponse.json({ error: "任务不存在" }, { status: 404 });
     }
-    const events = await listTaskEvents(getPool(), id);
-    return NextResponse.json({ ...detail, events });
+    const [events, taskRepos] = await Promise.all([
+      listTaskEvents(getPool(), id),
+      listTaskRepos(getPool(), id)
+    ]);
+    return NextResponse.json({ ...detail, events, taskRepos });
   } catch (error) {
     return errorResponse(error);
   }
@@ -83,6 +92,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       autoDecisionHints?: string;
       model?: TaskModel;
       scheduledAt?: string | null;
+      // 多仓任务（spec docs/spec/task-multi-repo.md）：编辑时整批替换 task_repos。
+      // 缺省时按主仓单行重新生成、其它子仓 skipped（兼容旧前端）。
+      taskRepos?: TaskRepoUserInput[];
     };
 
     // 项目隔离：非 admin 只能操作分配给自己项目下的任务。
@@ -114,21 +126,61 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         return badRequest("缺少必要字段");
       }
       const autoReply = body.autoReply === true;
-      const task = await updateTask(getPool(), id, {
-        title: body.title,
-        description: body.description,
-        baseBranch: body.baseBranch,
-        workBranch: body.workBranch,
-        targetBranch: body.targetBranch,
-        submitMode: body.submitMode,
-        autoMergePr: body.autoMergePr ?? false,
-        autoReply,
-        autoDecisionHints: autoReply ? (body.autoDecisionHints ?? "").trim() : "",
-        model: body.model,
-        scheduledAt: body.scheduledAt ?? null
-      });
-      if (!task) {
-        return NextResponse.json({ error: "任务不存在或已开始执行，无法编辑" }, { status: 409 });
+      // 多仓任务：在同事务里 updateTask + 整批替换 task_repos。先取项目仓清单再生成新 inputs。
+      const client = await getPool().connect();
+      let task: Task | null = null;
+      try {
+        await client.query("BEGIN");
+        task = await updateTask(client, id, {
+          title: body.title,
+          description: body.description,
+          baseBranch: body.baseBranch,
+          workBranch: body.workBranch,
+          targetBranch: body.targetBranch,
+          submitMode: body.submitMode,
+          autoMergePr: body.autoMergePr ?? false,
+          autoReply,
+          autoDecisionHints: autoReply ? (body.autoDecisionHints ?? "").trim() : "",
+          model: body.model,
+          scheduledAt: body.scheduledAt ?? null
+        });
+        if (!task) {
+          await client.query("ROLLBACK");
+          return NextResponse.json({ error: "任务不存在或已开始执行，无法编辑" }, { status: 409 });
+        }
+        // task_repos 处理策略：
+        // - body.taskRepos 显式数组 → 整批替换（用户在 UI 上编辑过多仓配置）
+        // - body.taskRepos === undefined → 仅同步主仓行的 base/work/target（保留子仓配置不动）
+        // 这样编辑表单（暂不带多仓 UI）保存时不会把子仓配置全清成 skipped。
+        if (Array.isArray(body.taskRepos)) {
+          const projectRepos = await listProjectRepos(client, task.project_id);
+          const taskRepoInputs = buildTaskRepoInputs({
+            projectRepos,
+            body,
+            baseBranch: body.baseBranch,
+            workBranch: body.workBranch,
+            targetBranch: body.targetBranch
+          });
+          await deleteTaskRepos(client, task.id);
+          await createTaskRepos(client, task.id, taskRepoInputs);
+        } else {
+          // 仅同步主仓行（task 表 base/work/target 是主仓镜像，task_repos main 行必须保持一致）
+          await client.query(
+            `UPDATE task_repos
+                SET base_branch = $2,
+                    work_branch = $3,
+                    target_branch = $4,
+                    updated_at = now()
+              WHERE task_id = $1 AND role = 'main'`,
+            [task.id, body.baseBranch, body.workBranch, body.targetBranch]
+          );
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
       }
       publishTaskUpserted(task);
       return NextResponse.json({ task });

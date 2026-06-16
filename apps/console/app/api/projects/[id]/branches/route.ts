@@ -1,4 +1,4 @@
-import { getPool, getProject } from "@claude-center/db";
+import { getPool, getProject, listProjectRepos } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -13,7 +13,8 @@ export const dynamic = "force-dynamic";
 
 // 根据项目仓库地址远程拉取分支列表，供发布任务时搜索选择签出分支 / PR 目标分支。
 // 不克隆仓库，只用 `git ls-remote --heads` 读取远端 refs；默认分支置顶。
-export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+// 多仓支持：?repo=<project_repos.id> 拉指定仓的分支；缺省走项目主仓（兼容老前端）。
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requirePermission("task.create");
   if (gate instanceof NextResponse) {
     return gate;
@@ -26,14 +27,29 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     if (denied) {
       return denied;
     }
-    const project = await getProject(getPool(), id);
-    if (!project) {
-      return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    const repoIdParam = request.nextUrl.searchParams.get("repo")?.trim();
+    let repoUrl: string;
+    let defaultBranch: string;
+    if (repoIdParam) {
+      const repos = await listProjectRepos(getPool(), id);
+      const repo = repos.find((r) => r.id === repoIdParam);
+      if (!repo) {
+        return NextResponse.json({ error: "指定的仓不属于该项目" }, { status: 404 });
+      }
+      repoUrl = repo.repo_url;
+      defaultBranch = repo.default_branch;
+    } else {
+      const project = await getProject(getPool(), id);
+      if (!project) {
+        return NextResponse.json({ error: "Project not found" }, { status: 404 });
+      }
+      repoUrl = project.repo_url;
+      defaultBranch = project.default_branch;
     }
 
     let stdout: string;
     try {
-      const result = await execFileAsync("git", ["ls-remote", "--heads", project.repo_url], {
+      const result = await execFileAsync("git", ["ls-remote", "--heads", repoUrl], {
         timeout: 20_000,
         windowsHide: true,
         maxBuffer: 4 * 1024 * 1024,
@@ -56,8 +72,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 
     const unique = Array.from(new Set(branches));
     unique.sort((a, b) => {
-      if (a === project.default_branch) return -1;
-      if (b === project.default_branch) return 1;
+      if (a === defaultBranch) return -1;
+      if (b === defaultBranch) return 1;
       return a.localeCompare(b);
     });
 
