@@ -2831,14 +2831,25 @@ a.dep-item:hover {
   border-color: var(--running);
   background: var(--surface-1);
 }
-.chat-filter > select {
-  padding: 4px 6px;
-  font-size: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
-  color: var(--text-1);
+.chat-filter .chat-filter-select {
   min-width: 0;
+}
+.chat-filter .chat-filter-select .cc-select-trigger {
+  min-height: 30px;
+  padding: 5px 8px;
+  font-size: 12px;
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+}
+.chat-filter .chat-filter-select .cc-select-trigger:hover:not(:disabled) {
+  background: var(--surface-1);
+}
+.chat-filter .chat-filter-select.open .cc-select-trigger {
+  background: var(--surface-1);
+}
+.chat-filter .chat-filter-select .cc-select-caret {
+  width: 13px;
+  height: 13px;
 }
 .chat-filter > .icon-btn {
   align-self: center;
