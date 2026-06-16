@@ -149,6 +149,7 @@ function TasksView({
   }, [status, projectId, workerId, debouncedQ, dir, pageSize]);
 
   // worker 下拉数据：取全集仅用于过滤展示，离线 worker 也保留（历史任务仍要可定位）。
+  // worker 注册/离线属低频事件，挂载拉一次即可，不必因任意 relay 事件被动刷新（Infinity = 关闭所有自动刷新源）。
   usePolling(async (isActive) => {
     try {
       const response = await fetch("/api/workers", { cache: "no-store" });
@@ -158,7 +159,7 @@ function TasksView({
     } catch {
       /* 轮询失败静默 */
     }
-  }, [], 6000);
+  }, [], Infinity);
 
   usePolling(
     async (isActive) => {

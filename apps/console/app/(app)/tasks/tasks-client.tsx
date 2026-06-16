@@ -18,6 +18,9 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
   const [busy, setBusy] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // 项目下拉 + 候选任务（"发布任务"抽屉里的依赖任务下拉）都是低频变化数据，
+  // 首屏拉一次即可、不需要因任意 relay 事件被动刷新（Infinity 间隔即「关闭所有自动刷新源」，
+  // 见 use-polling.ts 的拦截逻辑：既不挂 setInterval，也不订阅 relay listener）。
   usePolling(async (isActive) => {
     try {
       const [pr, tr] = await Promise.all([
@@ -37,7 +40,7 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
     } catch {
       // 轮询兜底，单次失败忽略
     }
-  }, [], 8000);
+  }, [], Infinity);
 
   async function handleTaskSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

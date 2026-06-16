@@ -48,32 +48,40 @@ export function usePolling(
       }
     };
 
-    // 首次挂载立即跑一次（快速首屏），然后在 0~intervalMs 随机延迟后启动周期定时器。
-    // 随机抖动打散多个同页面 usePolling 的同步漂移（"雷鸣羊群"），让各轮询错开触发。
+    // 首次挂载立即跑一次（快速首屏）。后续刷新有两个来源：定时器 + relay 推送。
+    // intervalMs 非有限正数（Infinity / NaN / <=0）视为「完全关闭自动刷新」——两个来源都不挂，
+    // 只剩首次 + deps 变化触发；用于不希望被任意事件刷的下拉/列表（如任务调度页主列表与下拉数据）。
+    // 注意：setInterval(fn, Infinity) 在 HTML 规范下会被钳到 ≤1ms，叠加 inflight 锁会变成"上一个回完立刻发下一个"
+    // 的请求风暴；relay 监听又会让任意频道事件穿过来触发刷新——两个都得在 Infinity 时拦掉。
     void run();
     let intervalTimer: number | undefined;
-    const jitterTimer = window.setTimeout(() => {
-      intervalTimer = window.setInterval(() => void run(), intervalMs);
-    }, Math.floor(Math.random() * intervalMs));
+    let jitterTimer: number | undefined;
+    let unregister: (() => void) | undefined;
+    if (Number.isFinite(intervalMs) && intervalMs > 0) {
+      // 随机抖动打散多个同页面 usePolling 的同步漂移（"雷鸣羊群"），让各轮询错开触发。
+      jitterTimer = window.setTimeout(() => {
+        intervalTimer = window.setInterval(() => void run(), intervalMs);
+      }, Math.floor(Math.random() * intervalMs));
 
-    // 快线：relay 事件密集到达时合并到 200ms 窗口内只跑 1 次。窗内首事件起表，后续吞掉。
-    const unregister = registerRelayListener(() => {
-      if (!active || coalesceTimer !== null) return;
-      coalesceTimer = window.setTimeout(() => {
-        coalesceTimer = null;
-        void run();
-      }, RELAY_COALESCE_MS);
-    });
+      // 快线：relay 事件密集到达时合并到 200ms 窗口内只跑 1 次。窗内首事件起表，后续吞掉。
+      unregister = registerRelayListener(() => {
+        if (!active || coalesceTimer !== null) return;
+        coalesceTimer = window.setTimeout(() => {
+          coalesceTimer = null;
+          void run();
+        }, RELAY_COALESCE_MS);
+      });
+    }
 
     return () => {
       active = false;
-      window.clearTimeout(jitterTimer);
+      if (jitterTimer !== undefined) window.clearTimeout(jitterTimer);
       if (intervalTimer !== undefined) window.clearInterval(intervalTimer);
       if (coalesceTimer !== null) {
         window.clearTimeout(coalesceTimer);
         coalesceTimer = null;
       }
-      unregister();
+      if (unregister !== undefined) unregister();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
