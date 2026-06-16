@@ -5,7 +5,7 @@ import { ChevronLeft, ExternalLink, Pencil, RefreshCw, RotateCcw, Send, Trash2, 
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { StatusBadge, fmtTime } from "./shared";
-import { Drawer, useConfirm } from "./controls";
+import { FormModal, useConfirm } from "./controls";
 import { usePolling } from "../lib/use-polling";
 import { DETAIL_TABS, type DetailTabKey } from "./task-detail-shared";
 import { OverviewTab } from "./task-detail-overview";
@@ -379,7 +379,7 @@ export default function TaskDetailPage({
         ) : null}
       </div>
 
-      <Drawer
+      <FormModal
         open={editing}
         title={`编辑 ${task.title}`}
         onClose={() => setEditing(false)}
@@ -395,7 +395,7 @@ export default function TaskDetailPage({
             onCancel={() => setEditing(false)}
           />
         ) : null}
-      </Drawer>
+      </FormModal>
 
       {dialog}
     </div>

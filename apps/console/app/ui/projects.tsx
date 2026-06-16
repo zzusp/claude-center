@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { Fragment, FormEvent, useEffect, useMemo, useState } from "react";
 import { basenameFromRepoUrl, Empty, fmtTime } from "./shared";
-import { Modal, useConfirm } from "./controls";
+import { FormModal, useConfirm } from "./controls";
 
 // 列表项：Project + 该项目的子仓清单（由 /api/projects 一次聚合）。
 export type ProjectListItem = Project & { subRepos: ProjectRepo[] };
@@ -128,8 +128,8 @@ function ProjectsView({
       : modal?.mode === "subs"
         ? `管理子仓 · ${modal.project.name}`
         : "";
-  // 子仓管理表单字段更多，弹窗用更宽的 modal-wide 变体。
-  const modalSize: "form" | "wide" = modal?.mode === "subs" ? "wide" : "form";
+  // 子仓管理表单字段更多，弹窗用更宽的 lg 变体（720px）；项目编辑表单较短走 md（560px）。
+  const modalSize: "md" | "lg" = modal?.mode === "subs" ? "lg" : "md";
 
   function closeModal() {
     setCreating(false);
@@ -306,7 +306,7 @@ function ProjectsView({
         </aside>
       </div>
 
-      <Modal open={modalOpen} title={modalTitle} size={modalSize} onClose={closeModal}>
+      <FormModal open={modalOpen} title={modalTitle} size={modalSize} onClose={closeModal}>
         {creating ? (
           <ProjectForm
             mode="create"
@@ -338,7 +338,7 @@ function ProjectsView({
             }}
           />
         ) : null}
-      </Modal>
+      </FormModal>
 
       {dialog}
     </>
