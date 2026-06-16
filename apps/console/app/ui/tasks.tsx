@@ -22,13 +22,14 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
-  Empty, KvRow, StatusBadge, StatusDot,
+  Empty, KvRow, STATUS_META, StatusBadge, StatusDot,
   fmtDateTime, fmtTime, metaOf, postJson, type Tone
 } from "./shared";
 import {
   ROLE_LABEL, ROLE_OPTIONS, SPARK_CAP, TONE_COLOR, emptyOverview, fmtAgo, syncAgo,
   type CurrentUser, type Health, type ViewKey
 } from "./dashboard-shared";
+import { Donut } from "./overview-widgets";
 import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
 import { Drawer, Select, useConfirm } from "./controls";
 import { TaskEditForm } from "./task-detail";
@@ -40,7 +41,8 @@ type ListResponse = { tasks: Task[]; total: number; page: number; pageSize: numb
 type TaskStatsPayload = {
   total: number;
   byStatus: Record<string, number>;
-  today: { finished: number; accepted: number; rejected: number; avgDurationMs: number | null };
+  byProject: { id: string; name: string; n: number }[];
+  today: { created: number; finished: number; accepted: number; rejected: number; avgDurationMs: number | null };
 };
 
 // 从 GitHub PR URL 抽 PR 号；非标准格式（含手填）返回 null，UI 退回 ExternalLink。
@@ -455,21 +457,86 @@ function TasksView({
   );
 }
 
-// 任务流右侧栏：任务概览 / 状态分布 / 今日统计。stats 由父组件 TasksView 随任务列表刷新一并传入。
+// 项目饼图色板：按项目顺序循环取色（与 Tone 同源 CSS 变量，与状态色互不冲突）。
+const PROJECT_PIE_COLORS = [
+  "var(--running)",
+  "var(--success)",
+  "var(--merged)",
+  "var(--waiting)",
+  "var(--scheduled)",
+  "var(--draft)",
+  "var(--review)",
+  "var(--pending)",
+  "var(--rejected)",
+  "var(--cancelled)"
+];
+
+// 极坐标→笛卡尔（pie sector 起止点）。angle 单位：度，0° 在 12 点钟方向、顺时针递增。
+function polar(cx: number, cy: number, r: number, deg: number): [number, number] {
+  const rad = ((deg - 90) * Math.PI) / 180;
+  return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)];
+}
+
+// 任务概览饼图：按项目划分（实心扇形 + 右侧 legend）。0 项目时调用方走 Empty。
+function ProjectPie({ data, total }: { data: { id: string; name: string; n: number }[]; total: number }) {
+  const size = 128;
+  const r = size / 2;
+  const cx = r;
+  const cy = r;
+
+  // 单一项目时 path 退化（>=360° 会算出同一点导致不可见），用整圆替代。
+  const single = data.length === 1;
+  let acc = 0;
+  return (
+    <div className="donut-wrap">
+      <div className="pie-center" style={{ width: size, height: size }}>
+        <svg className="pie" width={size} height={size}>
+          {single ? (
+            <circle cx={cx} cy={cy} r={r} fill={PROJECT_PIE_COLORS[0]} />
+          ) : (
+            data.map((row, i) => {
+              const start = (acc / total) * 360;
+              acc += row.n;
+              const end = (acc / total) * 360;
+              const [x1, y1] = polar(cx, cy, r, start);
+              const [x2, y2] = polar(cx, cy, r, end);
+              const large = end - start > 180 ? 1 : 0;
+              const d = `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`;
+              return <path key={row.id} d={d} fill={PROJECT_PIE_COLORS[i % PROJECT_PIE_COLORS.length]} />;
+            })
+          )}
+        </svg>
+      </div>
+      <div className="legend">
+        {data.map((row, i) => (
+          <div className="legend-item" key={row.id}>
+            <span className="dot" style={{ background: PROJECT_PIE_COLORS[i % PROJECT_PIE_COLORS.length] }} />
+            <span className="legend-label" title={row.name}>{row.name}</span>
+            <span className="legend-val">{row.n}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// 任务流右侧栏：任务概览（项目饼图） / 状态分布（环状图） / 今日统计（三列）。
+// stats 由父组件 TasksView 随任务列表刷新一并传入。
 function TasksSidebar({ stats }: { stats: TaskStatsPayload | null }) {
-  const byStatus = stats?.byStatus ?? {};
   const total = stats?.total ?? 0;
-  const running = (byStatus.running ?? 0) + (byStatus.claimed ?? 0);
-  const successCount = (byStatus.accepted ?? 0) + (byStatus.merged ?? 0) + (byStatus.success ?? 0);
-  const failed = (byStatus.failed ?? 0) + (byStatus.cancelled ?? 0);
+  const byStatus = stats?.byStatus ?? {};
+  const byProject = stats?.byProject ?? [];
 
-  // 状态分布：按 STATUS_ORDER 排序，过滤 0 计数；max 用于横条比例。
-  const distribution = STATUS_ORDER
+  // 状态分布：按 STATUS_ORDER 排序、过滤 0 计数；段 tone 沿用 STATUS_META。
+  const statusSegments = STATUS_ORDER
     .map((key) => ({ key, n: byStatus[key] ?? 0 }))
-    .filter((row) => row.n > 0);
-  const maxN = distribution.reduce((acc, row) => Math.max(acc, row.n), 0);
+    .filter((row) => row.n > 0)
+    .map((row) => {
+      const meta = metaOf(row.key);
+      return { status: row.key, label: meta.label, tone: meta.tone, value: row.n };
+    });
 
-  const today = stats?.today ?? { finished: 0, accepted: 0, rejected: 0, avgDurationMs: null };
+  const today = stats?.today ?? { created: 0, finished: 0, accepted: 0, rejected: 0, avgDurationMs: null };
   const completionRate = today.finished > 0
     ? `${Math.round((today.accepted / today.finished) * 1000) / 10}%`
     : "—";
@@ -482,24 +549,11 @@ function TasksSidebar({ stats }: { stats: TaskStatsPayload | null }) {
           <h3 className="section-title">任务概览</h3>
         </div>
         <div className="section-body">
-          <div className="sb-stat-grid">
-            <div className="sb-stat">
-              <span className="sb-stat-label">总任务</span>
-              <span className="sb-stat-value">{total}</span>
-            </div>
-            <div className="sb-stat">
-              <span className="sb-stat-label">执行中</span>
-              <span className="sb-stat-value" data-tone="running">{running}</span>
-            </div>
-            <div className="sb-stat">
-              <span className="sb-stat-label">已完成</span>
-              <span className="sb-stat-value" data-tone="success">{successCount}</span>
-            </div>
-            <div className="sb-stat">
-              <span className="sb-stat-label">失败/取消</span>
-              <span className="sb-stat-value" data-tone="failed">{failed}</span>
-            </div>
-          </div>
+          {byProject.length === 0 ? (
+            <Empty icon={<ListTodo size={22} />} text="暂无任务" />
+          ) : (
+            <ProjectPie data={byProject} total={total} />
+          )}
         </div>
       </section>
 
@@ -509,24 +563,10 @@ function TasksSidebar({ stats }: { stats: TaskStatsPayload | null }) {
           <h3 className="section-title">状态分布</h3>
         </div>
         <div className="section-body">
-          {distribution.length === 0 ? (
+          {statusSegments.length === 0 ? (
             <Empty icon={<Activity size={22} />} text="暂无数据" />
           ) : (
-            <div className="sb-bars">
-              {distribution.map((row) => {
-                const meta = metaOf(row.key);
-                const pct = maxN === 0 ? 0 : Math.max(4, Math.round((row.n / maxN) * 100));
-                return (
-                  <div className="sb-bar-row" key={row.key}>
-                    <span className="sb-bar-label">{meta.label}</span>
-                    <span className="sb-bar-track">
-                      <span className="sb-bar-fill" data-tone={meta.tone} style={{ width: `${pct}%` }} />
-                    </span>
-                    <span className="sb-bar-n">{row.n}</span>
-                  </div>
-                );
-              })}
-            </div>
+            <Donut segments={statusSegments} total={total} />
           )}
         </div>
       </section>
@@ -537,10 +577,19 @@ function TasksSidebar({ stats }: { stats: TaskStatsPayload | null }) {
           <h3 className="section-title">今日统计</h3>
         </div>
         <div className="section-body">
-          <div className="kv">
-            <KvRow k="今日完成率" v={completionRate} />
-            <KvRow k="完成任务" v={`${today.accepted} / ${today.finished}`} />
-            <KvRow k="平均耗时" v={fmtDurationMs(today.avgDurationMs)} />
+          <div className="sb-stat-cols">
+            <div className="sb-stat-col">
+              <span className="sb-stat-col-label">创建任务</span>
+              <span className="sb-stat-col-value">{today.created}</span>
+            </div>
+            <div className="sb-stat-col">
+              <span className="sb-stat-col-label">完成任务</span>
+              <span className="sb-stat-col-value">{completionRate}</span>
+            </div>
+            <div className="sb-stat-col">
+              <span className="sb-stat-col-label">平均耗时</span>
+              <span className="sb-stat-col-value">{fmtDurationMs(today.avgDurationMs)}</span>
+            </div>
           </div>
         </div>
       </section>
