@@ -1,19 +1,31 @@
 "use client";
 
-import type { Task, Worker } from "@claude-center/db";
-import { ScrollText } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import type { AttachmentMeta, Task, Worker } from "@claude-center/db";
+import { ScrollText, Send } from "lucide-react";
+import { FormEvent, useMemo, useRef, useState } from "react";
 import { Empty, fmtTime } from "./shared";
 import { SessionMetaBar } from "./session-meta";
 import { TranscriptView, parseTranscript } from "./transcript";
 import { usePolling } from "../lib/use-polling";
+import { useAsyncAction } from "../lib/use-async-action";
+import { AttachmentUploader } from "./attachment-uploader";
 
-// 任务执行会话回放：执行期间（claimed/running/waiting）每 5s 懒轮询，终态后再取数次拿到 Worker 最终强制同步的
+// 任务执行会话回放 + 续接回复入口（原「对话」Tab 合并入此）。
+// transcript：执行期间（claimed/running/waiting）每 5s 懒轮询，终态后再取数次拿到 Worker 最终强制同步的
 // 完整 transcript 即停拉（避免持续拖大 blob）。Worker 周期 + 终态把 session .jsonl 同步到 task_sessions。
+// 回复表单：waiting 时启用；提交落 task_comments → Worker 下一轮 --resume 注入 prompt → 再回到 jsonl 渲染。
 // 解析 + 富展示走共用 transcript.tsx（与对话页同款）。
 // 顶部 SessionMetaBar 复用对话页同款：通道 + 模型 + Worker 套餐 / 用量 + 上下文 / 会话累计 token。
 // worker 由父组件 /api/tasks/[id] polling 顺路带回（未认领时为 null，meta bar 自适应隐藏 worker chip）。
-export function SessionTranscript({ task, worker }: { task: Task; worker: Worker | null }) {
+export function SessionTranscript({
+  task,
+  worker,
+  canComment
+}: {
+  task: Task;
+  worker: Worker | null;
+  canComment: boolean;
+}) {
   const [jsonl, setJsonl] = useState<string | null>(null);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -60,6 +72,75 @@ export function SessionTranscript({ task, worker }: { task: Task; worker: Worker
         <TranscriptView items={items} />
       )}
       {syncedAt ? <div className="session-synced">最近同步：{fmtTime(syncedAt)}</div> : null}
+      <ReplyForm task={task} canComment={canComment} />
     </div>
+  );
+}
+
+// 续接回复表单：仅在 task.status='waiting' 时启用输入；提交落一条 user 评论到 task_comments，
+// Worker 下一轮认领循环（getPendingReply）会把它注入 --resume 的 prompt，再回到 jsonl 渲染。
+// 附件上传走通用 AttachmentUploader，提交后清空本地状态——用户看自己说的话等 jsonl 同步过来。
+function ReplyForm({ task, canComment }: { task: Task; canComment: boolean }) {
+  const [reply, setReply] = useState("");
+  const [replyAttachments, setReplyAttachments] = useState<AttachmentMeta[]>([]);
+  const { busy, error, run } = useAsyncAction();
+  const waiting = task.status === "waiting";
+  const canReply = waiting && canComment;
+
+  async function submitReply(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!reply.trim() && replyAttachments.length === 0) return;
+    await run(async () => {
+      const response = await fetch(`/api/tasks/${task.id}/comments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          body: reply.trim(),
+          attachmentIds: replyAttachments.map((a) => a.id)
+        })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? `回复失败：${response.status}`);
+      }
+      setReply("");
+      setReplyAttachments([]);
+    });
+  }
+
+  return (
+    <form className="chat-input" onSubmit={submitReply}>
+      <textarea
+        rows={3}
+        value={reply}
+        onChange={(event) => setReply(event.target.value)}
+        placeholder={
+          !canComment
+            ? "你没有任务对话权限"
+            : waiting
+              ? "回复 Worker 的提问，提交后将续接执行…"
+              : "仅在任务「等待回复」时可回复"
+        }
+        disabled={!canReply || busy}
+      />
+      {canReply ? (
+        <AttachmentUploader
+          attachments={replyAttachments}
+          onChange={setReplyAttachments}
+          disabled={busy}
+        />
+      ) : null}
+      {error ? <div className="error-box">{error}</div> : null}
+      <div className="chat-actions">
+        <button
+          className="btn btn-primary"
+          type="submit"
+          disabled={!canReply || busy || (!reply.trim() && replyAttachments.length === 0)}
+        >
+          <Send size={16} />
+          {!canComment ? "无回复权限" : waiting ? "回复并续接" : "等待 Worker 提问"}
+        </button>
+      </div>
+    </form>
   );
 }

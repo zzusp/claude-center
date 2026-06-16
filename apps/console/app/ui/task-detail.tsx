@@ -10,7 +10,6 @@ import { usePolling } from "../lib/use-polling";
 import { DETAIL_TABS, type DetailTabKey } from "./task-detail-shared";
 import { OverviewTab } from "./task-detail-overview";
 import { TimelineTab } from "./task-detail-timeline";
-import { TaskConversation } from "./task-detail-conversation";
 import { SessionTranscript } from "./task-detail-session";
 import { TaskEditForm } from "./task-detail-edit-form";
 
@@ -354,18 +353,10 @@ export default function TaskDetailPage({
           />
         ) : null}
 
-        {activeTab === "chat" ? (
-          <section className="card detail-section">
-            <div className="section-body">
-              <TaskConversation task={task} canComment={canComment} />
-            </div>
-          </section>
-        ) : null}
-
         {activeTab === "execution" ? (
           <section className="card detail-section">
             <div className="section-body">
-              <SessionTranscript task={task} worker={worker} />
+              <SessionTranscript task={task} worker={worker} canComment={canComment} />
             </div>
           </section>
         ) : null}
