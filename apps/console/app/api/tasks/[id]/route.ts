@@ -2,6 +2,7 @@ import {
   deleteTask,
   getPool,
   getTaskWithDeps,
+  listTaskEvents,
   publishTask,
   reactivateTask,
   requestTaskCancellation,
@@ -29,7 +30,10 @@ function publishTaskUpserted(task: Task): void {
   });
 }
 
-// 单任务详情：task 本体（含 project_name / depends_on / blocked）+ 前置任务标题，供独立详情页轮询。
+// 单任务详情聚合：task 本体（含 project_name / depends_on / blocked）+ 前置任务标题 + task_events，
+// 供详情页常驻轮询一次取齐（events 与 task 同为页面常驻数据，合并省一次往返）。
+// 注意：comments / session 仍是各自独立端点 + 按 tab 懒轮询，不并入这里——它们只在对应 tab
+// 打开时才拉，并入会让其常驻拉取、反而更费。
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requireUser();
   if (gate instanceof NextResponse) {
@@ -47,7 +51,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     if (!detail) {
       return NextResponse.json({ error: "任务不存在" }, { status: 404 });
     }
-    return NextResponse.json(detail);
+    const events = await listTaskEvents(getPool(), id);
+    return NextResponse.json({ ...detail, events });
   } catch (error) {
     return errorResponse(error);
   }
