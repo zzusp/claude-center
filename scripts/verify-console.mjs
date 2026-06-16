@@ -106,16 +106,6 @@ try {
     throw new Error(`health.db 异常：${JSON.stringify(payload.health.db)}`);
   }
 
-  // 4c) 侧边栏计数端点（拆分后由 Shell 轮询保持徽标新鲜）：已登录应为 200 且含 counts。
-  const summary = await fetch(`${baseUrl}/api/summary`, { headers: { cookie } });
-  if (!summary.ok) {
-    throw new Error(`已登录的 GET /api/summary 返回 ${summary.status}: ${await summary.text()}`);
-  }
-  const summaryPayload = await summary.json();
-  if (!summaryPayload.counts || typeof summaryPayload.counts.tasks !== "number") {
-    throw new Error(`summary 缺少 counts：${JSON.stringify(summaryPayload)}`);
-  }
-
   // 4) 带 cookie 访问首页（中控台）应为 200。
   const page = await fetch(baseUrl, { headers: { cookie } });
   if (!page.ok) {
@@ -130,7 +120,6 @@ try {
         pageStatus: page.status,
         workers: payload.workers.length,
         tasks: payload.tasks.length,
-        counts: summaryPayload.counts,
         health: payload.health
       },
       null,

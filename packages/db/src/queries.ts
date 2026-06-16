@@ -2689,40 +2689,6 @@ export async function deleteOrphanedAttachments(
   return result.rowCount ?? 0;
 }
 
-// 侧边栏徽标计数：单条查询返回三个计数，替代原来分别跑全量列表再 .length 的做法。
-// tasks 计数仅含非终态（排除 success/merged/accepted/rejected/failed/cancelled）。
-export type SummaryCounts = { tasks: number; workers: number; projects: number };
-
-export async function getSummaryCounts(
-  client: pg.Pool | pg.PoolClient,
-  user: { id: string; role: Role }
-): Promise<SummaryCounts> {
-  if (user.role === "admin") {
-    const result = await client.query<SummaryCounts>(`
-      SELECT
-        (SELECT count(*)::int FROM projects WHERE archived_at IS NULL) AS projects,
-        (SELECT count(*)::int FROM workers) AS workers,
-        (SELECT count(*)::int FROM tasks
-          WHERE status NOT IN ('success','merged','accepted','rejected','failed','cancelled')) AS tasks
-    `);
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    return result.rows[0]!;
-  }
-  const result = await client.query<SummaryCounts>(`
-    SELECT
-      (SELECT count(*)::int FROM projects p
-         JOIN user_project_links upl ON upl.project_id = p.id
-        WHERE upl.user_id = $1 AND p.archived_at IS NULL) AS projects,
-      (SELECT count(*)::int FROM workers) AS workers,
-      (SELECT count(*)::int FROM tasks t
-         JOIN user_project_links upl ON upl.project_id = t.project_id
-        WHERE upl.user_id = $1
-          AND t.status NOT IN ('success','merged','accepted','rejected','failed','cancelled')) AS tasks
-  `, [user.id]);
-  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-  return result.rows[0]!;
-}
-
 // Worker resume / rerun-rejected 路径用：聚合「最后一条 worker 评论之后」所有 user 评论的附件。
 // 跟 getPendingReply 的文本逻辑配套：那边返回拼接 body，这边返回拼接 attachments。
 export async function listPendingReplyAttachments(
