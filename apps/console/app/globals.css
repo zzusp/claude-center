@@ -166,6 +166,7 @@ a:hover {
 .nav-item:hover {
   background: var(--surface-2);
   color: var(--text-1);
+  text-decoration: none;
 }
 
 .nav-item.active {
