@@ -768,6 +768,12 @@ a:hover {
   overflow-x: auto;
 }
 
+/* 默认显示 10 行（行高 44px + 表头约 42px），超出纵向滚动；thead sticky 配合使用，表头始终可见 */
+.table-wrap.scroll-rows-10 {
+  max-height: calc(44px * 10 + 42px);
+  overflow-y: auto;
+}
+
 table.table {
   width: 100%;
   border-collapse: collapse;

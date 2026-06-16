@@ -200,7 +200,7 @@ function TasksView({
   return (
     <>
       <div className="page-head">
-        <h1 className="page-head-title">任务流</h1>
+        <h1 className="page-head-title">任务调度</h1>
         <div className="page-head-actions">
           <button
             type="button"
@@ -269,7 +269,7 @@ function TasksView({
                   text={loading ? "加载中…" : hasFilter ? "没有符合条件的任务" : "暂无任务，点击右上角发布第一个任务"}
                 />
               ) : (
-                <div className="table-wrap">
+                <div className="table-wrap scroll-rows-10">
                   <table className="table table-static">
                     <thead>
                       <tr>
