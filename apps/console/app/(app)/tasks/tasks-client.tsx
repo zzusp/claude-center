@@ -17,6 +17,8 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [busy, setBusy] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // 发布任务后立即触发 TasksView 列表重拉（列表 usePolling 间隔为 Infinity，需要外部信号）。
+  const [refreshSignal, setRefreshSignal] = useState(0);
 
   // 项目下拉 + 候选任务（"发布任务"抽屉里的依赖任务下拉）都是低频变化数据，
   // 首屏拉一次即可、不需要因任意 relay 事件被动刷新（Infinity 间隔即「关闭所有自动刷新源」，
@@ -91,6 +93,7 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
       });
       form.reset();
       setDrawerOpen(false);
+      setRefreshSignal((prev) => prev + 1);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "任务创建失败");
     } finally {
@@ -108,6 +111,7 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
           setDrawerOpen(true);
         }}
         canCreateTask={canCreateTask}
+        refreshSignal={refreshSignal}
       />
       <TaskComposeModal
         open={drawerOpen}
