@@ -4,7 +4,7 @@ import type { AttachmentMeta, Project, ProjectRepo, Task } from "@claude-center/
 import { Send } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { basenameFromRepoUrl, metaOf } from "./shared";
-import { Drawer, Select } from "./controls";
+import { DateTimePicker, FormModal, Select } from "./controls";
 import { AttachmentUploader } from "./attachment-uploader";
 
 // 子仓在创建/编辑任务表单中的受控状态。subStates[projectRepoId] 表示该子仓的勾选 + 分支配置。
@@ -12,13 +12,14 @@ import { AttachmentUploader } from "./attachment-uploader";
 type SubState = { enabled: boolean; baseBranch: string; workBranch: string; targetBranch: string };
 export type SubStatesMap = Record<string, SubState>;
 
-// 发布任务表单 + 其抽屉容器。从任务流列表抽出（仅创建任务用；详情已迁 /tasks/[id]）。
+// 发布任务表单 + 其弹窗容器。表单按「基本信息 / 分支配置 / 执行选项 / 调度 / 子仓」分区排版。
 function ComposeTaskForm({
   projects,
   candidateTasks,
   busy,
   submitError,
   selectedProjectId,
+  onCancel,
   onSelectProject,
   onSubmit
 }: {
@@ -27,6 +28,7 @@ function ComposeTaskForm({
   busy: boolean;
   submitError: string | null;
   selectedProjectId: string;
+  onCancel: () => void;
   onSelectProject: (id: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
@@ -109,168 +111,200 @@ function ComposeTaskForm({
 
   return (
     <form className="form" onSubmit={onSubmit}>
-      <div className="field">
-        <label className="field-label">项目</label>
-        <Select
-          value={selectedProjectId}
-          onChange={onSelectProject}
-          options={projects.map((project) => ({ value: project.id, label: project.name }))}
-          placeholder="选择项目"
-          ariaLabel="项目"
-        />
-      </div>
-      <div className="field">
-        <label className="field-label">标题</label>
-        <input name="title" placeholder="修复登录按钮状态" required />
-      </div>
-      <div className="field">
-        <label className="field-label">
-          目标 <span className="field-hint">可粘贴 / 拖拽 / 选择图片或文件作为补充资料</span>
-        </label>
-        <textarea
-          name="description"
-          rows={4}
-          placeholder="写清期望行为、约束和验收方式"
-          required
-        />
-        <AttachmentUploader attachments={attachments} onChange={setAttachments} />
-        {/* attachmentIds 序列化：父 handler 通过 FormData.get('attachmentIds') 取 JSON */}
-        <input
-          type="hidden"
-          name="attachmentIds"
-          value={JSON.stringify(attachments.map((a) => a.id))}
-          readOnly
-        />
-      </div>
-      <div className="form-row">
-        <div className="field">
-          <label className="field-label">
-            签出分支 <span className="field-hint">{branchHint}</span>
-          </label>
-          <input name="baseBranch" list="cc-branch-list" defaultValue="main" placeholder="main" />
+      <section className="form-section">
+        <h3 className="form-section-title">基本信息</h3>
+        <div className="form-row">
+          <div className="field">
+            <label className="field-label">项目</label>
+            <Select
+              value={selectedProjectId}
+              onChange={onSelectProject}
+              options={projects.map((project) => ({ value: project.id, label: project.name }))}
+              placeholder="选择项目"
+              ariaLabel="项目"
+            />
+          </div>
+          <div className="field">
+            <label className="field-label">标题</label>
+            <input name="title" placeholder="修复登录按钮状态" required />
+          </div>
         </div>
         <div className="field">
           <label className="field-label">
-            PR 目标分支 <span className="field-hint">留空同签出分支</span>
+            目标 <span className="field-hint">可粘贴 / 拖拽 / 选择图片或文件作为补充资料</span>
           </label>
-          <input name="targetBranch" list="cc-branch-list" placeholder="main" />
-        </div>
-      </div>
-      <datalist id="cc-branch-list">
-        {branches.map((branch) => (
-          <option key={branch} value={branch} />
-        ))}
-      </datalist>
-      <div className="form-row">
-        <div className="field">
-          <label className="field-label">
-            工作分支 <span className="field-hint">留空自动生成</span>
-          </label>
-          <input name="workBranch" placeholder="cc/..." />
-        </div>
-        <div className="field">
-          <label className="field-label">提交模式</label>
-          <Select
-            name="submitMode"
-            value={submitMode}
-            onChange={(value) => setSubmitMode(value as "pr" | "push")}
-            options={[
-              { value: "pr", label: "创建 PR" },
-              { value: "push", label: "直接提交推送" }
-            ]}
-            ariaLabel="提交模式"
+          <textarea
+            name="description"
+            rows={4}
+            placeholder="写清期望行为、约束和验收方式"
+            required
+          />
+          <AttachmentUploader attachments={attachments} onChange={setAttachments} />
+          {/* attachmentIds 序列化：父 handler 通过 FormData.get('attachmentIds') 取 JSON */}
+          <input
+            type="hidden"
+            name="attachmentIds"
+            value={JSON.stringify(attachments.map((a) => a.id))}
+            readOnly
           />
         </div>
-      </div>
-      {submitMode === "pr" ? (
+      </section>
+
+      <section className="form-section">
+        <h3 className="form-section-title">
+          分支配置
+          <span className="form-section-title-hint">{branchHint}</span>
+        </h3>
+        <div className="form-row">
+          <div className="field">
+            <label className="field-label">签出分支</label>
+            <input name="baseBranch" list="cc-branch-list" defaultValue="main" placeholder="main" />
+          </div>
+          <div className="field">
+            <label className="field-label">
+              PR 目标分支 <span className="field-hint">留空同签出分支</span>
+            </label>
+            <input name="targetBranch" list="cc-branch-list" placeholder="main" />
+          </div>
+        </div>
+        <datalist id="cc-branch-list">
+          {branches.map((branch) => (
+            <option key={branch} value={branch} />
+          ))}
+        </datalist>
+        <div className="form-row">
+          <div className="field">
+            <label className="field-label">
+              工作分支 <span className="field-hint">留空自动生成</span>
+            </label>
+            <input name="workBranch" placeholder="cc/..." />
+          </div>
+          <div className="field">
+            <label className="field-label">提交模式</label>
+            <Select
+              name="submitMode"
+              value={submitMode}
+              onChange={(value) => setSubmitMode(value as "pr" | "push")}
+              options={[
+                { value: "pr", label: "创建 PR" },
+                { value: "push", label: "直接提交推送" }
+              ]}
+              ariaLabel="提交模式"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="form-section">
+        <h3 className="form-section-title">执行选项</h3>
+        <div className="form-row">
+          {submitMode === "pr" ? (
+            <div className="field">
+              <label className="field-label">
+                自动合并 PR <span className="field-hint">由 Worker 自动 gh pr merge --merge</span>
+              </label>
+              <Select
+                name="autoMergePr"
+                value={autoMergePr ? "on" : "off"}
+                onChange={(value) => setAutoMergePr(value === "on")}
+                options={[
+                  { value: "off", label: "否 · 仅创建 PR" },
+                  { value: "on", label: "是 · 创建后自动合并" }
+                ]}
+                ariaLabel="自动合并 PR"
+              />
+            </div>
+          ) : (
+            <div className="field" aria-hidden />
+          )}
+          <div className="field">
+            <label className="field-label">
+              执行模型 <span className="field-hint">默认跟随 Worker</span>
+            </label>
+            <Select
+              name="model"
+              value={model}
+              onChange={(value) => setModel(value as "default" | "opus" | "sonnet" | "haiku")}
+              options={[
+                { value: "default", label: "默认 · 跟随 Worker" },
+                { value: "opus", label: "Opus" },
+                { value: "sonnet", label: "Sonnet" },
+                { value: "haiku", label: "Haiku" }
+              ]}
+              ariaLabel="执行模型"
+            />
+          </div>
+        </div>
         <div className="field">
           <label className="field-label">
-            自动合并 PR <span className="field-hint">PR 创建后由 Worker 自动 gh pr merge --merge</span>
+            自动回复（兜底） <span className="field-hint">真停了：零改动→失败，有改动→自动续接最多 2 轮</span>
           </label>
           <Select
-            name="autoMergePr"
-            value={autoMergePr ? "on" : "off"}
-            onChange={(value) => setAutoMergePr(value === "on")}
+            name="autoReply"
+            value={autoReply ? "on" : "off"}
+            onChange={(value) => setAutoReply(value === "on")}
             options={[
-              { value: "off", label: "否 · 仅创建 PR" },
-              { value: "on", label: "是 · 创建后自动合并" }
+              { value: "off", label: "否 · 等人回复（默认）" },
+              { value: "on", label: "是 · 无人值守，按规则兜底" }
             ]}
-            ariaLabel="自动合并 PR"
+            ariaLabel="自动回复"
           />
         </div>
-      ) : null}
-      <div className="field">
-        <label className="field-label">
-          自动回复（兜底） <span className="field-hint">主防线让 Claude 不要停下问；真停了：零改动→失败，有改动→自动续接最多 2 轮</span>
-        </label>
-        <Select
-          name="autoReply"
-          value={autoReply ? "on" : "off"}
-          onChange={(value) => setAutoReply(value === "on")}
-          options={[
-            { value: "off", label: "否 · 等人回复（默认）" },
-            { value: "on", label: "是 · 无人值守，按规则兜底" }
-          ]}
-          ariaLabel="自动回复"
-        />
-      </div>
-      {autoReply ? (
+        {autoReply ? (
+          <div className="field">
+            <label className="field-label">
+              决策预案 <span className="field-hint">可选，喂给 Claude 当决策偏好（如"优先最小改动，跳过测试"）</span>
+            </label>
+            <textarea name="autoDecisionHints" rows={2} placeholder="prefer minimal change; keep existing patterns; ..." />
+          </div>
+        ) : null}
+      </section>
+
+      <section className="form-section">
+        <h3 className="form-section-title">调度</h3>
         <div className="field">
           <label className="field-label">
-            决策预案 <span className="field-hint">可选，喂给 Claude 当决策偏好（如"优先最小改动，跳过测试"）</span>
+            定时发布 <span className="field-hint">留空即建为草稿手动发布；设定时间则到点自动进入待处理队列</span>
           </label>
-          <textarea name="autoDecisionHints" rows={2} placeholder="prefer minimal change; keep existing patterns; ..." />
+          <DateTimePicker name="scheduledAt" minNow placeholder="留空为草稿；选择时间则定时发布" />
         </div>
-      ) : null}
-      <div className="field">
-        <label className="field-label">
-          执行模型 <span className="field-hint">该任务执行时用哪个 Claude 模型，默认跟随 Worker</span>
-        </label>
-        <Select
-          name="model"
-          value={model}
-          onChange={(value) => setModel(value as "default" | "opus" | "sonnet" | "haiku")}
-          options={[
-            { value: "default", label: "默认 · 跟随 Worker" },
-            { value: "opus", label: "Opus" },
-            { value: "sonnet", label: "Sonnet" },
-            { value: "haiku", label: "Haiku" }
-          ]}
-          ariaLabel="执行模型"
-        />
-      </div>
-      <div className="field">
-        <label className="field-label">
-          定时发布 <span className="field-hint">留空即建为草稿手动发布；设定时间则到点自动进入待处理队列</span>
-        </label>
-        <input name="scheduledAt" type="datetime-local" />
-      </div>
-      <div className="field">
-        <label className="field-label">
-          前置任务 <span className="field-hint">同项目，可多选；前置全部「已验收 / 已合并」后才会被领取</span>
-        </label>
-        {dependencyCandidates.length === 0 ? (
-          <span className="field-hint">该项目暂无可作为前置的任务</span>
-        ) : (
-          <select name="dependsOn" multiple size={Math.min(6, Math.max(3, dependencyCandidates.length))}>
-            {dependencyCandidates.map((task) => (
-              <option key={task.id} value={task.id}>
-                [{metaOf(task.status).label}] {task.title}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
+        <div className="field">
+          <label className="field-label">
+            前置任务 <span className="field-hint">同项目，可多选；前置全部「已验收 / 已合并」后才会被领取</span>
+          </label>
+          {dependencyCandidates.length === 0 ? (
+            <span className="field-hint">该项目暂无可作为前置的任务</span>
+          ) : (
+            <select name="dependsOn" multiple size={Math.min(6, Math.max(3, dependencyCandidates.length))}>
+              {dependencyCandidates.map((task) => (
+                <option key={task.id} value={task.id}>
+                  [{metaOf(task.status).label}] {task.title}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      </section>
+
       {subRepos.length > 0 ? (
-        <SubRepoConfigSection subRepos={subRepos} subStates={subStates} onChange={setSubStates} />
+        <section className="form-section">
+          <h3 className="form-section-title">子仓配置</h3>
+          <SubRepoConfigSection subRepos={subRepos} subStates={subStates} onChange={setSubStates} />
+        </section>
       ) : null}
       {/* taskRepos 序列化：父 handler 通过 FormData.get('taskRepos') 取 JSON */}
       <input type="hidden" name="taskRepos" value={JSON.stringify(serializeTaskRepos(subStates))} readOnly />
+
       {submitError ? <div className="error-box">{submitError}</div> : null}
-      <button className="btn btn-primary" disabled={busy || projects.length === 0} type="submit">
-        <Send size={16} />
-        入队
-      </button>
+      <div className="form-actions">
+        <button type="button" className="btn btn-sm" onClick={onCancel} disabled={busy}>
+          取消
+        </button>
+        <button className="btn btn-primary btn-sm" disabled={busy || projects.length === 0} type="submit">
+          <Send size={14} />
+          入队
+        </button>
+      </div>
     </form>
   );
 }
@@ -306,9 +340,7 @@ function SubRepoConfigSection({
 }) {
   return (
     <div className="field">
-      <label className="field-label">
-        子仓配置 <span className="field-hint">勾选要参与本任务的子仓；未勾选的子仓会被跳过（不签出、不提交）</span>
-      </label>
+      <span className="field-hint">勾选要参与本任务的子仓；未勾选的子仓会被跳过（不签出、不提交）</span>
       <div className="sub-repo-list">
         {subRepos.map((repo) => {
           const state = subStates[repo.id] ?? {
@@ -367,7 +399,7 @@ function SubRepoConfigSection({
   );
 }
 
-export function TaskDrawer({
+export function TaskComposeModal({
   open,
   busy,
   submitError,
@@ -392,7 +424,7 @@ export function TaskDrawer({
 }) {
   // 仅用于「发布任务」表单；任务详情已迁至独立路由页 /tasks/[id]。
   return (
-    <Drawer open={open} title={canCreateTask ? "发布任务" : ""} onClose={onClose}>
+    <FormModal open={open && canCreateTask} title="发布任务" onClose={onClose}>
       {canCreateTask ? (
         <ComposeTaskForm
           projects={projects}
@@ -400,10 +432,11 @@ export function TaskDrawer({
           busy={busy}
           submitError={submitError}
           selectedProjectId={selectedProjectId}
+          onCancel={onClose}
           onSelectProject={onSelectProject}
           onSubmit={onSubmitTask}
         />
       ) : null}
-    </Drawer>
+    </FormModal>
   );
 }
