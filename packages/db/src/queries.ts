@@ -1037,7 +1037,7 @@ export async function requestTaskRetry(
   if (!task) {
     return null;
   }
-  await addTaskEvent(client, taskId, null, "retry_requested", "用户请求续接重试", {});
+  await addTaskEvent(client, taskId, null, "retry_requested", "待 Worker 认领后续接执行", {});
   return task;
 }
 
