@@ -165,6 +165,10 @@ SELECT 出一个会话：其 worker_id = $1、status='active'，
 | `/api/conversations/[id]/messages` | `POST` | 发用户消息（插 `role='user'` 触发 worker） |
 | `/api/conversations/[id]/stream` | `GET` | SSE 流式 assistant token |
 | `/api/conversations/[id]/close` | `POST` | 结束会话（status='closed' + 清 worktree 信号） |
+| `/api/conversations/[id]/cancel` | `POST` | 终止在途的 assistant 轮（worker 杀 Claude 进程树 → 翻 cancelled）|
+
+`GET /api/conversations` 支持可选 query：`keyword`（ILIKE 命中 title / 项目名 / worker 名 / 分支）、`projectId`、`workerId`。
+`POST /api/conversations` 与 `POST /api/conversations/[id]/messages` 均挡 worker 离线（last_seen_at>60s 即 400），避免「无人应答」的空发。
 
 ### 6.4 DB 查询（`packages/db/src/queries.ts` + `types.ts`）
 
@@ -190,7 +194,7 @@ SELECT 出一个会话：其 worker_id = $1、status='active'，
 3. **权限位**：复用 `command.create` 还是新增 `conversation.create`？推荐先复用。
 4. **迁移编号**：实施时 `git fetch` 取未占用编号 + status/约束列全集（`CLAUDE.md` 迁移规范）。
 5. **stream-json 事件 schema**：claude CLI 实际字段名先真跑验证（§5.1）。
-6. **超时与取消**：对话轮复用 `CLAUDE_TIMEOUT_MS`？是否要"停止生成"按钮（→ 杀 child + 置 failed）？推荐 v1 先不做取消按钮。
+6. **超时与取消**：对话轮复用 `CLAUDE_TIMEOUT_MS`？是否要"停止生成"按钮（→ 杀 child + 置 failed）？~~推荐 v1 先不做取消按钮~~ **已实施**（migration `025_conversation_message_cancel.sql` + 新 `conversation.cancel` relay 事件）：Console 点终止 → `requestConversationTurnCancellation` 打 `cancel_requested_at` + 双频道发布 → worker 周期 + relay 信号扫描 → `markConversationTurnCancelled` 抢占 `cancelled` 终态 → `killProcessTree`。`failConversationTurn` 加 `status IN ('pending','streaming')` 守卫，防止 catch 路径覆盖已 cancelled。
 
 ## 10. 实施阶段（每阶段可独立验证，留检查点）
 

@@ -1,4 +1,4 @@
-import { addConversationMessage, getConversation, getPool } from "@claude-center/db";
+import { addConversationMessage, getConversation, getPool, getWorker } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "../../../../lib/session";
 import { requireProjectScope } from "../../../../lib/access";
@@ -30,6 +30,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
     if (conversation.status !== "active") {
       return badRequest("对话已结束");
+    }
+    // worker 离线（last_seen_at > 60s）就别让用户继续发：消息能落库但永远等不到应答，反生「为何无人回」的迷惑。
+    const worker = await getWorker(getPool(), conversation.worker_id);
+    if (!worker || worker.status !== "online") {
+      return badRequest("worker 当前离线，无法继续对话");
     }
     const message = await addConversationMessage(getPool(), { conversationId: id, role: "user", body: body.body.trim() });
     // 落库后即推到项目频道：会话的 worker 已关联该项目（创建时校验），会收到并立即认领应答。

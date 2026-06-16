@@ -1854,10 +1854,18 @@ export async function createConversation(
 }
 
 // 列会话：join 项目 / worker 名 + 最后消息时间。projectIds 非 null 时按项目白名单过滤（RBAC）。
+// 可选筛选：projectId / workerId 精确过滤；keyword 在 title / project_name / worker_name / branch 上 ILIKE。
 export async function listConversations(
   client: pg.Pool | pg.PoolClient,
-  options: { projectIds: string[] | null; limit?: number } = { projectIds: null }
+  options: {
+    projectIds: string[] | null;
+    limit?: number;
+    projectId?: string | null;
+    workerId?: string | null;
+    keyword?: string | null;
+  } = { projectIds: null }
 ): Promise<Conversation[]> {
+  const keyword = options.keyword?.trim() ? `%${options.keyword.trim()}%` : null;
   const result = await client.query<Conversation>(
     `SELECT conversations.*,
             projects.name AS project_name,
@@ -1870,9 +1878,22 @@ export async function listConversations(
        JOIN projects ON projects.id = conversations.project_id
        JOIN workers ON workers.id = conversations.worker_id
       WHERE ($1::uuid[] IS NULL OR conversations.project_id = ANY($1))
+        AND ($3::uuid IS NULL OR conversations.project_id = $3)
+        AND ($4::uuid IS NULL OR conversations.worker_id = $4)
+        AND ($5::text IS NULL
+             OR conversations.title ILIKE $5
+             OR projects.name ILIKE $5
+             OR workers.name ILIKE $5
+             OR conversations.branch ILIKE $5)
       ORDER BY conversations.updated_at DESC
       LIMIT $2`,
-    [options.projectIds, options.limit ?? 100]
+    [
+      options.projectIds,
+      options.limit ?? 100,
+      options.projectId ?? null,
+      options.workerId ?? null,
+      keyword
+    ]
   );
   return result.rows;
 }
@@ -2077,6 +2098,8 @@ export async function finalizeConversationTurn(
   );
 }
 
+// 失败收尾：仅在仍处于 in-flight（pending/streaming）时才翻 failed，避免被已落 'cancelled' 终态的轮被回头覆盖。
+// 后置 catch 路径里：Console 端取消会先把消息打成 'cancelled'+杀进程，进程被杀后 runClaude* 抛错走到这里——必须守住。
 export async function failConversationTurn(
   client: pg.Pool | pg.PoolClient,
   input: { messageId: string; errorMessage: string }
@@ -2084,9 +2107,71 @@ export async function failConversationTurn(
   await client.query(
     `UPDATE conversation_messages
         SET status = 'failed', error_message = $2, updated_at = now()
-      WHERE id = $1`,
+      WHERE id = $1 AND status IN ('pending', 'streaming')`,
     [input.messageId, input.errorMessage]
   );
+}
+
+// Console 请求终止某会话的在途轮：标记本会话最后一条 in-flight assistant 消息。
+// 返回该消息（含 conversation_id / claimed_by 供 publish + 路由 worker 频道）；若没有在途轮则返回 null（Console 据此提示「无可终止」）。
+export async function requestConversationTurnCancellation(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string
+): Promise<ConversationMessage | null> {
+  const result = await client.query<ConversationMessage>(
+    `UPDATE conversation_messages
+        SET cancel_requested_at = now(), updated_at = now()
+      WHERE id = (
+        SELECT id FROM conversation_messages
+         WHERE conversation_id = $1
+           AND role = 'assistant'
+           AND status IN ('pending', 'streaming')
+         ORDER BY seq DESC
+         LIMIT 1)
+     RETURNING *`,
+    [conversationId]
+  );
+  return result.rows[0] ?? null;
+}
+
+// Worker 周期扫描:本机名下、仍在途、已被请求取消的会话 assistant 消息。命中则 Worker 杀进程并翻 cancelled。
+export async function listCancelRequestedConversationMessages(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<{ id: string; conversation_id: string }[]> {
+  const result = await client.query<{ id: string; conversation_id: string }>(
+    `SELECT id, conversation_id FROM conversation_messages
+      WHERE claimed_by = $1
+        AND cancel_requested_at IS NOT NULL
+        AND status IN ('pending', 'streaming')`,
+    [workerId]
+  );
+  return result.rows;
+}
+
+// Worker 取消落终态：仅在途态可翻为 cancelled（守卫防覆盖已成功完成的轮）。返回是否成功翻转。
+export async function markConversationTurnCancelled(
+  client: pg.Pool | pg.PoolClient,
+  messageId: string,
+  workerId: string
+): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE conversation_messages
+        SET status = 'cancelled', updated_at = now()
+      WHERE id = $1 AND claimed_by = $2 AND status IN ('pending', 'streaming')`,
+    [messageId, workerId]
+  );
+  const cancelled = (result.rowCount ?? 0) > 0;
+  if (cancelled) {
+    // 顺手 bump conversations.updated_at，让会话列表按活跃排序与列表派生 generating=false 同步。
+    await client.query(
+      `UPDATE conversations
+          SET updated_at = now()
+         WHERE id = (SELECT conversation_id FROM conversation_messages WHERE id = $1)`,
+      [messageId]
+    );
+  }
+  return cancelled;
 }
 
 export async function closeConversation(

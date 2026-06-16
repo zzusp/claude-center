@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, Project, Worker } from "@claude-center/db";
-import { Check, GitBranch, MessageSquare, Pencil, Send, Server, X } from "lucide-react";
+import { Check, GitBranch, MessageSquare, Pencil, Send, Server, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, postJson } from "./shared";
 import { SessionMetaBar } from "./session-meta";
@@ -144,6 +144,17 @@ export function ChatThread({
     }
   }
 
+  async function cancelTurn(): Promise<void> {
+    try {
+      await postJson(`/api/conversations/${id}/cancel`, {});
+      // 终止后清空乐观气泡：worker 杀进程后会把消息翻 cancelled，列表派生 generating=false；
+      // 本地 pending 已无意义（不会再有应答），先清掉避免「点了终止仍显示打字中」。
+      setPending([]);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "终止失败");
+    }
+  }
+
   async function closeConv(): Promise<void> {
     try {
       await postJson(`/api/conversations/${id}/close`, {});
@@ -152,6 +163,9 @@ export function ChatThread({
       setErr(e instanceof Error ? e.message : "结束失败");
     }
   }
+
+  // worker 离线：消息接口会 400 挡掉，前端同步禁用输入框 + 顶部提示，避免「输入了 Enter 才弹错」。
+  const offline = worker !== null && worker.status !== "online";
 
   return (
     <div className="chat-thread">
@@ -235,6 +249,16 @@ export function ChatThread({
                     <i />
                     <i />
                   </span>
+                  {canCommand ? (
+                    <button
+                      type="button"
+                      className="btn btn-sm chat-stop"
+                      title="终止本轮回答"
+                      onClick={() => void cancelTurn()}
+                    >
+                      <Square size={12} fill="currentColor" /> 终止
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -246,6 +270,8 @@ export function ChatThread({
 
       {closed ? (
         <div className="chat-closed">对话已结束</div>
+      ) : offline ? (
+        <div className="chat-closed">该 worker 当前离线，无法继续对话（恢复在线后可继续）</div>
       ) : canCommand ? (
         <div className="chat-composer">
           <textarea

@@ -287,8 +287,8 @@ export type Attachment = AttachmentMeta & {
 // ===== 实时直连对话（Worker Direct Chat）：独立于任务流的问答通道。详见 docs/spec/worker-direct-chat.md =====
 export type ConversationStatus = "active" | "closed";
 export type ConversationMessageRole = "user" | "assistant";
-// user 消息恒 'done'；assistant：claim 即 'streaming'，收尾 'done'/'failed'。
-export type ConversationMessageStatus = "pending" | "streaming" | "done" | "failed";
+// user 消息恒 'done'；assistant：claim 即 'streaming'，收尾 'done'/'failed'；用户点「终止」则翻 'cancelled'。
+export type ConversationMessageStatus = "pending" | "streaming" | "done" | "failed" | "cancelled";
 
 export type Conversation = {
   id: string;
@@ -320,6 +320,8 @@ export type ConversationMessage = {
   status: ConversationMessageStatus;
   claimed_by: string | null;
   error_message: string | null;
+  // Console 点「终止本轮回答」打的时间戳；Worker 周期 + relay 信号扫描自己名下的取消请求 → 杀 Claude 进程树 → 翻终态。
+  cancel_requested_at: string | null;
   created_at: string;
   updated_at: string;
 };
