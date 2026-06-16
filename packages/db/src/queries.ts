@@ -5,6 +5,7 @@ import {
   IN_FLIGHT_STATUSES,
   PUBLISHABLE_STATUSES,
   REACTIVATABLE_STATUSES,
+  RETRYABLE_STATUSES,
   sqlInList
 } from "./task-state.js";
 import type {
@@ -250,6 +251,7 @@ export async function reactivateTask(client: pg.Pool | pg.PoolClient, taskId: st
             merge_checked_at = null,
             claude_session_id = null,
             cancel_requested_at = null,
+            retry_requested_at = null,
             updated_at = now()
       WHERE id = $1 AND status IN (${sqlInList(REACTIVATABLE_STATUSES)})
       RETURNING *`,
@@ -270,7 +272,12 @@ export async function publishTask(client: pg.Pool | pg.PoolClient, taskId: strin
       RETURNING *`,
     [taskId]
   );
-  return result.rows[0] ?? null;
+  const task = result.rows[0];
+  if (!task) {
+    return null;
+  }
+  await addTaskEvent(client, taskId, null, "published", "发布，进入待处理队列", {});
+  return task;
 }
 
 // 退回草稿：pending → draft（撤回尚未被认领的待处理任务）。仅 pending 态命中，清空定时设置
@@ -788,10 +795,13 @@ export async function listActiveTaskIdsForWorker(
   client: pg.Pool | pg.PoolClient,
   workerId: string
 ): Promise<string[]> {
+  // 保留工作树的状态:在途(claimed/running/waiting)、待验收/打回(success/rejected),
+  // 以及可续接重试的 failed/cancelled——后两者保留树是为了「重试」精确恢复未提交改动
+  // (见 docs/spec/task-event-timeline-retry.md §4.3)。accepted/merged/draft 不在此列,树由 GC 回收。
   const result = await client.query<{ id: string }>(
     `SELECT id FROM tasks
       WHERE claimed_by = $1
-        AND status IN ('claimed', 'running', 'waiting', 'success', 'rejected')`,
+        AND status IN ('claimed', 'running', 'waiting', 'success', 'rejected', 'failed', 'cancelled')`,
     [workerId]
   );
   return result.rows.map((row) => row.id);
@@ -906,7 +916,12 @@ export async function claimNextTask(client: pg.Pool | pg.PoolClient, workerId: s
       RETURNING tasks.*`,
     [workerId]
   );
-  return result.rows[0] ?? null;
+  const task = result.rows[0];
+  if (!task) {
+    return null;
+  }
+  await addTaskEvent(client, task.id, workerId, "claimed", "Worker 认领任务", {});
+  return task;
 }
 
 export async function getTaskLocalPath(
@@ -1001,6 +1016,28 @@ export async function requestTaskCancellation(
     return null;
   }
   await addTaskEvent(client, taskId, task.claimed_by, "cancel_requested", "Cancellation requested by user", {});
+  return task;
+}
+
+// 用户请求续接重试:仅 failed/cancelled 可重试,打 retry_requested_at 时间戳供 Worker 的
+// claimNextRetryableTask 扫描续接。不直接翻 running(running 不在任何 claim 谓词里,Worker 不会捡)——
+// 与打回链一致(Console 只置标记,Worker 再翻 running)。返回更新后的任务;非可重试态返回 null。
+export async function requestTaskRetry(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string
+): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET retry_requested_at = now(), updated_at = now()
+      WHERE id = $1 AND status IN (${sqlInList(RETRYABLE_STATUSES)})
+      RETURNING *`,
+    [taskId]
+  );
+  const task = result.rows[0];
+  if (!task) {
+    return null;
+  }
+  await addTaskEvent(client, taskId, null, "retry_requested", "用户请求续接重试", {});
   return task;
 }
 
@@ -1254,6 +1291,36 @@ export async function claimNextRejectedTask(
      )
      UPDATE tasks
         SET status = 'running',
+            updated_at = now()
+       FROM candidate
+      WHERE tasks.id = candidate.id
+      RETURNING tasks.*`,
+    [workerId]
+  );
+  return result.rows[0] ?? null;
+}
+
+// 失败/取消续接重试：认领本 Worker 自己的、已被用户请求重试(retry_requested_at 非空)的 failed/cancelled
+// 任务，原子翻为 running 并清空重试戳(避免重复认领)。claimed_by 机器锁定保证同工作树 + 同机 Claude 会话磁盘
+// （失败/取消时保留了工作树，见 docs/spec/task-event-timeline-retry.md §4.3）。
+export async function claimNextRetryableTask(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `WITH candidate AS (
+       SELECT tasks.id
+         FROM tasks
+        WHERE tasks.status IN (${sqlInList(RETRYABLE_STATUSES)})
+          AND tasks.claimed_by = $1
+          AND tasks.retry_requested_at IS NOT NULL
+        ORDER BY tasks.retry_requested_at ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+     )
+     UPDATE tasks
+        SET status = 'running',
+            retry_requested_at = null,
             updated_at = now()
        FROM candidate
       WHERE tasks.id = candidate.id

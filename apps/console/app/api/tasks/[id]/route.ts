@@ -6,6 +6,7 @@ import {
   publishTask,
   reactivateTask,
   requestTaskCancellation,
+  requestTaskRetry,
   unpublishTask,
   updateTask
 } from "@claude-center/db";
@@ -60,7 +61,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 
 // 任务状态切换与编辑：
 // publish（草稿 → 待处理）、unpublish（待处理 → 草稿）、cancel（在途取消）、
-// update（编辑草稿字段）、reactivate（失败/取消 → 草稿）。
+// update（编辑草稿字段）、reactivate（失败/取消 → 草稿）、retry（失败/取消 → 续接重试,打 retry_requested_at）。
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requirePermission("task.create");
   if (gate instanceof NextResponse) {
@@ -137,6 +138,15 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const task = await reactivateTask(getPool(), id);
       if (!task) {
         return NextResponse.json({ error: "无法激活：仅失败或已取消的任务可重新激活" }, { status: 409 });
+      }
+      publishTaskUpserted(task);
+      return NextResponse.json({ task });
+    }
+
+    if (body.action === "retry") {
+      const task = await requestTaskRetry(getPool(), id);
+      if (!task) {
+        return NextResponse.json({ error: "无法重试：仅失败或已取消的任务可续接重试" }, { status: 409 });
       }
       publishTaskUpserted(task);
       return NextResponse.json({ task });

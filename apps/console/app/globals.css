@@ -987,6 +987,101 @@ table.table {
   font-variant-numeric: tabular-nums;
 }
 
+/* 细颗粒度时间线:按轮次折叠 + 事件节点按 tone 着色 + payload 详情 + 跳转执行/续接重试。 */
+.tl-rounds {
+  display: grid;
+  gap: 10px;
+}
+
+.tl-round {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+.tl-round-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.tl-round-head::-webkit-details-marker { display: none; }
+.tl-round-head::before {
+  content: "▸";
+  margin-right: 6px;
+  color: var(--text-4);
+  transition: transform 0.15s ease;
+}
+.tl-round[open] > .tl-round-head::before { transform: rotate(90deg); }
+
+.tl-round-title { font-size: 13px; font-weight: 600; color: var(--text-1); flex: 1; }
+.tl-round-count { font-size: 12px; color: var(--text-4); }
+
+.tl-round > .timeline { padding: 4px 14px 12px; }
+
+.tl-body { min-width: 0; }
+
+.tl-meta { display: flex; align-items: center; gap: 12px; margin-top: 2px; }
+
+.tl-msg { color: var(--text-3); font-weight: 400; }
+
+.tl-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--running);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.tl-link:hover { text-decoration: underline; }
+
+.tl-payload { margin-top: 6px; }
+.tl-payload > summary {
+  font-size: 12px;
+  color: var(--text-4);
+  cursor: pointer;
+  list-style: none;
+}
+.tl-payload > summary::-webkit-details-marker { display: none; }
+.tl-payload > summary::before { content: "详情 ▸ "; }
+.tl-payload[open] > summary::before { content: "详情 ▾ "; }
+.tl-payload > pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.tl-retry { margin-top: 8px; }
+
+/* 事件节点按 tone 着色（复用全局 --<tone> 调色板，与 StatusBadge 一致）。 */
+.tl-node[data-tone="success"]   { border-color: var(--success);   background: var(--success); }
+.tl-node[data-tone="merged"]    { border-color: var(--merged);    background: var(--merged); }
+.tl-node[data-tone="running"]   { border-color: var(--running);   background: var(--running); }
+.tl-node[data-tone="pending"]   { border-color: var(--pending);   background: var(--pending); }
+.tl-node[data-tone="failed"]    { border-color: var(--failed);    background: var(--failed); }
+.tl-node[data-tone="cancelled"] { border-color: var(--cancelled); background: var(--cancelled); }
+.tl-node[data-tone="queued"]    { border-color: var(--queued);    background: var(--queued); }
+.tl-node[data-tone="waiting"]   { border-color: var(--waiting);   background: var(--waiting); }
+.tl-node[data-tone="draft"]     { border-color: var(--draft);     background: var(--draft); }
+.tl-node[data-tone="scheduled"] { border-color: var(--scheduled); background: var(--scheduled); }
+.tl-node[data-tone="review"]    { border-color: var(--review);    background: var(--review); }
+.tl-node[data-tone="rejected"]  { border-color: var(--rejected);  background: var(--rejected); }
+
 .tl-sep {
   margin: 2px 0 14px;
   font-size: 11px;

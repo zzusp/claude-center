@@ -32,6 +32,11 @@ export const COMPLETED_STATUSES = ["accepted", "merged"] as const satisfies read
 // 可重新激活回草稿的状态(reactivateTask)。
 export const REACTIVATABLE_STATUSES = ["failed", "cancelled"] as const satisfies readonly TaskStatus[];
 
+// 可「续接重试」的终态(requestTaskRetry / claimNextRetryableTask):失败或被取消的任务,
+// 保留工作树 + Claude 会话,带着失败原因/中断点续接重跑。与 REACTIVATABLE 同集合但语义不同
+// (重试=带上下文接着干;激活=清空回草稿推倒重来),分别命名以免改一处误伤另一处。
+export const RETRYABLE_STATUSES = ["failed", "cancelled"] as const satisfies readonly TaskStatus[];
+
 // 可发布 / 退回门控涉及的待发状态(draft 人工发布、scheduled 到点/提前发布)。
 export const PUBLISHABLE_STATUSES = ["draft", "scheduled"] as const satisfies readonly TaskStatus[];
 
@@ -58,5 +63,6 @@ export const TASK_RUNTIME_FIELDS = [
   "merge_status_checked_at",
   "merge_checked_at",
   "claude_session_id",
-  "cancel_requested_at"
+  "cancel_requested_at",
+  "retry_requested_at"
 ] as const;

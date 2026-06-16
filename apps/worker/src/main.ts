@@ -508,6 +508,9 @@ function windowHtml(): string {
                 '<button class="btn btn-sm" data-task-action="accept" data-task-id="' + esc(taskId) + '">验收通过</button>' +
                 '<button class="btn btn-sm danger" data-task-action="reject-send" data-task-id="' + esc(taskId) + '">打回</button></div>';
             }
+            if (t && (t.status === "failed" || t.status === "cancelled")) {
+              html += '<div class="detail-act"><button class="btn btn-sm btn-primary" data-task-action="retry" data-task-id="' + esc(taskId) + '">续接重试</button></div>';
+            }
             box.innerHTML = html;
           }
           function isEditingTask() {
@@ -531,6 +534,10 @@ function windowHtml(): string {
               if (!fb) { alert("打回必须填写意见"); return; }
               el.disabled = true; const ok = await window.workerApi.rejectMyTask(id, fb);
               if (!ok) alert("任务已不在待审状态"); expandedTaskId = null; await reloadTasks(); return;
+            }
+            if (action === "retry") {
+              el.disabled = true; const ok = await window.workerApi.retryMyTask(id);
+              if (!ok) alert("任务已不在失败/取消状态"); expandedTaskId = null; await reloadTasks(); return;
             }
           }
 
@@ -811,6 +818,7 @@ app.whenReady().then(async () => {
     worker?.rejectMyTask(taskId, feedback) ?? false
   );
   ipcMain.handle("worker:acceptMyTask", (_event, taskId: string) => worker?.acceptMyTask(taskId) ?? false);
+  ipcMain.handle("worker:retryMyTask", (_event, taskId: string) => worker?.retryMyTask(taskId) ?? false);
 
   // 桌面端对话面板（只读）：本 worker 承接的远程实时对话总览 + 消息线（含流式实时增量）。
   ipcMain.handle("worker:listMyConversations", () => worker?.listMyConversations() ?? []);

@@ -7,6 +7,7 @@ import {
   claimNextDirectCommand,
   claimNextRejectedTask,
   claimNextResumableTask,
+  claimNextRetryableTask,
   claimNextTask,
   failConversationTurn,
   getConversation,
@@ -28,6 +29,7 @@ import {
   rejectTask,
   removeWorkerProjectLink,
   requestTaskCancellation,
+  requestTaskRetry,
   setWorkerWorkingState,
   updateWorkerInfo,
   updateWorkerTerminal,
@@ -54,6 +56,7 @@ import {
   executeTask,
   rerunRejectedTask,
   resumeTask,
+  retryFailedTask,
   type ExecHooks
 } from "./executor.js";
 import {
@@ -380,6 +383,16 @@ export class ClaudeCenterWorker {
     } finally {
       client.release();
     }
+  }
+
+  // 重试失败/取消任务:置 retry_requested_at,下一轮 claimNextRetryableTask 续接重跑。
+  // 返回 false = 任务已不在 failed/cancelled 态（被并发激活/删除）。
+  async retryMyTask(taskId: string): Promise<boolean> {
+    const task = await requestTaskRetry(getPool(), taskId);
+    if (task) {
+      void this.tick();
+    }
+    return Boolean(task);
   }
 
   // 验收通过待审（success）任务：事务内翻为终态 accepted。返回 false = 任务已不在 success 态。
@@ -783,7 +796,7 @@ export class ClaudeCenterWorker {
       return true;
     }
 
-    // 先续接已收到回复的等待中任务，再处理打回重跑，最后才领全新任务。
+    // 优先级:续接等待中任务 > 打回重跑 > 失败/取消续接重试 > 全新任务 > 合并清理。
     const resumable = await claimNextResumableTask(pool, this.config.workerId);
     if (resumable) {
       this.startActive(
@@ -801,6 +814,17 @@ export class ClaudeCenterWorker {
         (hooks) => rerunRejectedTask(this.config, rejected, hooks)
       );
       this.publishTask(rejected);
+      return true;
+    }
+
+    // 用户请求重试的 failed/cancelled 任务(本机锁定,保留了工作树)续接重跑——优先级高于全新任务。
+    const retryable = await claimNextRetryableTask(pool, this.config.workerId);
+    if (retryable) {
+      this.startActive(
+        { key: `task:${retryable.id}`, taskId: retryable.id, kind: "task", title: retryable.title },
+        (hooks) => retryFailedTask(this.config, retryable, hooks)
+      );
+      this.publishTask(retryable);
       return true;
     }
 
