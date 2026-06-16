@@ -140,6 +140,15 @@ CLAUDE_CENTER_CLAUDE_PRE_COMMAND='export HTTPS_PROXY=http://127.0.0.1:10808'
 
 > WSL 属 best-effort：会通过 `WSLENV` 转发所需变量，但 `claude` 与各路径需为 WSL-native 才能跑通。前置命令只包裹 `claude`，不影响 `git` / `gh`；如果这些命令也要走代理，直接在启动 Worker 的环境里设置 `HTTP_PROXY` / `HTTPS_PROXY`——Worker 会把自身环境透传给所有子进程。桌面窗口顶部还会显示 worker 机器的**操作系统**，套餐账号的「套餐用量」卡片显示 5 小时 / 7 天窗口的**已用百分比 + 重置倒计时**。
 
+## Web 下发终端命令（在配置的运行终端中执行）
+
+Web Console 可向指定 Worker 下发一条**终端命令**，Worker 收到后在上面那套**配置的「运行终端」**（运行终端 + 前置命令）里执行，结果（stdout / stderr / 退出码）回传 Console 展示。完整设计见 `docs/spec/worker-terminal-command.md`。
+
+- **入口**：执行机群 → worker 详情页「下发命令」卡片（仅 `command.create`，即 admin）。文本框按所选终端语法书写命令（如 PowerShell `git -C D:\repo pull`、Git Bash `git -C /d/repo pull`），可选填工作目录；下方实时回显历史指令的状态与输出。
+- **下发链路**：复用既有「定向指令 + SSE 中转」——命令**先落库**（`direct_commands`）再 `publish` 到 `worker:<id>` 频道，Worker 收到即认领执行（亚秒级）；中转不可用时退回数据库轮询（功能不降级）。
+- **执行形态**：与 `claude` 调用完全一致——前置命令先行（其设置的代理 / VPN / 登录环境被命令继承），命令文本按终端家族内联进同一会话脚本，终端可执行文件 `shell:false` spawn。空配置回退平台默认终端（Windows = `powershell`）。前置命令失败不阻塞后续命令。
+- **权限边界**：该能力等同直接给 admin 在 Worker 机器上跑 shell，注入风险与「前置命令」配置同级，故仅 admin 可下发、可查看历史。
+
 ## 任务执行的安全姿态（bypassPermissions + deny 护栏）
 
 为了让桌面端尽量无人值守地自主执行任务，Worker 调用 `claude` 跑任务时统一附带三项配置（远程接管整体设计见 `docs/spec/worker-remote-takeover.md`）：

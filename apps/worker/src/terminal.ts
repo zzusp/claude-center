@@ -49,6 +49,13 @@ export function statementSep(family: ShellFamily): string {
   return family === "cmd" ? " & " : "; ";
 }
 
+// 把「<前置命令> <sep> <要在终端里跑的命令>」拼成一段在所选终端会话里顺序执行的脚本（前置命令可空）。
+// 前置命令先行，故它设置的环境（代理 / VPN / 登录）会被后面的命令继承；二者按所选终端家族的语法书写。
+// buildClaudeScript（claude 调用）与定向 shell 指令共用此拼接，避免各写一份。
+export function buildTerminalScript(family: ShellFamily, preCommand: string, command: string): string {
+  return preCommand ? `${preCommand}${statementSep(family)}${command}` : command;
+}
+
 export type ClaudeScriptOpts = {
   family: ShellFamily;
   // true=任务执行(带 settings/rules/permission-mode/output json);false=定向 claude 指令(仅 -p)。
@@ -79,7 +86,7 @@ export function buildClaudeScript(o: ClaudeScriptOpts): string {
     );
   }
   const call = parts.join(" ");
-  return o.preCommand ? `${o.preCommand}${statementSep(o.family)}${call}` : call;
+  return buildTerminalScript(o.family, o.preCommand, call);
 }
 
 // 把脚本以内联方式交给终端执行:返回 spawn 用的 {cmd,args}(script 作为末参)。
