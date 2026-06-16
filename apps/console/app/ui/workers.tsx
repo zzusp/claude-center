@@ -71,10 +71,10 @@ function WorkersView({
 
   return (
     <>
-      <div className="section-head">
-        <div>
-          <h2 className="section-title">执行机群</h2>
-          <span className="section-sub">
+      <div className="page-head">
+        <div className="page-head-title-wrap">
+          <h1 className="page-head-title">执行机群</h1>
+          <span className="page-head-sub">
             {onlineWorkers}/{workers.length} 在线 · 心跳 60s 超时判离线 · 在线≠接任务
           </span>
         </div>
