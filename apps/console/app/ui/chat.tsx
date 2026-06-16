@@ -4,7 +4,7 @@ import type { Conversation, Project, Worker } from "@claude-center/db";
 import { GitBranch, MessageSquare, Plus, Search, Server, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Empty } from "./shared";
-import { useConfirm } from "./controls";
+import { Select, useConfirm } from "./controls";
 import { ChatThread, NewConversationPanel } from "./chat-thread";
 
 // 实时直连对话视图：左侧会话列表 + 新建（项目/分支/worker/模型），右侧消息线（SSE 流式打字机）+ 输入框。
@@ -49,6 +49,8 @@ export function ChatView({
       }
       const d = (await r.json()) as { conversations: Conversation[] };
       setConversations(d.conversations);
+      // 筛选结果不含当前展示的会话时清空右侧（活跃会话被筛掉，右侧应回到「请选择会话」空态）
+      setActiveId((prev) => (prev && d.conversations.some((c) => c.id === prev) ? prev : null));
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载失败");
@@ -124,32 +126,26 @@ export function ChatView({
               aria-label="关键词搜索"
             />
           </div>
-          <select
+          <Select
+            className="chat-filter-select"
             value={filterProjectId}
-            onChange={(e) => setFilterProjectId(e.target.value)}
-            aria-label="按项目筛选"
-            title="按项目筛选"
-          >
-            <option value="">全部项目</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <select
+            onChange={setFilterProjectId}
+            options={[
+              { value: "", label: "全部项目" },
+              ...projects.map((p) => ({ value: p.id, label: p.name }))
+            ]}
+            ariaLabel="按项目筛选"
+          />
+          <Select
+            className="chat-filter-select"
             value={filterWorkerId}
-            onChange={(e) => setFilterWorkerId(e.target.value)}
-            aria-label="按 worker 筛选"
-            title="按 worker 筛选"
-          >
-            <option value="">全部 Worker</option>
-            {workers.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
-              </option>
-            ))}
-          </select>
+            onChange={setFilterWorkerId}
+            options={[
+              { value: "", label: "全部 Worker" },
+              ...workers.map((w) => ({ value: w.id, label: w.name }))
+            ]}
+            ariaLabel="按 worker 筛选"
+          />
           {filtersActive ? (
             <button type="button" className="icon-btn" title="清空筛选" onClick={clearFilters}>
               <X size={13} />
