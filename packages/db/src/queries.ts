@@ -644,10 +644,14 @@ export async function listWorkers(client: pg.Pool | pg.PoolClient): Promise<Work
   const result = await client.query<Worker>(
     `SELECT workers.*,
             CASE WHEN last_seen_at > now() - interval '60 seconds' THEN 'online' ELSE 'offline' END AS status,
-            (SELECT count(*)::int FROM tasks
-              WHERE tasks.claimed_by = workers.id
-                AND tasks.status IN (${sqlInList(ACTIVE_WORKER_STATUSES)})) AS active_task_count
+            COALESCE(act.active_task_count, 0) AS active_task_count
        FROM workers
+       LEFT JOIN (
+         SELECT claimed_by, count(*)::int AS active_task_count
+           FROM tasks
+          WHERE status IN (${sqlInList(ACTIVE_WORKER_STATUSES)})
+          GROUP BY claimed_by
+       ) act ON act.claimed_by = workers.id
       ORDER BY last_seen_at DESC`
   );
   return result.rows;
@@ -2558,6 +2562,40 @@ export async function deleteOrphanedAttachments(
     [String(olderThanHours), limit]
   );
   return result.rowCount ?? 0;
+}
+
+// 侧边栏徽标计数：单条查询返回三个计数，替代原来分别跑全量列表再 .length 的做法。
+// tasks 计数仅含非终态（排除 success/merged/accepted/rejected/failed/cancelled）。
+export type SummaryCounts = { tasks: number; workers: number; projects: number };
+
+export async function getSummaryCounts(
+  client: pg.Pool | pg.PoolClient,
+  user: { id: string; role: Role }
+): Promise<SummaryCounts> {
+  if (user.role === "admin") {
+    const result = await client.query<SummaryCounts>(`
+      SELECT
+        (SELECT count(*)::int FROM projects WHERE archived_at IS NULL) AS projects,
+        (SELECT count(*)::int FROM workers) AS workers,
+        (SELECT count(*)::int FROM tasks
+          WHERE status NOT IN ('success','merged','accepted','rejected','failed','cancelled')) AS tasks
+    `);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    return result.rows[0]!;
+  }
+  const result = await client.query<SummaryCounts>(`
+    SELECT
+      (SELECT count(*)::int FROM projects p
+         JOIN user_project_links upl ON upl.project_id = p.id
+        WHERE upl.user_id = $1 AND p.archived_at IS NULL) AS projects,
+      (SELECT count(*)::int FROM workers) AS workers,
+      (SELECT count(*)::int FROM tasks t
+         JOIN user_project_links upl ON upl.project_id = t.project_id
+        WHERE upl.user_id = $1
+          AND t.status NOT IN ('success','merged','accepted','rejected','failed','cancelled')) AS tasks
+  `, [user.id]);
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  return result.rows[0]!;
 }
 
 // Worker resume / rerun-rejected 路径用：聚合「最后一条 worker 评论之后」所有 user 评论的附件。

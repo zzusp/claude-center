@@ -37,7 +37,7 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
     } catch {
       // 轮询兜底，单次失败忽略
     }
-  }, []);
+  }, [], 8000);
 
   async function handleTaskSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

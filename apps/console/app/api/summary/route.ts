@@ -1,12 +1,11 @@
-import { getPool, listProjectsForUser, listRecentTasksForUser, listWorkers } from "@claude-center/db";
+import { getPool, getSummaryCounts } from "@claude-center/db";
 import { NextResponse } from "next/server";
 import { requireUser } from "../../lib/session";
 import { errorResponse } from "../../lib/api";
 
 export const dynamic = "force-dynamic";
 
-// 侧边栏徽标计数：跨页保持新鲜的轻量轮询。口径沿用 overview（tasks 取最近 80 条同源计数），
-// 心跳（synced / lastSyncAt）由客户端按本请求成败派生，不在服务端返回。
+// 侧边栏徽标计数：单条 SQL 计数，替代原来三个全量列表查询再 .length 的做法。
 export async function GET() {
   const gate = await requireUser();
   if (gate instanceof NextResponse) {
@@ -14,15 +13,8 @@ export async function GET() {
   }
   const user = gate;
   try {
-    const pool = getPool();
-    const [projects, workers, tasks] = await Promise.all([
-      listProjectsForUser(pool, user),
-      listWorkers(pool),
-      listRecentTasksForUser(pool, user, 80)
-    ]);
-    return NextResponse.json({
-      counts: { tasks: tasks.length, workers: workers.length, projects: projects.length }
-    });
+    const counts = await getSummaryCounts(getPool(), user);
+    return NextResponse.json({ counts });
   } catch (error) {
     return errorResponse(error);
   }

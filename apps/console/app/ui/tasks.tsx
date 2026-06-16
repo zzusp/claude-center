@@ -157,7 +157,7 @@ function TasksView({
     } catch {
       /* 轮询失败静默 */
     }
-  }, []);
+  }, [], 6000);
 
   usePolling(
     async (isActive) => {
@@ -462,7 +462,7 @@ function TasksSidebar() {
     } catch {
       /* 轮询失败静默 */
     }
-  }, []);
+  }, [], 5000);
 
   const byStatus = stats?.byStatus ?? {};
   const total = stats?.total ?? 0;

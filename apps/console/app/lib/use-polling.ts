@@ -48,9 +48,13 @@ export function usePolling(
       }
     };
 
-    // 首次挂载 + 周期轮询 → 直接尝试跑（inflight 锁兜底，慢响应窗口里不会堆叠）。
+    // 首次挂载立即跑一次（快速首屏），然后在 0~intervalMs 随机延迟后启动周期定时器。
+    // 随机抖动打散多个同页面 usePolling 的同步漂移（"雷鸣羊群"），让各轮询错开触发。
     void run();
-    const timer = window.setInterval(() => void run(), intervalMs);
+    let intervalTimer: number | undefined;
+    const jitterTimer = window.setTimeout(() => {
+      intervalTimer = window.setInterval(() => void run(), intervalMs);
+    }, Math.floor(Math.random() * intervalMs));
 
     // 快线：relay 事件密集到达时合并到 200ms 窗口内只跑 1 次。窗内首事件起表，后续吞掉。
     const unregister = registerRelayListener(() => {
@@ -63,7 +67,8 @@ export function usePolling(
 
     return () => {
       active = false;
-      window.clearInterval(timer);
+      window.clearTimeout(jitterTimer);
+      if (intervalTimer !== undefined) window.clearInterval(intervalTimer);
       if (coalesceTimer !== null) {
         window.clearTimeout(coalesceTimer);
         coalesceTimer = null;
