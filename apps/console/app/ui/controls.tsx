@@ -48,6 +48,55 @@ function Drawer({
   );
 }
 
+/* ============================== Modal ==============================
+   居中表单弹窗：与 Drawer 接口一致（open / title / onClose / children），
+   但展示位置改为屏幕居中、有最大高度可滚动。基于 .modal-backdrop / .modal 基础
+   样式（与 ConfirmDialog 同源），通过 .modal-form / .modal-wide 变体扩成可承载
+   表单的尺寸。选用场景：项目编辑等较短表单 / 独立成模块的弹窗（管理子仓清单）；
+   长流程（任务发布 / 任务详情编辑）继续走 Drawer，两类弹窗共存不互斥。 */
+function Modal({
+  open,
+  title,
+  size = "form",
+  onClose,
+  children
+}: {
+  open: boolean;
+  title: string;
+  size?: "form" | "wide";
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return (
+    <div className="modal-backdrop open" onClick={onClose}>
+      <div
+        className={`modal modal-form${size === "wide" ? " modal-wide" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-head">
+          <h2 className="modal-title">{title}</h2>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="关闭">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="modal-scroll">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 /* ============================== Select ==============================
    自定义单选下拉：用 div 渲染展开面板，圆角 / 阴影 / hover / 选中态全部受控，
    与 Claude Light 设计系统统一（原生 <select> 的弹出面板无法 CSS 定制）。
@@ -260,4 +309,4 @@ function useConfirm() {
   return { confirm, dialog };
 }
 
-export { Drawer, Select, ConfirmDialog, useConfirm };
+export { Drawer, Modal, Select, ConfirmDialog, useConfirm };

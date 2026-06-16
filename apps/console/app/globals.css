@@ -2008,6 +2008,75 @@ select:focus {
   padding: 20px;
 }
 
+/* 表单尺寸的居中弹窗变体：用于「新建/编辑项目」「管理子仓」等取代侧栏抽屉的表单场景。
+   保持与 ConfirmDialog 同一 .modal-backdrop / .modal 基础，仅扩宽 + 改头部布局 + 加滚动区。 */
+.modal.modal-form {
+  width: 640px;
+  max-height: min(86vh, 760px);
+  display: flex;
+  flex-direction: column;
+}
+
+.modal.modal-form.modal-wide {
+  width: 760px;
+}
+
+.modal.modal-form .modal-head {
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.modal-close:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+.modal-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 20px;
+}
+
+/* 子仓清单编辑器（弹窗内）局部排版：标题 + "新增子仓"按钮 一行；每条子仓一个卡片块。 */
+.sub-editor-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.sub-editor-head-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sub-editor-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
 /* ---------------- Responsive ---------------- */
 
 @media (max-width: 1200px) {
