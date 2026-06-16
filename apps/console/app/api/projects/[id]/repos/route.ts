@@ -52,10 +52,10 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     }
     const body = (await request.json()) as {
       subs?: Array<{
-        relativePath?: string;
+        name?: string;
         repoUrl?: string;
         defaultBranch?: string;
-        displayName?: string;
+        description?: string;
         position?: number;
       }>;
     };
@@ -64,18 +64,18 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     }
     const inputs: ProjectRepoInput[] = [];
     for (const sub of body.subs) {
-      const relativePath = sub.relativePath?.trim();
       const repoUrl = sub.repoUrl?.trim();
+      const name = sub.name?.trim() || "";
       const defaultBranch = sub.defaultBranch?.trim() || "main";
-      const displayName = sub.displayName?.trim() || relativePath || "";
+      const description = sub.description?.trim() || "";
       const position = Number.isFinite(sub.position) ? Number(sub.position) : inputs.length + 1;
-      if (!relativePath || !repoUrl) {
-        return badRequest("子仓必须填写 relativePath 与 repoUrl");
+      if (!repoUrl) {
+        return badRequest("子仓必须填写 repoUrl");
       }
       if (repoUrl === project.repo_url) {
-        return badRequest(`子仓 ${relativePath} 的 repoUrl 不可与主仓相同`);
+        return badRequest(`子仓 ${name || repoUrl} 的 repoUrl 不可与主仓相同`);
       }
-      inputs.push({ relativePath, repoUrl, defaultBranch, displayName, position });
+      inputs.push({ name, repoUrl, defaultBranch, description, position });
     }
 
     const client = await getPool().connect();

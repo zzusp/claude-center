@@ -1,5 +1,7 @@
 # 多仓任务（主仓 + 子仓清单）
 
+> 2026-06-16 增量补丁：`project_repos.relative_path` / `display_name` 已删，由 worker 运行时派生本机相对路径。本 spec 中所有 `relative_path` / `display_name` 字段引用以 [`docs/spec/project-repos-runtime-path.md`](./project-repos-runtime-path.md) 为准；本文档保留作历史背景。
+
 ## 需求
 
 1. 一个 Console 项目可能由 **主仓 + N 个独立 git 子仓** 组成，子仓物理上放在主仓目录下（**不**是 git submodule，是独立 `.git`），主仓的 `.gitignore` 已忽略子仓路径。

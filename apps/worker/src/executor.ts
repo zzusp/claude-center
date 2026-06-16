@@ -24,6 +24,7 @@ import {
   setTaskMergeChecked,
   setTaskWaiting,
   updateTaskRepoPrUrl,
+  updateTaskRepoRelativePath,
   updateTaskRepoStatus,
   type AttachmentMeta,
   type Conversation,
@@ -53,6 +54,7 @@ import {
   ensureSubRepoCloned,
   ensureWorktree,
   removeWorktree,
+  resolveSubRepoRelativePath,
   worktreePathFor
 } from "./worktree.js";
 import { startConversationSessionSync, startTaskSessionSync } from "./session.js";
@@ -435,14 +437,28 @@ function repoLocalFor(localPath: string, ctx: TaskRepoCtx): string {
 }
 
 // 单仓签出：fresh=true 从 origin/<base> 强制重置 work_branch；fresh=false 复用已有 worktree。
-// 子仓首次见到时自动 clone（约定本地路径 = localPath/relative_path），并探测主仓 .gitignore 是否
+// 子仓首次见到时自动 clone（约定本地路径 = mainLocal/<relative_path>），并探测主仓 .gitignore 是否
 // 忽略该路径——未忽略则抛错（主仓 worktree 已占该路径 → 子仓 worktree add 会冲突）。
+//
+// 子仓 relative_path 来源（docs/spec/project-repos-runtime-path.md）：
+//   - 任务创建时由 console 写占位 `*-<projectRepoId>`（不同 worker 上路径可能不同，console 端不持有）
+//   - 这里检测到占位 → 调 resolveSubRepoRelativePath 在本机派生 → UPDATE task_repos
+//   - 派生后改写 ctx.relative_path，后续 worktree 嫁接 / commit / 事件标签逻辑不变
 async function prepareRepoWorktree(
   localPath: string,
   taskId: string,
   ctx: TaskRepoCtx,
   fresh: boolean
 ): Promise<{ repoLocal: string; repoWt: string }> {
+  if (ctx.role === "sub" && ctx.relative_path.startsWith("*-")) {
+    if (!ctx.repo_url) {
+      throw new Error(`子仓占位 ${ctx.relative_path} 缺 repo_url，无法派生本机路径（project_repos 配置不全？）`);
+    }
+    const resolved = await resolveSubRepoRelativePath(localPath, ctx.repo_url);
+    await updateTaskRepoRelativePath(getPool(), ctx.id, resolved);
+    ctx.relative_path = resolved;
+  }
+
   const repoLocal = repoLocalFor(localPath, ctx);
   const repoWt = repoWtFor(localPath, taskId, ctx);
 

@@ -116,3 +116,19 @@ export function Empty({ icon, text }: { icon: ReactNode; text: string }) {
     </div>
   );
 }
+
+// 从 git 仓库 URL 提取 basename（去尾 ".git"）。用作子仓在 UI 上无名时的回退展示，
+// 以及在 worker 端尚未派生本机相对路径时的占位检测兜底。
+// 例：https://github.com/foo/widgets-lib.git → "widgets-lib"；git@github.com:foo/bar → "bar"。
+export function basenameFromRepoUrl(repoUrl: string): string {
+  if (!repoUrl) return "";
+  const cleaned = repoUrl.replace(/[\/\s]+$/, "");
+  const tail = cleaned.split(/[\/:]/).pop() ?? cleaned;
+  return tail.replace(/\.git$/, "");
+}
+
+// 子仓 task_repos.relative_path 在 worker 派生前的占位前缀：`*-<projectRepoId>`。
+// 见 docs/spec/project-repos-runtime-path.md。
+export function isPendingSubRepoPath(rel: string | null | undefined): boolean {
+  return !!rel && rel.startsWith("*-");
+}

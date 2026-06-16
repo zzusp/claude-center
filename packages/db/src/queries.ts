@@ -2245,78 +2245,86 @@ export async function listProjectRepos(
 
 // 同步主仓行：从 projects 读 repo_url / default_branch / name 填到 role='main' 行。
 // createProject / updateProject 之后调用，保证主仓行与 projects 一致。
-// 幂等：ON CONFLICT 走 UPDATE。projects 不存在则什么也不做（无 RAISE）。
+// 幂等：UPSERT 命中 partial unique index `project_repos_main_uniq`(project_id WHERE role='main')。
+// projects 不存在则什么也不做（无 RAISE）。
 export async function syncMainProjectRepo(
   client: pg.Pool | pg.PoolClient,
   projectId: string
 ): Promise<void> {
-  await client.query(
-    `INSERT INTO project_repos (project_id, role, relative_path, repo_url, default_branch, display_name, position)
-     SELECT id, 'main', '.', repo_url, default_branch, name, 0 FROM projects WHERE id = $1
-     ON CONFLICT (project_id, relative_path) DO UPDATE
-        SET repo_url       = EXCLUDED.repo_url,
-            default_branch = EXCLUDED.default_branch,
-            display_name   = EXCLUDED.display_name,
-            updated_at     = now()`,
+  // 因为约束改为 UNIQUE(project_id, repo_url)，且主仓的 repo_url 来自 projects（可能改名），
+  // 这里走「先更新已存在的主仓行 → 没行就插入」两步，保持幂等且不依赖 ON CONFLICT 目标列。
+  const upd = await client.query(
+    `UPDATE project_repos pr
+        SET repo_url       = p.repo_url,
+            default_branch = p.default_branch,
+            name           = p.name,
+            updated_at     = now()
+       FROM projects p
+      WHERE pr.project_id = $1 AND pr.role = 'main' AND p.id = $1`,
     [projectId]
   );
+  if ((upd.rowCount ?? 0) === 0) {
+    await client.query(
+      `INSERT INTO project_repos (project_id, role, repo_url, default_branch, name, description, position)
+       SELECT id, 'main', repo_url, default_branch, name, '', 0 FROM projects WHERE id = $1
+       ON CONFLICT (project_id, repo_url) DO NOTHING`,
+      [projectId]
+    );
+  }
 }
 
 export type ProjectRepoInput = {
-  relativePath: string;
+  name: string;
   repoUrl: string;
   defaultBranch: string;
-  displayName: string;
+  description: string;
   position: number;
 };
 
 // 整批替换项目的「子仓」清单（主仓行不受影响，由 syncMainProjectRepo 维护）。
-// 同事务里 DELETE 缺失子仓 + UPSERT 现有子仓（按 relative_path 匹配，保留 id 不变以避免外键级联误删 task_repos）。
+// 同事务里 DELETE 缺失子仓 + UPSERT 现有子仓（按 repo_url 匹配，保留 id 不变以避免外键级联误删 task_repos）。
 // 上层须在事务内调用：传入 PoolClient。
 export async function replaceProjectSubRepos(
   client: pg.PoolClient,
   projectId: string,
   subs: ProjectRepoInput[]
 ): Promise<void> {
-  // 校验：禁止子仓 relative_path = '.'（'.' 仅留给主仓）；relative_path 不可重复。
+  // 校验：repoUrl 必填、同项目内不可重复（DB 上有 UNIQUE(project_id, repo_url) 兜底，这里早报错友好些）。
   const seen = new Set<string>();
   for (const sub of subs) {
-    if (!sub.relativePath || sub.relativePath === ".") {
-      throw new Error(`子仓 relative_path 不能为空或 '.'`);
+    if (!sub.repoUrl) {
+      throw new Error("子仓 repoUrl 不能为空");
     }
-    if (sub.relativePath.startsWith("/") || sub.relativePath.includes("\\")) {
-      throw new Error(`子仓 relative_path 必须为 POSIX 风格（不以 '/' 开头，不含反斜杠）：${sub.relativePath}`);
+    if (seen.has(sub.repoUrl)) {
+      throw new Error(`子仓 repoUrl 重复：${sub.repoUrl}`);
     }
-    if (seen.has(sub.relativePath)) {
-      throw new Error(`子仓 relative_path 重复：${sub.relativePath}`);
-    }
-    seen.add(sub.relativePath);
+    seen.add(sub.repoUrl);
   }
 
   // 删除当前不在提交清单里的子仓行。ON DELETE RESTRICT 会在它们有 task_repos 引用时报错——
   // 此时上层应明确告知用户该子仓还有任务依赖，需先处理任务后再移除。
-  const keepPaths = subs.map((s) => s.relativePath);
+  const keepUrls = subs.map((s) => s.repoUrl);
   await client.query(
     `DELETE FROM project_repos
       WHERE project_id = $1
         AND role = 'sub'
-        AND NOT (relative_path = ANY($2::text[]))`,
-    [projectId, keepPaths]
+        AND NOT (repo_url = ANY($2::text[]))`,
+    [projectId, keepUrls]
   );
 
-  // upsert：以 (project_id, relative_path) 为匹配键。
+  // upsert：以 (project_id, repo_url) 为匹配键。
   for (const sub of subs) {
     await client.query(
       `INSERT INTO project_repos
-         (project_id, role, relative_path, repo_url, default_branch, display_name, position)
+         (project_id, role, repo_url, default_branch, name, description, position)
        VALUES ($1, 'sub', $2, $3, $4, $5, $6)
-       ON CONFLICT (project_id, relative_path) DO UPDATE
-          SET repo_url       = EXCLUDED.repo_url,
-              default_branch = EXCLUDED.default_branch,
-              display_name   = EXCLUDED.display_name,
+       ON CONFLICT (project_id, repo_url) DO UPDATE
+          SET default_branch = EXCLUDED.default_branch,
+              name           = EXCLUDED.name,
+              description    = EXCLUDED.description,
               position       = EXCLUDED.position,
               updated_at     = now()`,
-      [projectId, sub.relativePath, sub.repoUrl, sub.defaultBranch, sub.displayName, sub.position]
+      [projectId, sub.repoUrl, sub.defaultBranch, sub.name, sub.description, sub.position]
     );
   }
 }
@@ -2415,6 +2423,20 @@ export async function updateTaskRepoPrUrl(
   await client.query(
     `UPDATE task_repos SET pr_url = $2, updated_at = now() WHERE id = $1`,
     [taskRepoId, prUrl]
+  );
+}
+
+// 子仓 relative_path 改写：worker prepare 阶段把占位 '*-<projectRepoId>' 替换为本机派生路径
+// （docs/spec/project-repos-runtime-path.md）。同 task 内若两个子仓 resolve 到同名目录，
+// UNIQUE(task_id, relative_path) 会拒绝写入，由调用方捕获报错让任务 failed。
+export async function updateTaskRepoRelativePath(
+  client: pg.Pool | pg.PoolClient,
+  taskRepoId: string,
+  relativePath: string
+): Promise<void> {
+  await client.query(
+    `UPDATE task_repos SET relative_path = $2, updated_at = now() WHERE id = $1`,
+    [taskRepoId, relativePath]
   );
 }
 

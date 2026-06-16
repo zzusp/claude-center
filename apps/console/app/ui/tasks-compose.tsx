@@ -3,7 +3,7 @@
 import type { AttachmentMeta, Project, ProjectRepo, Task } from "@claude-center/db";
 import { Send } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
-import { metaOf } from "./shared";
+import { basenameFromRepoUrl, metaOf } from "./shared";
 import { Drawer, Select } from "./controls";
 import { AttachmentUploader } from "./attachment-uploader";
 
@@ -328,8 +328,8 @@ function SubRepoConfigSection({
                   checked={state.enabled}
                   onChange={(e) => patch({ enabled: e.target.checked })}
                 />
-                <span className="t-title">{repo.display_name || repo.relative_path}</span>
-                <span className="t-meta mono" style={{ fontSize: "0.85em", opacity: 0.7 }}>{repo.relative_path}</span>
+                <span className="t-title">{repo.name || basenameFromRepoUrl(repo.repo_url)}</span>
+                <span className="t-meta mono" style={{ fontSize: "0.85em", opacity: 0.7 }}>{repo.repo_url}</span>
               </label>
               {state.enabled ? (
                 <div className="form-row">
