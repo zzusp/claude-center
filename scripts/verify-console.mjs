@@ -26,7 +26,7 @@ if (existsSync(dotNext)) {
   rmSync(dotNext, { recursive: true, force: true });
 }
 
-const child = spawn(process.execPath, [nextBin, "dev", "--hostname", host, "--port", port], {
+const child = spawn(process.execPath, [nextBin, "dev", "--turbopack", "--hostname", host, "--port", port], {
   cwd: consoleDir,
   env: process.env,
   windowsHide: true

@@ -15,7 +15,7 @@ const consoleDir = path.join(root, "apps", "console");
 const host = process.env.CONSOLE_HOST || "127.0.0.1";
 const port = process.env.CONSOLE_PORT || "3000";
 
-const child = spawn(process.execPath, [nextBin, "dev", "--hostname", host, "--port", port], {
+const child = spawn(process.execPath, [nextBin, "dev", "--turbopack", "--hostname", host, "--port", port], {
   cwd: consoleDir,
   stdio: "inherit",
   env: process.env,
