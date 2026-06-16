@@ -2,6 +2,7 @@ import {
   deleteConversation,
   getConversation,
   getPool,
+  getWorker,
   listConversationMessages,
   renameConversation
 } from "@claude-center/db";
@@ -29,8 +30,11 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     if (denied) {
       return denied;
     }
-    const messages = await listConversationMessages(getPool(), id);
-    return NextResponse.json({ conversation, messages });
+    const [messages, worker] = await Promise.all([
+      listConversationMessages(getPool(), id),
+      getWorker(getPool(), conversation.worker_id)
+    ]);
+    return NextResponse.json({ conversation, messages, worker });
   } catch (error) {
     return errorResponse(error);
   }

@@ -3792,3 +3792,89 @@ a.ds-v:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* 实时对话 / 任务详情·执行记录顶部元信息条：通道徽章 + 模型 + Worker + 套餐用量 + 上下文/累计 token。
+   一行 chip 紧凑展示，过宽时整行可换行；颜色沿用 dashboard 的 STATUS_META tone 体系。 */
+.session-meta-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-3);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.session-meta-bar .sm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-1);
+  color: var(--text-2);
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.session-meta-bar .sm-chip[data-tone="success"] {
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+  color: var(--success);
+}
+.session-meta-bar .sm-chip[data-tone="running"] {
+  border-color: color-mix(in srgb, var(--running) 40%, var(--border));
+  color: var(--running);
+}
+.session-meta-bar .sm-chip[data-tone="pending"] {
+  border-color: color-mix(in srgb, var(--pending) 40%, var(--border));
+  color: var(--pending);
+}
+.session-meta-bar .sm-chip[data-tone="failed"] {
+  border-color: color-mix(in srgb, var(--failed) 40%, var(--border));
+  color: var(--failed);
+}
+.session-meta-bar .sm-chip[data-tone="cancelled"] {
+  color: var(--text-3);
+}
+.session-meta-bar .sm-ico {
+  flex-shrink: 0;
+  vertical-align: -1px;
+}
+.session-meta-bar .sm-sep {
+  color: var(--text-4);
+}
+.session-meta-bar .sm-worker-name {
+  font-weight: 500;
+  color: var(--text-1);
+}
+.session-meta-bar .sm-worker-ver,
+.session-meta-bar .sm-worker-sub {
+  color: var(--text-3);
+}
+.session-meta-bar .sm-chip-usage {
+  gap: 5px;
+}
+.session-meta-bar .sm-usage-label {
+  color: var(--text-3);
+}
+.session-meta-bar .sm-usage-bar {
+  position: relative;
+  width: 48px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.session-meta-bar .sm-usage-fill {
+  display: block;
+  height: 100%;
+  background: currentColor;
+  opacity: 0.55;
+}
+.session-meta-bar .sm-usage-pct {
+  font-variant-numeric: tabular-nums;
+}
+.session-meta-bar .sm-usage-pair {
+  font-variant-numeric: tabular-nums;
+}

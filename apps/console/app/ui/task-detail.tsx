@@ -1,6 +1,6 @@
 "use client";
 
-import type { Task, TaskEvent, TaskPredecessor, TaskRepo } from "@claude-center/db";
+import type { Task, TaskEvent, TaskPredecessor, TaskRepo, Worker } from "@claude-center/db";
 import { ChevronLeft, ExternalLink, Pencil, RefreshCw, RotateCcw, Send, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -36,6 +36,8 @@ export default function TaskDetailPage({
   // 多仓任务（spec docs/spec/task-multi-repo.md）：每个仓的执行快照（sub_status / pr_url / 错误），
   // 单仓任务退化为 1 行 main，行为对老 UI 无差别。
   const [taskRepos, setTaskRepos] = useState<TaskRepo[]>([]);
+  // 执行记录 Tab 顶部 SessionMetaBar 用：claimed_by 对应的 worker 快照（claude_version / subscription / usage）。
+  const [worker, setWorker] = useState<Worker | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -51,11 +53,12 @@ export default function TaskDetailPage({
     try {
       const response = await fetch(`/api/tasks/${taskId}`, { cache: "no-store" });
       if (!response.ok) return;
-      const data = (await response.json()) as { task: Task; predecessors: TaskPredecessor[]; events: TaskEvent[]; taskRepos?: TaskRepo[] };
+      const data = (await response.json()) as { task: Task; predecessors: TaskPredecessor[]; events: TaskEvent[]; taskRepos?: TaskRepo[]; worker?: Worker | null };
       setTask(data.task);
       setPredecessors(data.predecessors);
       setEvents(data.events);
       setTaskRepos(data.taskRepos ?? []);
+      setWorker(data.worker ?? null);
     } catch {
       /* 轮询失败静默，下次重试 */
     }
@@ -66,12 +69,13 @@ export default function TaskDetailPage({
       try {
         const response = await fetch(`/api/tasks/${taskId}`, { cache: "no-store" });
         if (!response.ok) return;
-        const data = (await response.json()) as { task: Task; predecessors: TaskPredecessor[]; events: TaskEvent[]; taskRepos?: TaskRepo[] };
+        const data = (await response.json()) as { task: Task; predecessors: TaskPredecessor[]; events: TaskEvent[]; taskRepos?: TaskRepo[]; worker?: Worker | null };
         if (isActive()) {
           setTask(data.task);
           setPredecessors(data.predecessors);
           setEvents(data.events);
           setTaskRepos(data.taskRepos ?? []);
+          setWorker(data.worker ?? null);
         }
       } catch {
         /* 轮询失败静默，下次重试 */
@@ -361,7 +365,7 @@ export default function TaskDetailPage({
         {activeTab === "execution" ? (
           <section className="card detail-section">
             <div className="section-body">
-              <SessionTranscript task={task} />
+              <SessionTranscript task={task} worker={worker} />
             </div>
           </section>
         ) : null}

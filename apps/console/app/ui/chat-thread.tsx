@@ -4,6 +4,7 @@ import type { Conversation, Project, Worker } from "@claude-center/db";
 import { Check, GitBranch, MessageSquare, Pencil, Send, Server, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, postJson } from "./shared";
+import { SessionMetaBar } from "./session-meta";
 import { TranscriptView, parseTranscript } from "./transcript";
 import { usePolling } from "../lib/use-polling";
 
@@ -25,6 +26,9 @@ export function ChatThread({
   const [err, setErr] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(conversation.title);
+  // 顶部 SessionMetaBar 用：worker 的 claude_version / subscription / usage 由 /api/conversations/[id] 顺路返回。
+  // 单连同长度仅 worker 一项变化（5h/7d 利用率 + 重置时间随时间漂移），3s 节奏太重，复用 usePolling 默认间隔即可。
+  const [worker, setWorker] = useState<Worker | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const doneRef = useRef(false);
   const id = conversation.id;
@@ -36,13 +40,31 @@ export function ChatThread({
     setEditingTitle(false);
   }, [conversation.title, id]);
 
-  // 切换会话：重置回放态。
+  // 切换会话：重置回放态 + 清空 worker 元信息（下个 polling 周期重新填充）。
   useEffect(() => {
     setJsonl(null);
     setLoaded(false);
     setPending([]);
+    setWorker(null);
     doneRef.current = false;
   }, [id]);
+
+  // 轮询对话详情拿 worker 快照（claude_version / subscription / usage）。
+  // worker 本身不会换、变化是 usage 时间窗位移；3s 节奏与其它面板一致，relay 事件也会触发额外刷新。
+  usePolling(
+    async (isActive) => {
+      try {
+        const r = await fetch(`/api/conversations/${id}`, { cache: "no-store" });
+        if (!r.ok) return;
+        const d = (await r.json()) as { worker: Worker | null };
+        if (!isActive()) return;
+        setWorker(d.worker);
+      } catch {
+        /* 轮询失败静默 */
+      }
+    },
+    [id]
+  );
 
   // 轮询对话 session transcript（active 持续；closed 取一次即停）。Worker 周期 3s + 终态把 jsonl 同步到库。
   usePolling(
@@ -186,6 +208,8 @@ export function ChatThread({
           </button>
         ) : null}
       </header>
+
+      <SessionMetaBar planModel={conversation.model} worker={worker} jsonl={jsonl} />
 
       <div className="chat-msgs" ref={scrollRef}>
         {loaded && items.length === 0 && pending.length === 0 ? (

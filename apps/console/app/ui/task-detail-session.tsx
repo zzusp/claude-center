@@ -1,16 +1,19 @@
 "use client";
 
-import type { Task } from "@claude-center/db";
+import type { Task, Worker } from "@claude-center/db";
 import { ScrollText } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { Empty, fmtTime } from "./shared";
+import { SessionMetaBar } from "./session-meta";
 import { TranscriptView, parseTranscript } from "./transcript";
 import { usePolling } from "../lib/use-polling";
 
 // 任务执行会话回放：执行期间（claimed/running/waiting）每 5s 懒轮询，终态后再取数次拿到 Worker 最终强制同步的
 // 完整 transcript 即停拉（避免持续拖大 blob）。Worker 周期 + 终态把 session .jsonl 同步到 task_sessions。
 // 解析 + 富展示走共用 transcript.tsx（与对话页同款）。
-export function SessionTranscript({ task }: { task: Task }) {
+// 顶部 SessionMetaBar 复用对话页同款：通道 + 模型 + Worker 套餐 / 用量 + 上下文 / 会话累计 token。
+// worker 由父组件 /api/tasks/[id] polling 顺路带回（未认领时为 null，meta bar 自适应隐藏 worker chip）。
+export function SessionTranscript({ task, worker }: { task: Task; worker: Worker | null }) {
   const [jsonl, setJsonl] = useState<string | null>(null);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -44,15 +47,18 @@ export function SessionTranscript({ task }: { task: Task }) {
 
   const items = useMemo(() => (jsonl ? parseTranscript(jsonl) : []), [jsonl]);
 
-  if (!loaded) {
-    return <Empty icon={<ScrollText size={28} />} text="加载中…" />;
-  }
-  if (items.length === 0) {
-    return <Empty icon={<ScrollText size={28} />} text="暂无执行会话记录（Worker 执行后会同步到此）" />;
-  }
+  // meta bar 任何状态都展示（即便 jsonl 还没拉到也能看到通道 / 模型 / worker 信息），仅 transcript 区随
+  // loaded / items 变化。jsonl 为 null 时 SessionMetaBar 会自动隐藏 token chip。
   return (
     <div className="tx-wrap">
-      <TranscriptView items={items} />
+      <SessionMetaBar planModel={task.model} worker={worker} jsonl={jsonl} />
+      {!loaded ? (
+        <Empty icon={<ScrollText size={28} />} text="加载中…" />
+      ) : items.length === 0 ? (
+        <Empty icon={<ScrollText size={28} />} text="暂无执行会话记录（Worker 执行后会同步到此）" />
+      ) : (
+        <TranscriptView items={items} />
+      )}
       {syncedAt ? <div className="session-synced">最近同步：{fmtTime(syncedAt)}</div> : null}
     </div>
   );

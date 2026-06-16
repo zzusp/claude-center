@@ -4,6 +4,7 @@ import {
   deleteTaskRepos,
   getPool,
   getTaskWithDeps,
+  getWorker,
   listProjectRepos,
   listTaskEvents,
   listTaskRepos,
@@ -58,11 +59,14 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     if (!detail) {
       return NextResponse.json({ error: "任务不存在" }, { status: 404 });
     }
-    const [events, taskRepos] = await Promise.all([
+    const [events, taskRepos, worker] = await Promise.all([
       listTaskEvents(getPool(), id),
-      listTaskRepos(getPool(), id)
+      listTaskRepos(getPool(), id),
+      // 任务详情顺路返回当前认领 worker 的 claude_version / 套餐 / 用量，供执行记录 tab 顶部
+      // SessionMetaBar 展示「模型 + 套餐用量 + 通道」一行；未认领或 worker 已删则为 null。
+      detail.task.claimed_by ? getWorker(getPool(), detail.task.claimed_by) : Promise.resolve(null)
     ]);
-    return NextResponse.json({ ...detail, events, taskRepos });
+    return NextResponse.json({ ...detail, events, taskRepos, worker });
   } catch (error) {
     return errorResponse(error);
   }
