@@ -528,13 +528,15 @@ export async function listTasks(
   return { tasks, total };
 }
 
-// 任务流右侧栏统计：总计 + 按状态计数 + 今日完成率/平均耗时。
-// 终态以 finished_at 落在 [todayStartIso, now) 为窗（避免时区偏移影响）；调用方传入本地 0 点 ISO。
-// 非 admin 只看其有项目权限的任务（JOIN user_project_links 过滤）。
+// 任务流右侧栏统计：总计 + 按状态计数 + 按项目计数 + 今日创建/完成率/平均耗时。
+// 终态以 finished_at 落在 [todayStartIso, now) 为窗（避免时区偏移影响）；今日创建以 created_at 同窗；
+// 调用方传入本地 0 点 ISO。非 admin 只看其有项目权限的任务（JOIN user_project_links 过滤）。
 export type TaskStatsResult = {
   total: number;
   byStatus: Record<string, number>;
+  byProject: { id: string; name: string; n: number }[];
   today: {
+    created: number;
     finished: number;
     accepted: number;
     rejected: number;
@@ -555,35 +557,47 @@ export async function listTaskStatsForUser(
   const params: unknown[] = [todayStartIso];
   if (!isAdmin) params.push(user.id);
 
-  // 单次查询拿三段：byStatus 数组、today.finished_at 在窗范围内的完成态、平均耗时（finished_at - started_at）。
   const sql = `
     WITH scoped AS (
       SELECT tasks.id,
              tasks.status,
+             tasks.project_id,
+             projects.name AS project_name,
+             tasks.created_at,
              tasks.started_at,
              tasks.finished_at
         FROM tasks
+        JOIN projects ON projects.id = tasks.project_id
         ${scopeJoin}
     ),
     by_status AS (
       SELECT status, count(*)::int AS n FROM scoped GROUP BY status
     ),
+    by_project AS (
+      SELECT project_id, project_name, count(*)::int AS n
+        FROM scoped
+       GROUP BY project_id, project_name
+       ORDER BY n DESC, project_name ASC
+    ),
     today_window AS (
       SELECT
-        count(*) FILTER (WHERE status IN ('accepted','merged','failed','cancelled'))::int AS finished,
-        count(*) FILTER (WHERE status IN ('accepted','merged'))::int AS accepted,
-        count(*) FILTER (WHERE status = 'rejected')::int AS rejected,
+        (SELECT count(*) FROM scoped WHERE created_at >= $1::timestamptz)::int AS created,
+        count(*) FILTER (WHERE finished_at >= $1::timestamptz AND status IN ('accepted','merged','failed','cancelled'))::int AS finished,
+        count(*) FILTER (WHERE finished_at >= $1::timestamptz AND status IN ('accepted','merged'))::int AS accepted,
+        count(*) FILTER (WHERE finished_at >= $1::timestamptz AND status = 'rejected')::int AS rejected,
         avg(EXTRACT(EPOCH FROM (finished_at - started_at))) FILTER (
-          WHERE finished_at IS NOT NULL
+          WHERE finished_at >= $1::timestamptz
+            AND finished_at IS NOT NULL
             AND started_at IS NOT NULL
             AND status IN ('accepted','merged','failed','cancelled')
         ) AS avg_secs
       FROM scoped
-      WHERE finished_at >= $1::timestamptz
     )
     SELECT
       (SELECT count(*)::int FROM scoped) AS total,
       (SELECT COALESCE(jsonb_object_agg(status, n), '{}'::jsonb) FROM by_status) AS by_status,
+      (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', project_id, 'name', project_name, 'n', n)), '[]'::jsonb) FROM by_project) AS by_project,
+      (SELECT created FROM today_window) AS today_created,
       (SELECT finished FROM today_window) AS today_finished,
       (SELECT accepted FROM today_window) AS today_accepted,
       (SELECT rejected FROM today_window) AS today_rejected,
@@ -593,6 +607,8 @@ export async function listTaskStatsForUser(
   const result = await client.query<{
     total: number;
     by_status: Record<string, number>;
+    by_project: { id: string; name: string; n: number }[];
+    today_created: number | null;
     today_finished: number | null;
     today_accepted: number | null;
     today_rejected: number | null;
@@ -603,7 +619,9 @@ export async function listTaskStatsForUser(
   return {
     total: row?.total ?? 0,
     byStatus: row?.by_status ?? {},
+    byProject: row?.by_project ?? [],
     today: {
+      created: row?.today_created ?? 0,
       finished: row?.today_finished ?? 0,
       accepted: row?.today_accepted ?? 0,
       rejected: row?.today_rejected ?? 0,
