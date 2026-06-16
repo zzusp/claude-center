@@ -58,6 +58,17 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
       } catch {
         taskRepos = undefined;
       }
+      // 附件 id 列表：tasks-compose 的 hidden input 序列化为 JSON 数组（spec docs/spec/task-attachments.md）。
+      let attachmentIds: string[] = [];
+      try {
+        const raw = String(data.get("attachmentIds") ?? "").trim();
+        const parsed = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(parsed)) {
+          attachmentIds = parsed.filter((v): v is string => typeof v === "string");
+        }
+      } catch {
+        attachmentIds = [];
+      }
       await postJson("/api/tasks", {
         projectId: selectedProjectId,
         title: data.get("title"),
@@ -72,7 +83,8 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
         model: data.get("model"),
         dependsOn: data.getAll("dependsOn").map(String),
         scheduledAt,
-        taskRepos
+        taskRepos,
+        attachmentIds
       });
       form.reset();
       setDrawerOpen(false);

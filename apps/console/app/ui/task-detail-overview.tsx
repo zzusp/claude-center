@@ -4,6 +4,7 @@ import type { Task, TaskPredecessor, TaskRepo } from "@claude-center/db";
 import { Activity, Check, FileText, GitPullRequest, Info, ListChecks, RotateCcw } from "lucide-react";
 import { Empty, KvRow, StatusBadge, fmtTime, postJson } from "./shared";
 import { Section, type LifecycleStep } from "./task-detail-shared";
+import { AttachmentList } from "./attachment-uploader";
 import { useAsyncAction } from "../lib/use-async-action";
 import { useState } from "react";
 

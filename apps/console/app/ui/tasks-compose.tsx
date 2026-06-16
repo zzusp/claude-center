@@ -1,10 +1,11 @@
 "use client";
 
-import type { Project, ProjectRepo, Task } from "@claude-center/db";
+import type { AttachmentMeta, Project, ProjectRepo, Task } from "@claude-center/db";
 import { Send } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { metaOf } from "./shared";
 import { Drawer, Select } from "./controls";
+import { AttachmentUploader } from "./attachment-uploader";
 
 // 子仓在创建/编辑任务表单中的受控状态。subStates[projectRepoId] 表示该子仓的勾选 + 分支配置。
 // 提交时按 enabled 输出 taskRepos[]（未启用的子仓后端会落 sub_status='skipped'）。
@@ -39,6 +40,8 @@ function ComposeTaskForm({
   // 主仓的 base/work/target 仍走原 baseBranch/workBranch/targetBranch input；子仓配置序列化到 hidden taskRepos 字段。
   const [subRepos, setSubRepos] = useState<ProjectRepo[]>([]);
   const [subStates, setSubStates] = useState<SubStatesMap>({});
+  // 附件 staging：上传后挂在表单上、submit 时随 attachmentIds 提交。
+  const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
 
   useEffect(() => {
     if (!selectedProjectId) {
@@ -121,12 +124,22 @@ function ComposeTaskForm({
         <input name="title" placeholder="修复登录按钮状态" required />
       </div>
       <div className="field">
-        <label className="field-label">目标</label>
+        <label className="field-label">
+          目标 <span className="field-hint">可粘贴 / 拖拽 / 选择图片或文件作为补充资料</span>
+        </label>
         <textarea
           name="description"
           rows={4}
           placeholder="写清期望行为、约束和验收方式"
           required
+        />
+        <AttachmentUploader attachments={attachments} onChange={setAttachments} />
+        {/* attachmentIds 序列化：父 handler 通过 FormData.get('attachmentIds') 取 JSON */}
+        <input
+          type="hidden"
+          name="attachmentIds"
+          value={JSON.stringify(attachments.map((a) => a.id))}
+          readOnly
         />
       </div>
       <div className="form-row">

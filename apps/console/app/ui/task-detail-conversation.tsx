@@ -1,11 +1,12 @@
 "use client";
 
-import type { Task, TaskComment } from "@claude-center/db";
+import type { AttachmentMeta, Task, TaskComment } from "@claude-center/db";
 import { Bot, MessageSquare, Send, UserRound } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { Empty, fmtTime } from "./shared";
 import { usePolling } from "../lib/use-polling";
 import { useAsyncAction } from "../lib/use-async-action";
+import { AttachmentList, AttachmentUploader } from "./attachment-uploader";
 
 // 任务对话 Tab：comments 按 tab 懒轮询（仅本 tab 打开时拉）+ waiting 态回复续接。
 export function TaskConversation({
@@ -17,6 +18,7 @@ export function TaskConversation({
 }) {
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [reply, setReply] = useState("");
+  const [replyAttachments, setReplyAttachments] = useState<AttachmentMeta[]>([]);
   const { busy, error, run } = useAsyncAction();
   const waiting = task.status === "waiting";
   const canReply = waiting && canComment;
@@ -37,12 +39,15 @@ export function TaskConversation({
 
   async function submitReply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!reply.trim()) return;
+    if (!reply.trim() && replyAttachments.length === 0) return;
     await run(async () => {
       const response = await fetch(`/api/tasks/${task.id}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: reply.trim() })
+        body: JSON.stringify({
+          body: reply.trim(),
+          attachmentIds: replyAttachments.map((a) => a.id)
+        })
       });
       if (!response.ok) {
         const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -51,6 +56,7 @@ export function TaskConversation({
       const data = (await response.json()) as { comment: TaskComment };
       setComments((prev) => [...prev, data.comment]);
       setReply("");
+      setReplyAttachments([]);
     });
   }
 
@@ -73,7 +79,10 @@ export function TaskConversation({
                   <span className="chat-author">{comment.author === "worker" ? "Worker / Claude" : "你"}</span>
                   <span className="chat-time">{fmtTime(comment.created_at)}</span>
                 </div>
-                <div className="chat-body">{comment.body}</div>
+                {comment.body ? <div className="chat-body">{comment.body}</div> : null}
+                {comment.attachments && comment.attachments.length > 0 ? (
+                  <AttachmentList attachments={comment.attachments} />
+                ) : null}
               </div>
             </div>
           ))}
@@ -94,9 +103,20 @@ export function TaskConversation({
           }
           disabled={!canReply || busy}
         />
+        {canReply ? (
+          <AttachmentUploader
+            attachments={replyAttachments}
+            onChange={setReplyAttachments}
+            disabled={busy}
+          />
+        ) : null}
         {error ? <div className="error-box">{error}</div> : null}
         <div className="chat-actions">
-          <button className="btn btn-primary" type="submit" disabled={!canReply || busy || !reply.trim()}>
+          <button
+            className="btn btn-primary"
+            type="submit"
+            disabled={!canReply || busy || (!reply.trim() && replyAttachments.length === 0)}
+          >
             <Send size={16} />
             {!canComment ? "无回复权限" : waiting ? "回复并续接" : "等待 Worker 提问"}
           </button>

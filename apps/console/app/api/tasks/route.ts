@@ -1,5 +1,6 @@
 import {
   addTaskDependencies,
+  bindAttachmentsToTask,
   createTask,
   createTaskRepos,
   getPool,
@@ -16,6 +17,7 @@ import { requirePermission, requireUser } from "../../lib/session";
 import { errorResponse, badRequest } from "../../lib/api";
 import { projectChannel, publishRelay } from "../../lib/relay-publish";
 import { buildTaskRepoInputs, type TaskRepoUserInput } from "../../lib/task-repos-input";
+import { MAX_ATTACHMENTS_PER_OWNER } from "../../lib/attachment-config";
 
 export const dynamic = "force-dynamic";
 
@@ -111,6 +113,8 @@ export async function POST(request: NextRequest) {
       // 多仓任务（spec docs/spec/task-multi-repo.md §UI）：每个项目仓的 base/work/target 与启用标志。
       // 缺省时按主仓单行生成（其它子仓默认 sub_status='skipped'），兼容旧前端。
       taskRepos?: TaskRepoUserInput[];
+      // 附件 id 列表（先经 POST /api/attachments 上传得到 id）。事务里绑到本任务。
+      attachmentIds?: string[];
     };
 
     if (!body.projectId || !body.title?.trim() || !body.description?.trim()) {
@@ -149,6 +153,12 @@ export async function POST(request: NextRequest) {
       typeof body.model === "string" && TASK_MODELS.includes(body.model) ? (body.model as TaskModel) : "default";
 
     const dependsOn = Array.isArray(body.dependsOn) ? body.dependsOn.filter((id) => typeof id === "string") : [];
+    const attachmentIds = Array.isArray(body.attachmentIds)
+      ? body.attachmentIds.filter((id): id is string => typeof id === "string")
+      : [];
+    if (attachmentIds.length > MAX_ATTACHMENTS_PER_OWNER) {
+      return badRequest(`附件数量超过上限（${MAX_ATTACHMENTS_PER_OWNER}）`);
+    }
 
     // 多仓任务：解析 taskRepos[] 或按主仓单行兜底。在 createTask 同事务里插入 task_repos。
     const projectRepos = await listProjectRepos(getPool(), body.projectId);
@@ -185,6 +195,13 @@ export async function POST(request: NextRequest) {
       });
       await addTaskDependencies(client, task.id, dependsOn);
       await createTaskRepos(client, task.id, taskRepoInputs);
+      // 附件绑定：admin 可借他人上传的附件，其它角色仅能用自己上传的（owner_user_id 校验）。
+      await bindAttachmentsToTask(
+        client,
+        task.id,
+        attachmentIds,
+        user.role === "admin" ? null : user.id
+      );
       await client.query("COMMIT");
       publishRelay({
         channel: projectChannel(task.project_id),
