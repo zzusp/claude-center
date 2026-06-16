@@ -1,4 +1,12 @@
 import type pg from "pg";
+import {
+  ACTIVE_WORKER_STATUSES,
+  COMPLETED_STATUSES,
+  IN_FLIGHT_STATUSES,
+  PUBLISHABLE_STATUSES,
+  REACTIVATABLE_STATUSES,
+  sqlInList
+} from "./task-state.js";
 import type {
   Conversation,
   ConversationMessage,
@@ -192,7 +200,7 @@ export async function updateTask(
             scheduled_at = $12,
             status = $13,
             updated_at = now()
-      WHERE id = $1 AND status IN ('draft', 'scheduled')
+      WHERE id = $1 AND status IN (${sqlInList(PUBLISHABLE_STATUSES)})
       RETURNING *`,
     [
       taskId,
@@ -217,7 +225,7 @@ export async function updateTask(
 // 返回 false 表示任务不存在或正处于在途态不可删除。
 export async function deleteTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<boolean> {
   const result = await client.query(
-    `DELETE FROM tasks WHERE id = $1 AND status NOT IN ('claimed', 'running')`,
+    `DELETE FROM tasks WHERE id = $1 AND status NOT IN (${sqlInList(ACTIVE_WORKER_STATUSES)})`,
     [taskId]
   );
   return (result.rowCount ?? 0) > 0;
@@ -243,7 +251,7 @@ export async function reactivateTask(client: pg.Pool | pg.PoolClient, taskId: st
             claude_session_id = null,
             cancel_requested_at = null,
             updated_at = now()
-      WHERE id = $1 AND status IN ('failed', 'cancelled')
+      WHERE id = $1 AND status IN (${sqlInList(REACTIVATABLE_STATUSES)})
       RETURNING *`,
     [taskId]
   );
@@ -258,7 +266,7 @@ export async function publishTask(client: pg.Pool | pg.PoolClient, taskId: strin
     `UPDATE tasks
         SET status = 'pending',
             updated_at = now()
-      WHERE id = $1 AND status IN ('draft', 'scheduled')
+      WHERE id = $1 AND status IN (${sqlInList(PUBLISHABLE_STATUSES)})
       RETURNING *`,
     [taskId]
   );
@@ -319,7 +327,7 @@ export async function listRecentTasks(client: pg.Pool | pg.PoolClient, limit = 5
        LEFT JOIN workers ON workers.id = tasks.claimed_by
        LEFT JOIN LATERAL (
          SELECT array_agg(d.depends_on_task_id) AS depends_on,
-                bool_or(pre.status NOT IN ('accepted', 'merged')) AS blocked
+                bool_or(pre.status NOT IN (${sqlInList(COMPLETED_STATUSES)})) AS blocked
            FROM task_dependencies d
            JOIN tasks pre ON pre.id = d.depends_on_task_id
           WHERE d.task_id = tasks.id
@@ -350,7 +358,7 @@ export async function getTaskWithDeps(
        LEFT JOIN workers ON workers.id = tasks.claimed_by
        LEFT JOIN LATERAL (
          SELECT array_agg(d.depends_on_task_id) AS depends_on,
-                bool_or(pre.status NOT IN ('accepted', 'merged')) AS blocked
+                bool_or(pre.status NOT IN (${sqlInList(COMPLETED_STATUSES)})) AS blocked
            FROM task_dependencies d
            JOIN tasks pre ON pre.id = d.depends_on_task_id
           WHERE d.task_id = tasks.id
@@ -615,7 +623,7 @@ export async function listWorkers(client: pg.Pool | pg.PoolClient): Promise<Work
             CASE WHEN last_seen_at > now() - interval '60 seconds' THEN 'online' ELSE 'offline' END AS status,
             (SELECT count(*)::int FROM tasks
               WHERE tasks.claimed_by = workers.id
-                AND tasks.status IN ('claimed', 'running')) AS active_task_count
+                AND tasks.status IN (${sqlInList(ACTIVE_WORKER_STATUSES)})) AS active_task_count
        FROM workers
       ORDER BY last_seen_at DESC`
   );
@@ -749,7 +757,7 @@ export async function getWorker(client: pg.Pool | pg.PoolClient, workerId: strin
             CASE WHEN last_seen_at > now() - interval '60 seconds' THEN 'online' ELSE 'offline' END AS status,
             (SELECT count(*)::int FROM tasks
               WHERE tasks.claimed_by = workers.id
-                AND tasks.status IN ('claimed', 'running')) AS active_task_count
+                AND tasks.status IN (${sqlInList(ACTIVE_WORKER_STATUSES)})) AS active_task_count
        FROM workers
       WHERE workers.id = $1`,
     [workerId]
@@ -882,7 +890,7 @@ export async function claimNextTask(client: pg.Pool | pg.PoolClient, workerId: s
               FROM task_dependencies dep
               JOIN tasks pre ON pre.id = dep.depends_on_task_id
              WHERE dep.task_id = tasks.id
-               AND pre.status NOT IN ('accepted', 'merged')
+               AND pre.status NOT IN (${sqlInList(COMPLETED_STATUSES)})
           )
         ORDER BY tasks.created_at ASC
         FOR UPDATE SKIP LOCKED
@@ -984,7 +992,7 @@ export async function requestTaskCancellation(
   const result = await client.query<Task>(
     `UPDATE tasks
         SET cancel_requested_at = now(), updated_at = now()
-      WHERE id = $1 AND status IN ('claimed', 'running', 'waiting')
+      WHERE id = $1 AND status IN (${sqlInList(IN_FLIGHT_STATUSES)})
       RETURNING *`,
     [taskId]
   );
@@ -1005,7 +1013,7 @@ export async function listCancelRequestedTaskIds(
     `SELECT id FROM tasks
       WHERE claimed_by = $1
         AND cancel_requested_at IS NOT NULL
-        AND status IN ('claimed', 'running', 'waiting')`,
+        AND status IN (${sqlInList(IN_FLIGHT_STATUSES)})`,
     [workerId]
   );
   return result.rows.map((row) => row.id);
@@ -1024,7 +1032,7 @@ export async function markTaskCancelled(
             finished_at = now(),
             result = $3,
             updated_at = now()
-      WHERE id = $1 AND claimed_by = $2 AND status IN ('claimed', 'running', 'waiting')`,
+      WHERE id = $1 AND claimed_by = $2 AND status IN (${sqlInList(IN_FLIGHT_STATUSES)})`,
     [taskId, workerId, resultPayload]
   );
   const cancelled = (result.rowCount ?? 0) > 0;

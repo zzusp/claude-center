@@ -1,6 +1,7 @@
 import { deleteSession, getPool } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE } from "../../../lib/session";
+import { errorResponse } from "../../../lib/api";
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,6 +13,6 @@ export async function POST(request: NextRequest) {
     response.cookies.set(SESSION_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
     return response;
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

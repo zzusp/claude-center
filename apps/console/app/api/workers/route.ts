@@ -1,6 +1,7 @@
 import { getPool, listWorkers } from "@claude-center/db";
 import { NextResponse } from "next/server";
 import { requireUser } from "../../lib/session";
+import { errorResponse } from "../../lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,6 @@ export async function GET() {
     const workers = await listWorkers(getPool());
     return NextResponse.json({ workers });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

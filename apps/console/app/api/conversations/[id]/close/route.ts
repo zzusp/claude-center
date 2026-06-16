@@ -1,6 +1,8 @@
-import { closeConversation, getConversation, getPool, userHasProject } from "@claude-center/db";
+import { closeConversation, getConversation, getPool } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "../../../../lib/session";
+import { requireProjectScope } from "../../../../lib/access";
+import { errorResponse } from "../../../../lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -17,12 +19,13 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     if (!conversation) {
       return NextResponse.json({ error: "对话不存在" }, { status: 404 });
     }
-    if (user.role !== "admin" && !(await userHasProject(getPool(), user.id, conversation.project_id))) {
-      return NextResponse.json({ error: "无权访问该对话" }, { status: 403 });
+    const denied = await requireProjectScope(user, conversation.project_id, "无权访问该对话");
+    if (denied) {
+      return denied;
     }
     await closeConversation(getPool(), id);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

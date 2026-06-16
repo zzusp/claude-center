@@ -1,8 +1,10 @@
-import { getPool, getProject, userHasProject } from "@claude-center/db";
+import { getPool, getProject } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { requirePermission } from "../../../../lib/session";
+import { requireProjectScope } from "../../../../lib/access";
+import { errorResponse } from "../../../../lib/api";
 
 const execFileAsync = promisify(execFile);
 
@@ -20,8 +22,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   try {
     const { id } = await params;
     // 项目隔离：非 admin 只能读分配给自己项目的分支，避免枚举他人项目。
-    if (user.role !== "admin" && !(await userHasProject(getPool(), user.id, id))) {
-      return NextResponse.json({ error: "无权访问该项目" }, { status: 403 });
+    const denied = await requireProjectScope(user, id, "无权访问该项目");
+    if (denied) {
+      return denied;
     }
     const project = await getProject(getPool(), id);
     if (!project) {
@@ -60,6 +63,6 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 
     return NextResponse.json({ branches: unique });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

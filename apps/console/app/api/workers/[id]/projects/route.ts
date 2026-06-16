@@ -1,6 +1,7 @@
 import { getPool, listWorkerProjectLinks } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "../../../../lib/session";
+import { errorResponse } from "../../../../lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,6 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     const links = await listWorkerProjectLinks(getPool(), id);
     return NextResponse.json({ links });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

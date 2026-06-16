@@ -3,11 +3,12 @@ import {
   getConversation,
   getPool,
   listConversationMessages,
-  renameConversation,
-  userHasProject
+  renameConversation
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../../lib/session";
+import { requireProjectScope } from "../../../lib/access";
+import { errorResponse, badRequest } from "../../../lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -24,13 +25,14 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     if (!conversation) {
       return NextResponse.json({ error: "对话不存在" }, { status: 404 });
     }
-    if (user.role !== "admin" && !(await userHasProject(getPool(), user.id, conversation.project_id))) {
-      return NextResponse.json({ error: "无权访问该对话" }, { status: 403 });
+    const denied = await requireProjectScope(user, conversation.project_id, "无权访问该对话");
+    if (denied) {
+      return denied;
     }
     const messages = await listConversationMessages(getPool(), id);
     return NextResponse.json({ conversation, messages });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
 
@@ -46,22 +48,23 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const body = (await request.json()) as { title?: string };
     const title = body.title?.trim();
     if (title == null) {
-      return NextResponse.json({ error: "title 必填" }, { status: 400 });
+      return badRequest("title 必填");
     }
     if (title.length > 200) {
-      return NextResponse.json({ error: "标题最长 200 字" }, { status: 400 });
+      return badRequest("标题最长 200 字");
     }
     const conversation = await getConversation(getPool(), id);
     if (!conversation) {
       return NextResponse.json({ error: "对话不存在" }, { status: 404 });
     }
-    if (user.role !== "admin" && !(await userHasProject(getPool(), user.id, conversation.project_id))) {
-      return NextResponse.json({ error: "无权访问该对话" }, { status: 403 });
+    const denied = await requireProjectScope(user, conversation.project_id, "无权访问该对话");
+    if (denied) {
+      return denied;
     }
     await renameConversation(getPool(), id, title);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
 
@@ -79,12 +82,13 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
     if (!conversation) {
       return NextResponse.json({ error: "对话不存在" }, { status: 404 });
     }
-    if (user.role !== "admin" && !(await userHasProject(getPool(), user.id, conversation.project_id))) {
-      return NextResponse.json({ error: "无权访问该对话" }, { status: 403 });
+    const denied = await requireProjectScope(user, conversation.project_id, "无权访问该对话");
+    if (denied) {
+      return denied;
     }
     await deleteConversation(getPool(), id);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

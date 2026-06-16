@@ -1,6 +1,8 @@
-import { getConversation, getConversationSession, getPool, userHasProject } from "@claude-center/db";
+import { getConversation, getConversationSession, getPool } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "../../../../lib/session";
+import { requireProjectScope } from "../../../../lib/access";
+import { errorResponse } from "../../../../lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -14,16 +16,20 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const user = gate;
   try {
     const { id } = await params;
-    // 项目隔离：非 admin 只能读分配给自己项目下对话的会话记录。
+    // 项目隔离：非 admin 只能读分配给自己项目下对话的会话记录（admin 跳过取数直接放行）。
     if (user.role !== "admin") {
       const conversation = await getConversation(getPool(), id);
-      if (!conversation || !(await userHasProject(getPool(), user.id, conversation.project_id))) {
+      if (!conversation) {
         return NextResponse.json({ error: "无权访问该对话" }, { status: 403 });
+      }
+      const denied = await requireProjectScope(user, conversation.project_id, "无权访问该对话");
+      if (denied) {
+        return denied;
       }
     }
     const session = await getConversationSession(getPool(), id);
     return NextResponse.json({ jsonl: session?.jsonl ?? null, syncedAt: session?.synced_at ?? null });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
