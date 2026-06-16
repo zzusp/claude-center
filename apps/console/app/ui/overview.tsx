@@ -31,7 +31,7 @@ import {
 } from "./dashboard-shared";
 import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
 import { Drawer, Select } from "./controls";
-import { Donut, RuntimeHealth, StatCard } from "./overview-widgets";
+import { Donut, RelayConnectionsCard, RuntimeHealth, StatCard } from "./overview-widgets";
 
 
 function DashboardView({
@@ -79,6 +79,13 @@ function DashboardView({
 
   return (
     <>
+      <div className="page-head">
+        <div className="page-head-title-wrap">
+          <h1 className="page-head-title">总览</h1>
+          <span className="page-head-sub">AI 编码任务中央调度台</span>
+        </div>
+      </div>
+
       <div className="grid-stats">
         <StatCard
           icon={<Cpu size={16} />}
@@ -241,6 +248,8 @@ function DashboardView({
           </section>
         </div>
       </div>
+
+      <RelayConnectionsCard />
     </>
   );
 }

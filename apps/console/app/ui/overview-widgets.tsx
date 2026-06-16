@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Clock, Database, RadioTower } from "lucide-react";
-import { KvRow, type Tone } from "./shared";
+import { useEffect, useMemo, useState } from "react";
+import { Clock, Database, Network, RadioTower } from "lucide-react";
+import { Empty, KvRow, type Tone } from "./shared";
 import { TONE_COLOR, fmtAgo, syncAgo, type Health } from "./dashboard-shared";
 import { POLL_INTERVAL_MS } from "../lib/use-polling";
 import { useRelayStatus, type RelayStatus as RelayConnState } from "../lib/use-relay";
@@ -296,5 +296,213 @@ export function Donut({
         ))}
       </div>
     </div>
+  );
+}
+
+// SSE 中转连接明细卡片（admin only）：30s 轮询 /api/relay/connections。
+//   - 非 admin → API 返回 403，本卡不渲染（避免给非管理员暴露后端 channel 命名）
+//   - relay 未配 URL/PUBLISH_TOKEN → API 返回 { enabled:false }，不渲染
+//   - 其它错误 → 渲染卡片但 body 显示报错（便于发现 relay 不健康）
+const RELAY_CONN_POLL_MS = 30_000;
+
+type RelayConnection = {
+  id: number;
+  source: "worker" | "ticket";
+  channels: string[];
+  connectedAt: number;
+  lastEventId?: string;
+};
+
+type RelayConnectionsState =
+  | { kind: "error"; error: string }
+  | { kind: "ok"; uptimeMs: number; eventSeq: number; clients: RelayConnection[] };
+
+// 持续时长（ms）→ "12s" / "3m 20s" / "1h 14m"，KV / 表格列共用。
+function fmtDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) {
+    return "—";
+  }
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) {
+    return `${sec}s`;
+  }
+  const min = Math.floor(sec / 60);
+  if (min < 60) {
+    const rest = sec % 60;
+    return rest ? `${min}m ${rest}s` : `${min}m`;
+  }
+  const hr = Math.floor(min / 60);
+  const restMin = min % 60;
+  return restMin ? `${hr}h ${restMin}m` : `${hr}h`;
+}
+
+export function RelayConnectionsCard() {
+  const [data, setData] = useState<RelayConnectionsState | null>(null);
+  const [hidden, setHidden] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const res = await fetch("/api/relay/connections", { cache: "no-store" });
+        if (cancelled) return;
+        if (res.status === 403) {
+          setHidden(true);
+          return;
+        }
+        const raw = (await res.json()) as
+          | { enabled: false }
+          | { enabled: true; error?: string; uptimeMs?: number; eventSeq?: number; clients?: RelayConnection[] };
+        if (cancelled) return;
+        if (!raw.enabled) {
+          setHidden(true);
+          return;
+        }
+        if (typeof raw.error === "string") {
+          setData({ kind: "error", error: raw.error });
+        } else {
+          setData({
+            kind: "ok",
+            uptimeMs: raw.uptimeMs ?? 0,
+            eventSeq: raw.eventSeq ?? 0,
+            clients: raw.clients ?? []
+          });
+        }
+        setNow(Date.now());
+      } catch {
+        // 网络错误：保留上一帧数据，下一轮再试。
+      }
+    }
+    load();
+    const timer = window.setInterval(load, RELAY_CONN_POLL_MS);
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.clearInterval(tick);
+    };
+  }, []);
+
+  if (hidden) {
+    return null;
+  }
+  if (!data) {
+    return null;
+  }
+  if (data.kind === "error") {
+    return (
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">
+            <Network size={16} className="ico" />
+            SSE 中转连接
+            <span className="badge" data-tone="review" style={{ marginLeft: 8 }}>
+              admin
+            </span>
+          </h2>
+        </div>
+        <div className="card-body">
+          <div className="error-box">{data.error}</div>
+        </div>
+      </section>
+    );
+  }
+
+  const { uptimeMs, eventSeq, clients } = data;
+  const channelSet = new Set<string>();
+  let workerCount = 0;
+  let ticketCount = 0;
+  for (const client of clients) {
+    for (const ch of client.channels) channelSet.add(ch);
+    if (client.source === "worker") workerCount += 1;
+    else ticketCount += 1;
+  }
+
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h2 className="card-title">
+          <Network size={16} className="ico" />
+          SSE 中转连接
+          <span className="badge" data-tone="role-admin" style={{ marginLeft: 8 }}>
+            admin
+          </span>
+        </h2>
+        <span className="card-tools">每 {Math.round(RELAY_CONN_POLL_MS / 1000)}s 刷新</span>
+      </div>
+      <div className="card-body relay-conn-body">
+        <div className="relay-conn-summary">
+          <SummaryStat label="运行时长" value={fmtDuration(uptimeMs)} />
+          <SummaryStat
+            label="在线连接"
+            value={`${clients.length}`}
+            sub={`${workerCount} worker · ${ticketCount} 浏览器`}
+          />
+          <SummaryStat label="占用频道" value={`${channelSet.size}`} />
+          <SummaryStat label="累计事件" value={`${eventSeq}`} />
+        </div>
+        {clients.length === 0 ? (
+          <Empty icon={<RadioTower size={28} />} text="当前无活动连接" />
+        ) : (
+          <div className="table-wrap">
+            <table className="table relay-conn-table">
+              <thead>
+                <tr>
+                  <th>来源</th>
+                  <th>客户端 #</th>
+                  <th>已连时长</th>
+                  <th>频道</th>
+                  <th className="t-right">最近事件 ID</th>
+                </tr>
+              </thead>
+              <tbody>
+                {clients.map((client) => (
+                  <RelayConnRow key={client.id} client={client} now={now} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function SummaryStat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="relay-conn-stat">
+      <div className="relay-conn-stat-label">{label}</div>
+      <div className="relay-conn-stat-value">{value}</div>
+      {sub ? <div className="relay-conn-stat-sub">{sub}</div> : null}
+    </div>
+  );
+}
+
+function RelayConnRow({ client, now }: { client: RelayConnection; now: number }) {
+  const sourceLabel = client.source === "worker" ? "Worker" : "浏览器";
+  const sourceTone = client.source === "worker" ? "success" : "running";
+  const sourceDotTone = client.source === "worker" ? "online" : "running";
+  return (
+    <tr>
+      <td>
+        <span className="badge" data-tone={sourceTone}>
+          <span className="dot" data-tone={sourceDotTone} />
+          {sourceLabel}
+        </span>
+      </td>
+      <td className="mono">#{client.id}</td>
+      <td className="mono">{fmtDuration(now - client.connectedAt)}</td>
+      <td>
+        <div className="relay-conn-channels">
+          {client.channels.map((channel) => (
+            <span key={channel} className="chip mono" title={channel}>
+              {channel}
+            </span>
+          ))}
+        </div>
+      </td>
+      <td className="t-right mono">{client.lastEventId ?? "—"}</td>
+    </tr>
   );
 }

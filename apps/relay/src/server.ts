@@ -3,22 +3,37 @@ import { timingSafeEqual } from "node:crypto";
 import { verifyTicket, type RelayEvent, type RelayPublish } from "@claude-center/relay-client";
 import type { RelayConfig } from "./config.js";
 
-// 单实例内存 pub/sub 的 SSE 中转。三个端点：
-//   GET  /events   订阅（ticket 或 worker token 鉴权，保活 ping，Last-Event-ID 短重放）
-//   POST /publish  发布（publish token 鉴权，落 ring + 扇出）
-//   GET  /healthz  健康
+// 单实例内存 pub/sub 的 SSE 中转。四个端点：
+//   GET  /events      订阅（ticket 或 worker token 鉴权，保活 ping，Last-Event-ID 短重放）
+//   POST /publish     发布（publish token 鉴权，落 ring + 扇出）
+//   GET  /healthz     健康（聚合计数，无鉴权）
+//   GET  /connections 当前连接明细（publish token 鉴权，admin 用于诊断）
 // 权威数据在 DB，relay 只搬运已落库的事件；丢事件靠订阅端重连后的 DB 全量对账自愈。
+
+type ClientSource = "worker" | "ticket";
 
 interface Client {
   id: number;
   res: ServerResponse;
   channels: Set<string>;
   ping: NodeJS.Timeout;
+  source: ClientSource;
+  connectedAt: number;
+  lastEventId?: string;
+}
+
+export interface RelayConnectionInfo {
+  id: number;
+  source: ClientSource;
+  channels: string[];
+  connectedAt: number;
+  lastEventId?: string;
 }
 
 export interface RelayServerHandle {
   server: Server;
   stats(): { uptimeMs: number; channels: number; clients: number; events: number };
+  connections(): { uptimeMs: number; eventSeq: number; clients: RelayConnectionInfo[] };
 }
 
 function safeEqual(provided: string | undefined, expected: string): boolean {
@@ -110,6 +125,7 @@ export function createRelayServer(config: RelayConfig): RelayServerHandle {
     for (const client of set) {
       try {
         writeEvent(client.res, event);
+        client.lastEventId = event.id;
         delivered += 1;
       } catch {
         // 写失败的连接由其 close 事件清理，这里不处理。
@@ -119,11 +135,16 @@ export function createRelayServer(config: RelayConfig): RelayServerHandle {
   }
 
   // 订阅鉴权：worker token（信任其请求的频道）或浏览器票据（只放行票据白名单内的频道）。
-  function authorizeChannels(req: IncomingMessage, url: URL, requested: string[]): string[] | null {
+  // 返回 { channels, source } 或 null（鉴权失败）。
+  function authorizeChannels(
+    req: IncomingMessage,
+    url: URL,
+    requested: string[]
+  ): { channels: string[]; source: ClientSource } | null {
     const auth = req.headers["authorization"];
     const bearer = typeof auth === "string" && auth.startsWith("Bearer ") ? auth.slice(7) : undefined;
     if (config.workerToken && safeEqual(bearer, config.workerToken)) {
-      return requested;
+      return { channels: requested, source: "worker" };
     }
     const ticket = url.searchParams.get("ticket");
     if (ticket && config.secret) {
@@ -132,7 +153,7 @@ export function createRelayServer(config: RelayConfig): RelayServerHandle {
         return null;
       }
       const allowed = new Set(payload.channels);
-      return requested.filter((channel) => allowed.has(channel));
+      return { channels: requested.filter((channel) => allowed.has(channel)), source: "ticket" };
     }
     return null;
   }
@@ -157,6 +178,7 @@ export function createRelayServer(config: RelayConfig): RelayServerHandle {
     pending.sort((a, b) => Number(a.id) - Number(b.id));
     for (const event of pending) {
       writeEvent(client.res, event);
+      client.lastEventId = event.id;
     }
   }
 
@@ -165,12 +187,13 @@ export function createRelayServer(config: RelayConfig): RelayServerHandle {
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
-    const channels = authorizeChannels(req, url, requested);
-    if (channels === null) {
+    const authorized = authorizeChannels(req, url, requested);
+    if (authorized === null) {
       res.writeHead(401, { "content-type": "text/plain" });
       res.end("unauthorized");
       return;
     }
+    const { channels, source } = authorized;
     if (!channels.length) {
       res.writeHead(403, { "content-type": "text/plain" });
       res.end("no permitted channels");
@@ -186,6 +209,7 @@ export function createRelayServer(config: RelayConfig): RelayServerHandle {
     // 客户端重连提示（浏览器原生 EventSource 会读取 retry）。
     res.write("retry: 3000\n\n");
 
+    const lastEventId = (req.headers["last-event-id"] as string | undefined) ?? url.searchParams.get("lastEventId") ?? undefined;
     const client: Client = {
       id: ++clientSeq,
       res,
@@ -196,14 +220,16 @@ export function createRelayServer(config: RelayConfig): RelayServerHandle {
         } catch {
           // 写失败说明连接已断，close 事件会清理。
         }
-      }, config.pingIntervalMs)
+      }, config.pingIntervalMs),
+      source,
+      connectedAt: Date.now(),
+      lastEventId
     };
     allClients.add(client);
     for (const channel of channels) {
       addToChannel(channel, client);
     }
 
-    const lastEventId = (req.headers["last-event-id"] as string | undefined) ?? url.searchParams.get("lastEventId") ?? undefined;
     if (lastEventId) {
       replay(client, lastEventId);
     }
@@ -269,6 +295,18 @@ export function createRelayServer(config: RelayConfig): RelayServerHandle {
       res.end(JSON.stringify(handle.stats()));
       return;
     }
+    if (req.method === "GET" && url.pathname === "/connections") {
+      const auth = req.headers["authorization"];
+      const bearer = typeof auth === "string" && auth.startsWith("Bearer ") ? auth.slice(7) : undefined;
+      if (!safeEqual(bearer, config.publishToken)) {
+        res.writeHead(401, { "content-type": "text/plain" });
+        res.end("unauthorized");
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(handle.connections()));
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/events") {
       handleEvents(req, res, url);
       return;
@@ -294,6 +332,27 @@ export function createRelayServer(config: RelayConfig): RelayServerHandle {
         channels: subscribers.size,
         clients: allClients.size,
         events: eventSeq
+      };
+    },
+    connections() {
+      const clients: RelayConnectionInfo[] = [];
+      for (const client of allClients) {
+        const info: RelayConnectionInfo = {
+          id: client.id,
+          source: client.source,
+          channels: [...client.channels],
+          connectedAt: client.connectedAt
+        };
+        if (client.lastEventId !== undefined) {
+          info.lastEventId = client.lastEventId;
+        }
+        clients.push(info);
+      }
+      clients.sort((a, b) => a.id - b.id);
+      return {
+        uptimeMs: Date.now() - startedAt,
+        eventSeq,
+        clients
       };
     }
   };

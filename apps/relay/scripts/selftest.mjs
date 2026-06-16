@@ -1,6 +1,6 @@
 // relay 自验证：起一个临时 relay（ephemeral 端口），用真实 publish/subscribe 走一遍核心路径。
 // 覆盖：① 落库后发布秒级投递 ② 保活 ping 不误断 ③ Last-Event-ID 断点重放
-//       ④ 无凭据订阅被拒(401) ⑤ ticket 频道白名单过滤。
+//       ④ 无凭据订阅被拒(401) ⑤ ticket 频道白名单过滤 ⑥ /healthz ⑦ /connections 鉴权与字段。
 // 运行：先 build relay-client + relay，再 `node scripts/selftest.mjs`（package.json: npm run selftest）。
 
 import assert from "node:assert/strict";
@@ -102,11 +102,11 @@ function rawCollect(base, channels, headers, ms) {
   });
 }
 
-function rawGetJson(base, pathname) {
+function rawGetJson(base, pathname, headers) {
   return new Promise((resolve, reject) => {
     const url = new URL(`${base}${pathname}`);
     const req = httpRequest(
-      { hostname: url.hostname, port: url.port, path: url.pathname, method: "GET" },
+      { hostname: url.hostname, port: url.port, path: url.pathname, method: "GET", headers },
       (res) => {
         let buf = "";
         res.setEncoding("utf8");
@@ -114,6 +114,11 @@ function rawGetJson(base, pathname) {
           buf += chunk;
         });
         res.on("end", () => {
+          // 非 2xx 通常是 text/plain（如 "unauthorized"），不解析。
+          if (res.statusCode && res.statusCode >= 400) {
+            resolve({ status: res.statusCode, body: buf });
+            return;
+          }
           try {
             resolve({ status: res.statusCode, body: JSON.parse(buf) });
           } catch (error) {
@@ -224,6 +229,20 @@ async function run() {
   assert.equal(health.status, 200, "/healthz must be 200");
   assert.ok(typeof health.body.events === "number" && typeof health.body.clients === "number", "/healthz must report counts");
   console.log(`  [6] /healthz OK（events=${health.body.events}, clients=${health.body.clients}）`);
+
+  // ⑦ /connections 鉴权 + 字段。无 token → 401；带 publishToken → 列出当前连接（含 source/connectedAt/channels）。
+  const connNoAuth = await rawGetJson(base, "/connections");
+  assert.equal(connNoAuth.status, 401, "/connections without token must be 401");
+  const conn = await rawGetJson(base, "/connections", { authorization: `Bearer ${config.publishToken}` });
+  assert.equal(conn.status, 200, "/connections with publishToken must be 200");
+  assert.ok(Array.isArray(conn.body.clients), "/connections must return clients array");
+  assert.ok(conn.body.clients.length > 0, "should have at least one live connection during selftest");
+  const sample = conn.body.clients[0];
+  assert.ok(typeof sample.id === "number", "client.id must be number");
+  assert.ok(sample.source === "worker" || sample.source === "ticket", "client.source must be worker|ticket");
+  assert.ok(Array.isArray(sample.channels) && sample.channels.length > 0, "client.channels must be non-empty array");
+  assert.ok(typeof sample.connectedAt === "number", "client.connectedAt must be number");
+  console.log(`  [7] /connections OK（${conn.body.clients.length} 路在线，示例 source=${sample.source} channels=${sample.channels.length}）`);
 
   console.log("\nrelay selftest: ALL PASS ✅");
   cleanup(0);
