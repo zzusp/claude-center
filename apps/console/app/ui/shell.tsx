@@ -5,45 +5,24 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
 import type { ReactNode } from "react";
 import { ROLE_LABEL, type CurrentUser } from "./dashboard-shared";
-import { usePolling } from "../lib/use-polling";
 
-type Counts = { tasks: number; workers: number; projects: number };
-
-const EMPTY_COUNTS: Counts = { tasks: 0, workers: 0, projects: 0 };
-
-type NavItem = { href: string; label: string; icon: ReactNode; countKey?: keyof Counts; adminOnly?: boolean };
+type NavItem = { href: string; label: string; icon: ReactNode; adminOnly?: boolean };
 
 const NAV: NavItem[] = [
   { href: "/", label: "总览", icon: <LayoutGrid size={16} strokeWidth={1.5} /> },
-  { href: "/tasks", label: "任务调度", icon: <ListTodo size={16} strokeWidth={1.5} />, countKey: "tasks" },
+  { href: "/tasks", label: "任务调度", icon: <ListTodo size={16} strokeWidth={1.5} /> },
   { href: "/chat", label: "实时对话", icon: <MessageSquare size={16} strokeWidth={1.5} /> },
-  { href: "/workers", label: "执行机群", icon: <Server size={16} strokeWidth={1.5} />, countKey: "workers" },
-  { href: "/projects", label: "代码项目", icon: <FolderGit2 size={16} strokeWidth={1.5} />, countKey: "projects" },
+  { href: "/workers", label: "执行机群", icon: <Server size={16} strokeWidth={1.5} /> },
+  { href: "/projects", label: "代码项目", icon: <FolderGit2 size={16} strokeWidth={1.5} /> },
   { href: "/users", label: "用户权限", icon: <Users size={16} strokeWidth={1.5} />, adminOnly: true }
 ];
 
 // 全站外壳：仅侧边栏 + 主内容区。页面标题由各页 section-head 渲染，topbar 已下线避免两层 header。
-// /api/summary 轮询只用于维持侧栏徽标计数。
 export default function Shell({ currentUser, children }: { currentUser: CurrentUser; children: ReactNode }) {
   const canManageUsers = currentUser.permissions.includes("user.manage");
   const pathname = usePathname();
-
-  const [counts, setCounts] = useState<Counts>(EMPTY_COUNTS);
-
-  usePolling(async (isActive) => {
-    try {
-      const response = await fetch("/api/summary", { cache: "no-store" });
-      if (!response.ok) return;
-      const data = (await response.json()) as { counts: Counts };
-      if (!isActive()) return;
-      setCounts(data.counts);
-    } catch {
-      /* 轮询失败静默 */
-    }
-  }, [], 15000);
 
   async function handleLogout() {
     try {
@@ -74,7 +53,6 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
             >
               <span className="nav-ico">{item.icon}</span>
               <span className="nav-label">{item.label}</span>
-              {item.countKey ? <span className="nav-count">{counts[item.countKey]}</span> : null}
             </Link>
           ))}
         </nav>

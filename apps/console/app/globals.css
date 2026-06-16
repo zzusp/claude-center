@@ -196,25 +196,6 @@ a:hover {
   flex-shrink: 0;
 }
 
-.nav-count {
-  margin-left: auto;
-  min-width: 20px;
-  height: 18px;
-  padding: 0 6px;
-  display: inline-grid;
-  place-items: center;
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--text-3);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.nav-item.active .nav-count {
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-}
-
 .sidebar-foot {
   margin-top: auto;
   padding: 10px;
@@ -2410,9 +2391,6 @@ select:focus {
     display: none;
   }
   .nav-label {
-    display: none;
-  }
-  .nav-count {
     display: none;
   }
   .topbar,

@@ -94,7 +94,7 @@ npm run db:migrate      # 应用 008，写入引导管理员
 npm run verify:console
 ```
 
-`verify:console` 会临时启动 Console，依次断言：未登录访问 `/api/dashboard` 返回 401 → 用引导管理员登录拿到会话 cookie → 带 cookie 访问 `/api/dashboard`、`/api/summary` 与首页均 200，然后自动关闭服务。运行前需先 `db:migrate`（否则没有 `admin` 账号）。
+`verify:console` 会临时启动 Console，依次断言：未登录访问 `/api/dashboard` 返回 401 → 用引导管理员登录拿到会话 cookie → 带 cookie 访问 `/api/dashboard` 与首页均 200，然后自动关闭服务。运行前需先 `db:migrate`（否则没有 `admin` 账号）。
 
 ## Worker 前置依赖
 

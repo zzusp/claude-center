@@ -8,7 +8,7 @@ import { DashboardView } from "../ui/overview";
 import { emptyOverview, SPARK_CAP, type Overview } from "../ui/dashboard-shared";
 
 // 总览页容器：轮询 /api/dashboard（summary/workers/tasks/health）；本地累积 sparkline 历史、
-// 派生任务状态分布。心跳同步态独立于侧边栏 Shell 的 /api/summary 轮询。
+// 派生任务状态分布。
 export default function DashboardClient() {
   const router = useRouter();
   const [overview, setOverview] = useState<Overview>(emptyOverview);
