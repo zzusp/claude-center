@@ -42,6 +42,7 @@ npm -w @claude-center/relay run selftest   # relay 自验证：投递/保活/Las
 - 迁移按**文件名排序**、整体在一个事务里应用。新增取**未被占用的下一个编号**：先 `git fetch`，看 `origin/main` 与各 `worktree-*` 已占用的号，避免撞号被后跑者覆盖。
 - 每次重建 `tasks_status_check` 等约束都要**列当前全部合法状态（全集）**，否则会废掉并行分支加的状态。
 - 改名迁移文件后，删 `schema_migrations` 里的孤儿记录（`DELETE ... WHERE id='旧文件名'`）。
+- **新表 / 新字段必须带 `COMMENT ON`**：`CREATE TABLE` 后紧跟 `COMMENT ON TABLE <t> IS '...'`，`ALTER TABLE ... ADD COLUMN` 后紧跟 `COMMENT ON COLUMN <t>.<c> IS '...'`。每张表都要有表注释；每个字段都要有字段注释；状态/角色等枚举列把合法取值列在注释里。基线见 `026_table_column_comments.sql`。
 
 ## Next.js 编译坑（`apps/console`）
 
