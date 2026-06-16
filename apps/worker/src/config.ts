@@ -147,6 +147,12 @@ function mergeProjects(envProjects: WorkerProjectConfig[], localProjects: Worker
     const key = projectLinkKey(project);
     if (!merged.has(key)) {
       merged.set(key, { ...project, source: "local" });
+    } else {
+      // env 优先：同 key 的本地关联被环境变量同名项覆盖。曾静默跳过让用户困惑「我加的关联怎么没了」，
+      // 这里显式告警（env 配置不可在桌面端删除，故被覆盖的本地项无法生效）。
+      console.warn(
+        `[config] 本地关联「${project.projectName ?? project.repoUrl ?? key}」与 CLAUDE_CENTER_PROJECTS 同名，已被 env 配置覆盖（env 优先、不可在桌面端删除）`
+      );
     }
   }
   return [...merged.values()];
