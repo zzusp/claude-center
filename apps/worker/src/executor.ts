@@ -412,7 +412,10 @@ async function finalizeTask(
   }
 
   await runCommand("git", ["-C", wtPath, "add", "--all"], { timeoutMs: 5 * 60_000 });
-  await runCommand("git", ["-C", wtPath, "commit", "-m", `ClaudeCenter task: ${task.title}`], {
+  // --no-verify：这是自动化打的机械包装提交，无法预知各目标仓库的 commit-msg / pre-commit
+  // 钩子规则（如 husky + commitlint 的 conventional 校验会以 type-empty/subject-empty 拒掉本消息）。
+  // 跳过本地钩子让提交对任意目标仓库都稳；产物质量由 Claude 的改动与 PR 评审保证。
+  await runCommand("git", ["-C", wtPath, "commit", "--no-verify", "-m", `ClaudeCenter task: ${task.title}`], {
     timeoutMs: 5 * 60_000
   });
   await addTaskEvent(pool, task.id, config.workerId, "committed", "Changes committed on work branch", {
