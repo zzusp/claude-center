@@ -40,7 +40,7 @@ ClaudeCenter 是一个 AI 编码协作中央控制台：一个 Next.js Web Conso
    npm run dev:console
    ```
 
-   默认监听 `http://127.0.0.1:3000`。需要调整时设置 `CONSOLE_HOST` 或 `CONSOLE_PORT`。
+   默认监听 `http://127.0.0.1:3000`。需要调整时设置 `CONSOLE_HOST` 或 `CONSOLE_PORT`。dev 走 **Turbopack**（`next dev --turbopack`），首次打开各页的冷编译比 webpack 快约 1.7–3×（`/tasks` 实测 9.7s→3.2s）；`next build` 仍走 webpack。
 
    首次打开会跳转到 `/login`。用引导管理员登录：**用户名 `admin` / 密码 `admin123`**（由 migration `008_auth_rbac.sql` 写入）。**首次登录后请立即在「用户权限」里重置密码。**
 

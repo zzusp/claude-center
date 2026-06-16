@@ -6,7 +6,7 @@
   "scripts": {
     "predev": "npm -w @claude-center/db run build && npm -w @claude-center/relay-client run build",
     "prebuild": "npm -w @claude-center/db run build && npm -w @claude-center/relay-client run build",
-    "dev": "next dev",
+    "dev": "next dev --turbopack",
     "build": "next build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

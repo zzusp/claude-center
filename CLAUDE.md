@@ -12,7 +12,7 @@ npm run verify:console     # 起 console，断言 401→登录→200，自动关
 npm -w @claude-center/relay run selftest   # relay 自验证：投递/保活/Last-Event-ID/鉴权/ticket/healthz
 ```
 
-- **build 绿 ≠ dev 绿**：`instrumentation.ts` / edge runtime 的问题只在 dev 暴露（见下「Next.js / webpack 坑」）。改 instrumentation / 中间件 / 服务端入口后，必须 `verify:console` 看到 `401→200` 才算验证过，光 `build` 绿是假信号。
+- **build 绿 ≠ dev 绿**：`instrumentation.ts` / edge runtime 的问题在 dev（Turbopack）与 build（webpack）下表现不同（见下「Next.js 编译坑」）。改 instrumentation / 中间件 / 服务端入口后，必须 `verify:console` 看到 `401→200` 且 `scheduler.ok:true` 才算验证过，光 `build` 绿是假信号。
 - `verify:console` 默认起在 `3000`；撞端口用 `$env:CONSOLE_PORT="<空闲口>"`。
 
 ## SSE 中转服务（`apps/relay`，可选实时线）
@@ -43,12 +43,15 @@ npm -w @claude-center/relay run selftest   # relay 自验证：投递/保活/Las
 - 每次重建 `tasks_status_check` 等约束都要**列当前全部合法状态（全集）**，否则会废掉并行分支加的状态。
 - 改名迁移文件后，删 `schema_migrations` 里的孤儿记录（`DELETE ... WHERE id='旧文件名'`）。
 
-## Next.js / webpack 坑（`apps/console`）
+## Next.js 编译坑（`apps/console`）
+
+**dev 走 Turbopack（`next dev --turbopack`），`next build` 走 webpack**——两条编译路径对 edge runtime 的处理不同，下面这个坑要两边都顾。
 
 `instrumentation.ts` 会被 Next 为 **nodejs + edge 两个 runtime** 分别编译。在它（或其**静态依赖**）里引 `pg` 或 `node:` scheme 内置模块，edge 编译会炸 → **dev/build 全站 500**（普通 route handler import 不受影响）：
 
-- 引 `@claude-center/db`(经 pg 触发 `Can't resolve 'fs'`)：在 nodejs guard 内 `await import(/* webpackIgnore: true */ "@claude-center/db")`（db 有 dist 产物，运行时由 Node 从 node_modules 解析）。
-- 引**本地 TS 模块**（无构建产物，**不能**用 webpackIgnore，相对路径运行时解析不到）：在 `next.config.mjs` 的 webpack 钩子里**仅对 `nextRuntime === "edge"`** 把 `node:` 前缀模块标 external（本应用无 edge runtime、受 nodejs guard 保护永不执行，只为让编译过）。
+- **结构上靠拆分隔离（两条编译路径都生效）**：`instrumentation.ts` 只做运行时分流——在**正向** `NEXT_RUNTIME === "nodejs"` 分支里 `await import("./instrumentation-node")`；所有 pg / node: 逻辑落在 `instrumentation-node.ts`。这是 Next 官方写法，Turbopack/webpack 据此把整个 node-only 模块从 edge 编译图 DCE 掉，edge 不再因 `merge-check` 的 `node:` 导入报错。**改后务必 `verify:console` 看到 `scheduler.ok:true`**（证明 node 模块运行时真加载了，光看 401→200 不够）。
+- 引 `@claude-center/db`(经 pg 触发 `Can't resolve 'fs'`)：在 `instrumentation-node.ts` 里 `await import(/* webpackIgnore: true */ "@claude-center/db")`（db 有 dist 产物，运行时由 Node 从 node_modules 解析）。
+- `next.config.mjs` 的 webpack 钩子（**仅对 `nextRuntime === "edge"`** 把 `node:` 前缀标 external）是 **webpack build 侧的兜底**；Turbopack 不读该配置，dev 侧全靠上面的拆分保持 edge 干净。
 
 ## worktree 验证准备
 
