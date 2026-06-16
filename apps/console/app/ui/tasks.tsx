@@ -90,12 +90,15 @@ function TasksView({
   projects,
   onOpenTask,
   onOpenCompose,
-  canCreateTask
+  canCreateTask,
+  refreshSignal = 0
 }: {
   projects: Project[];
   onOpenTask: (task: Task) => void;
   onOpenCompose: () => void;
   canCreateTask: boolean;
+  // 父容器在外部触发刷新（如发布任务后）时递增；并入 usePolling deps 让列表立即重拉。
+  refreshSignal?: number;
 }) {
   const [status, setStatus] = useState("");
   const [projectId, setProjectId] = useState("");
@@ -187,7 +190,7 @@ function TasksView({
         if (isActive()) setLoading(false);
       }
     },
-    [status, projectId, workerId, debouncedQ, dir, page, pageSize, refreshKey],
+    [status, projectId, workerId, debouncedQ, dir, page, pageSize, refreshKey, refreshSignal],
     Infinity
   );
 
