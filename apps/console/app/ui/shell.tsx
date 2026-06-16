@@ -80,17 +80,20 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
         </nav>
 
         <div className="sidebar-foot">
-          <div className="user-card">
+          <div className="user-card" tabIndex={0}>
             <span className="user-avatar">
-              <UserRound size={16} />
+              <UserRound size={20} />
             </span>
             <div className="user-meta">
               <span className="user-name">{currentUser.displayName || currentUser.username}</span>
               <span className="user-role">{ROLE_LABEL[currentUser.role]}</span>
             </div>
-            <button type="button" className="icon-btn" title="登出" onClick={handleLogout}>
-              <LogOut size={15} />
-            </button>
+            <div className="user-menu" role="menu">
+              <button type="button" className="user-menu-item" role="menuitem" onClick={handleLogout}>
+                <LogOut size={14} />
+                <span>登出</span>
+              </button>
+            </div>
           </div>
         </div>
       </aside>
