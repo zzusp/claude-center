@@ -5,6 +5,7 @@ export type RelayEventType =
   | "conversation.message"
   | "conversation.upserted"
   | "conversation.session.updated"
+  | "conversation.cancel"
   | "task.upserted"
   | "task.comment"
   | "task.event"

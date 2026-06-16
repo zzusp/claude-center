@@ -16,6 +16,7 @@ import {
   getWorkerRuntime,
   heartbeatWorker,
   listActiveTaskIdsForWorker,
+  listCancelRequestedConversationMessages,
   listCancelRequestedTaskIds,
   listConversationMessages,
   listProjects,
@@ -24,6 +25,7 @@ import {
   listWorkerConversations,
   listWorkerProjectLinks,
   listWorkerTasks,
+  markConversationTurnCancelled,
   markTaskCancelled,
   registerWorker,
   rejectTask,
@@ -144,6 +146,13 @@ export class ClaudeCenterWorker {
   private claiming = false;
   // 对话独立车道：≤1 轮在途、不占任务并发槽、不受工作态门控（用户显式点名了这个 worker，idle 也应答）。
   private conversationBusy = false;
+  // 在跑的对话轮：messageId + conversationId + Claude 子进程句柄 + 已取消标记，供 Console 端「终止本轮回答」杀进程。
+  private conversationActive: {
+    messageId: string;
+    conversationId: string;
+    child: ChildProcess | null;
+    cancelled: boolean;
+  } | null = null;
   private readonly relay: WorkerRelay;
   // 本机当前关联的项目 id 集（订阅 project 频道 + worker.upserted 扇出用）。
   private linkedProjectIds: string[] = [];
@@ -197,6 +206,7 @@ export class ClaudeCenterWorker {
 
     this.cancelTimer = setInterval(() => {
       this.handleCancellations().catch((error) => this.log("error", `cancel: ${error}`));
+      this.handleConversationCancellations().catch((error) => this.log("error", `conv cancel: ${error}`));
     }, CANCEL_INTERVAL_MS);
 
     // 周期 GC 兜底:启动已跑过一次(上面),此后低频重扫,清理崩溃残留的孤儿任务树。
@@ -589,6 +599,10 @@ export class ClaudeCenterWorker {
 
   // 收到外部（非自己发出）的中转信号即催一次相应车道；各车道都有 busy/工作态守卫，重复触发安全。
   private onRelaySignal(event: RelayEvent): void {
+    if (event.type === "conversation.cancel") {
+      void this.handleConversationCancellations();
+      return;
+    }
     if (event.type === "conversation.message" || event.type === "conversation.upserted") {
       void this.tickConversation();
       return;
@@ -768,11 +782,20 @@ export class ClaudeCenterWorker {
       }
       // 认领即推：让 Console 秒级看到该会话进入「回复中」。
       this.publishConversationTurn(conv, turn);
+      // 跟踪在跑轮：onClaudeSpawn 回填 child（取消时 killProcessTree 用）。
+      const active = { messageId: turn.id, conversationId: conv.id, child: null as ChildProcess | null, cancelled: false };
+      this.conversationActive = active;
       // fire-and-forget：执行期间占住车道，完成后释放并再催一次（处理排队的新消息）。
-      void executeConversationTurn(this.config, conv, turn, { claudeAvailable: this.capabilities.claude.ok })
+      void executeConversationTurn(this.config, conv, turn, {
+        claudeAvailable: this.capabilities.claude.ok,
+        onClaudeSpawn: (child) => {
+          active.child = child;
+        }
+      })
         .catch((error) => this.log("error", `conversation ${conv.id}: ${error instanceof Error ? error.message : String(error)}`))
         .finally(() => {
           this.conversationBusy = false;
+          this.conversationActive = null;
           // 收尾后推最新会话头 + 助手终态消息（full payload），Console 秒级显示回复。
           void this.publishConversationFinal(conv.id);
           void this.tickConversation();
@@ -883,6 +906,35 @@ export class ClaudeCenterWorker {
         void this.tick();
       });
     this.active.set(meta.key, entry);
+  }
+
+  // 对话取消：扫描本 worker 名下被请求终止的 assistant 轮 → 先抢占 cancelled 终态（防止 catch 路径里的 failConversationTurn 覆盖）→ 再杀 Claude 进程树。
+  // 与任务取消同构（先 markTaskCancelled 再 killProcessTree），仅落点对象不同。
+  private async handleConversationCancellations(): Promise<void> {
+    const requested = await listCancelRequestedConversationMessages(getPool(), this.config.workerId);
+    if (!requested.length) {
+      return;
+    }
+    const wanted = new Set(requested.map((row) => row.id));
+    const active = this.conversationActive;
+    for (const row of requested) {
+      try {
+        const ok = await markConversationTurnCancelled(getPool(), row.id, this.config.workerId);
+        // 只有正跑这条的车道才有 child 句柄可杀；其余情形（已完成 / 进程已退出）markConversationTurnCancelled 也会无副作用兜底。
+        if (active && active.messageId === row.id && wanted.has(active.messageId)) {
+          active.cancelled = true;
+          if (active.child) {
+            killProcessTree(active.child);
+          }
+        }
+        if (ok) {
+          this.log("info", `Conversation turn ${row.id} cancelled`);
+        }
+        void this.publishConversationFinal(row.conversation_id);
+      } catch (error) {
+        this.log("error", `conv cancel ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   }
 
   // 周期扫描:本 worker 名下被请求取消的在途任务 → 先抢占 cancelled 终态(防执行链 catch 的 markTaskFailed 覆盖)→ 再杀 Claude 进程树。

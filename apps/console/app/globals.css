@@ -2781,6 +2781,52 @@ a.dep-item:hover {
   font-size: 14px;
   color: var(--text-1);
 }
+.chat-filter {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+}
+.chat-filter-search {
+  position: relative;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+}
+.chat-filter-search svg {
+  position: absolute;
+  left: 8px;
+  color: var(--text-4);
+  pointer-events: none;
+}
+.chat-filter-search input {
+  width: 100%;
+  padding: 5px 8px 5px 26px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+.chat-filter-search input:focus {
+  outline: none;
+  border-color: var(--running);
+  background: var(--surface-1);
+}
+.chat-filter > select {
+  padding: 4px 6px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-1);
+  min-width: 0;
+}
+.chat-filter > .icon-btn {
+  align-self: center;
+}
 .chat-list-body {
   flex: 1;
   overflow-y: auto;
@@ -3052,6 +3098,24 @@ a.dep-item:hover {
   align-items: center;
   gap: 4px;
   padding: 2px 0;
+}
+.chat-stop {
+  margin-left: 10px;
+  vertical-align: middle;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.chat-stop:hover {
+  color: var(--failed);
+  border-color: var(--failed);
 }
 .bubble-dots i {
   width: 6px;

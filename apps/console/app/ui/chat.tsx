@@ -1,8 +1,8 @@
 "use client";
 
 import type { Conversation, Project, Worker } from "@claude-center/db";
-import { GitBranch, MessageSquare, Plus, Server, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { GitBranch, MessageSquare, Plus, Search, Server, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Empty } from "./shared";
 import { useConfirm } from "./controls";
 import { ChatThread, NewConversationPanel } from "./chat-thread";
@@ -24,11 +24,26 @@ export function ChatView({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
   const [error, setError] = useState("");
+  // 筛选：keyword 走 ILIKE(title/项目名/worker 名/branch)；projectId/workerId 精确过滤。空串 = 不筛。
+  const [keyword, setKeyword] = useState("");
+  const [filterProjectId, setFilterProjectId] = useState("");
+  const [filterWorkerId, setFilterWorkerId] = useState("");
   const { confirm, dialog } = useConfirm();
 
-  async function loadList(): Promise<void> {
+  // 筛选条件聚成 query string；空字段省略，避免每次 ?keyword= 的脏 URL 触发 next 路由缓存击穿。
+  const filterQuery = useMemo(() => {
+    const params = new URLSearchParams();
+    const k = keyword.trim();
+    if (k) params.set("keyword", k);
+    if (filterProjectId) params.set("projectId", filterProjectId);
+    if (filterWorkerId) params.set("workerId", filterWorkerId);
+    const s = params.toString();
+    return s ? `?${s}` : "";
+  }, [keyword, filterProjectId, filterWorkerId]);
+
+  async function loadList(query: string): Promise<void> {
     try {
-      const r = await fetch("/api/conversations", { cache: "no-store" });
+      const r = await fetch(`/api/conversations${query}`, { cache: "no-store" });
       if (!r.ok) {
         throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "加载失败");
       }
@@ -39,11 +54,22 @@ export function ChatView({
       setError(e instanceof Error ? e.message : "加载失败");
     }
   }
+  // 关键词输入做 300ms 防抖；项目/worker 切换立即生效。
   useEffect(() => {
-    void loadList();
-    const t = setInterval(() => void loadList(), 5000);
+    const handle = setTimeout(() => void loadList(filterQuery), 300);
+    return () => clearTimeout(handle);
+  }, [filterQuery]);
+  useEffect(() => {
+    const t = setInterval(() => void loadList(filterQuery), 5000);
     return () => clearInterval(t);
-  }, []);
+    // 轮询沿用当前 filterQuery 快照；依赖变化时 setInterval 会重建，不会用陈旧条件。
+  }, [filterQuery]);
+  const filtersActive = Boolean(keyword.trim() || filterProjectId || filterWorkerId);
+  function clearFilters(): void {
+    setKeyword("");
+    setFilterProjectId("");
+    setFilterWorkerId("");
+  }
 
   async function delConv(c: Conversation): Promise<void> {
     const ok = await confirm({
@@ -61,7 +87,7 @@ export function ChatView({
       if (activeId === c.id) {
         setActiveId(null);
       }
-      await loadList();
+      await loadList(filterQuery);
     } catch (e) {
       setError(e instanceof Error ? e.message : "删除失败");
     }
@@ -87,9 +113,52 @@ export function ChatView({
             </button>
           ) : null}
         </div>
+        <div className="chat-filter">
+          <div className="chat-filter-search">
+            <Search size={13} />
+            <input
+              type="search"
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              placeholder="搜索标题 / 项目 / Worker / 分支"
+              aria-label="关键词搜索"
+            />
+          </div>
+          <select
+            value={filterProjectId}
+            onChange={(e) => setFilterProjectId(e.target.value)}
+            aria-label="按项目筛选"
+            title="按项目筛选"
+          >
+            <option value="">全部项目</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={filterWorkerId}
+            onChange={(e) => setFilterWorkerId(e.target.value)}
+            aria-label="按 worker 筛选"
+            title="按 worker 筛选"
+          >
+            <option value="">全部 Worker</option>
+            {workers.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+          {filtersActive ? (
+            <button type="button" className="icon-btn" title="清空筛选" onClick={clearFilters}>
+              <X size={13} />
+            </button>
+          ) : null}
+        </div>
         <div className="chat-list-body">
           {conversations.length === 0 ? (
-            <Empty icon={<MessageSquare size={20} />} text="暂无对话" />
+            <Empty icon={<MessageSquare size={20} />} text={filtersActive ? "无匹配的会话" : "暂无对话"} />
           ) : (
             conversations.map((c) => (
               <div key={c.id} className={`chat-li${c.id === activeId ? " active" : ""}`}>
@@ -124,7 +193,12 @@ export function ChatView({
 
       <section className="chat-main">
         {active ? (
-          <ChatThread key={active.id} conversation={active} canCommand={canCommand} onChanged={loadList} />
+          <ChatThread
+            key={active.id}
+            conversation={active}
+            canCommand={canCommand}
+            onChanged={() => void loadList(filterQuery)}
+          />
         ) : (
           <Empty icon={<MessageSquare size={28} />} text="选择左侧会话，或新建一个对话" />
         )}
@@ -138,7 +212,7 @@ export function ChatView({
           onCreated={(id) => {
             setComposing(false);
             setActiveId(id);
-            void loadList();
+            void loadList(filterQuery);
           }}
         />
       ) : null}
