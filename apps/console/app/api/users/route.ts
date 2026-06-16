@@ -1,6 +1,7 @@
 import { createUser, getPool, listUsersWithProjects, ROLES, setUserProjects, type Role } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "../../lib/session";
+import { errorResponse, badRequest } from "../../lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,7 @@ export async function GET() {
     const users = await listUsersWithProjects(getPool());
     return NextResponse.json({ users });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
 
@@ -32,10 +33,10 @@ export async function POST(request: NextRequest) {
     };
 
     if (!body.username?.trim() || !body.password || !body.role) {
-      return NextResponse.json({ error: "用户名、密码、角色必填" }, { status: 400 });
+      return badRequest("用户名、密码、角色必填");
     }
     if (!ROLES.includes(body.role as Role)) {
-      return NextResponse.json({ error: "无效角色" }, { status: 400 });
+      return badRequest("无效角色");
     }
 
     const pool = getPool();
@@ -57,6 +58,6 @@ export async function POST(request: NextRequest) {
     if (message.includes("duplicate key")) {
       return NextResponse.json({ error: "用户名已存在" }, { status: 409 });
     }
-    return NextResponse.json({ error: message }, { status: 500 });
+    return errorResponse(error);
   }
 }

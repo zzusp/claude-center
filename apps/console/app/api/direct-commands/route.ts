@@ -1,6 +1,7 @@
 import { createDirectCommand, getPool, type DirectCommandName } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "../../lib/session";
+import { errorResponse, badRequest } from "../../lib/api";
 import { publishRelay, workerChannel } from "../../lib/relay-publish";
 
 export async function POST(request: NextRequest) {
@@ -17,11 +18,11 @@ export async function POST(request: NextRequest) {
     };
 
     if (!body.workerId || !body.command || !body.text?.trim()) {
-      return NextResponse.json({ error: "Worker, command and text are required" }, { status: 400 });
+      return badRequest("Worker, command and text are required");
     }
 
     if (body.command !== "shell" && body.command !== "claude_prompt") {
-      return NextResponse.json({ error: "Unsupported command" }, { status: 400 });
+      return badRequest("Unsupported command");
     }
 
     const command = await createDirectCommand(getPool(), {
@@ -42,6 +43,6 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json({ command }, { status: 201 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

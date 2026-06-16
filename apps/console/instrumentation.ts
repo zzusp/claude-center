@@ -39,7 +39,15 @@ export async function register(): Promise<void> {
   const parsed = Number(process.env.CLAUDE_CENTER_SCHEDULER_INTERVAL_MS);
   const intervalMs = Number.isFinite(parsed) && parsed >= 1000 ? parsed : DEFAULT_INTERVAL_MS;
 
+  // 防重入：与 mergeTick 一致。promoteDueScheduledTasks 虽是单条幂等 UPDATE，但若某轮耗时超过
+  // 间隔，无守卫会并发跑两次（重复 recordSchedulerTick / 日志），加旗标对齐两条循环的语义。
+  let promoting = false;
+
   async function tick(): Promise<void> {
+    if (promoting) {
+      return;
+    }
+    promoting = true;
     try {
       const promoted = await promoteDueScheduledTasks(getPool());
       recordSchedulerTick(promoted, new Date().toISOString(), null);
@@ -49,6 +57,8 @@ export async function register(): Promise<void> {
     } catch (error) {
       recordSchedulerTick(0, new Date().toISOString(), error instanceof Error ? error.message : String(error));
       console.error("[scheduler] 提升定时任务失败：", error);
+    } finally {
+      promoting = false;
     }
   }
 

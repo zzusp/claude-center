@@ -8,6 +8,7 @@ import {
 } from "@claude-center/db";
 import { NextResponse } from "next/server";
 import { requireUser } from "../../lib/session";
+import { errorResponse } from "../../lib/api";
 import { getSchedulerState, isSchedulerHealthy } from "../../lib/scheduler-state";
 
 export const dynamic = "force-dynamic";
@@ -48,6 +49,6 @@ export async function GET() {
       }
     });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

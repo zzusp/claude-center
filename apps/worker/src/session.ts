@@ -68,14 +68,17 @@ function startSync(cwd: string, persist: (jsonl: string) => Promise<void>, inter
     const content = readSessionJsonl(cwd);
     if (content == null) return;
     if (!force && content.length === lastLen) return;
-    lastLen = content.length;
     await persist(content);
+    // 仅在 persist 成功后推进 lastLen：失败时保持旧值，下一轮 content.length !== lastLen 自然重试，
+    // 不必盲等终态强制同步补救（原先先更新 lastLen 再 persist，一旦失败该轮数据丢到最终同步才补）。
+    lastLen = content.length;
   };
 
   const timer = setInterval(() => {
     if (stopped) return;
-    void syncOnce(false).catch(() => {
-      /* 周期同步失败静默，下一轮 / 最终同步重试 */
+    void syncOnce(false).catch((error) => {
+      // 周期同步失败不阻塞执行：lastLen 未推进，下一轮自动重试；这里打一条让失败可见（曾全静默难定位）。
+      console.warn(`[session] 周期同步失败，将于下一轮重试：${error instanceof Error ? error.message : String(error)}`);
     });
   }, intervalMs);
 

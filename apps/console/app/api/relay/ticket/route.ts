@@ -2,6 +2,7 @@ import { getPool, listProjects, listUserProjectIds } from "@claude-center/db";
 import { projectChannel, signTicket } from "@claude-center/relay-client";
 import { NextResponse } from "next/server";
 import { requireUser } from "../../../lib/session";
+import { errorResponse } from "../../../lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +31,6 @@ export async function GET() {
     const ticket = signTicket({ uid: user.id, channels, exp: Date.now() + TICKET_TTL_MS }, secret);
     return NextResponse.json({ enabled: true, url, ticket, channels, ttlMs: TICKET_TTL_MS });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

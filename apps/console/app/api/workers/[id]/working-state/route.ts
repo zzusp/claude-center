@@ -1,6 +1,7 @@
 import { getPool, setWorkerWorkingState } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "../../../../lib/session";
+import { errorResponse, badRequest } from "../../../../lib/api";
 import { publishRelay, workerChannel } from "../../../../lib/relay-publish";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const { id } = await params;
     const body = (await request.json()) as { state?: "idle" | "working" };
     if (body.state !== "idle" && body.state !== "working") {
-      return NextResponse.json({ error: "state must be 'idle' or 'working'" }, { status: 400 });
+      return badRequest("state must be 'idle' or 'working'");
     }
 
     const updated = await setWorkerWorkingState(getPool(), id, body.state, { viaRemote: true });
@@ -33,6 +34,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     });
     return NextResponse.json({ ok: true, state: body.state }, { status: 200 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

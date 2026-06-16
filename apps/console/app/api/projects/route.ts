@@ -1,6 +1,7 @@
 import { createProject, getPool, listProjectsForUser } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../lib/session";
+import { errorResponse, badRequest } from "../../lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,7 @@ export async function GET() {
     const projects = await listProjectsForUser(getPool(), gate);
     return NextResponse.json({ projects });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
 
@@ -31,7 +32,7 @@ export async function POST(request: NextRequest) {
     };
 
     if (!body.name?.trim() || !body.repoUrl?.trim()) {
-      return NextResponse.json({ error: "Project name and repo URL are required" }, { status: 400 });
+      return badRequest("Project name and repo URL are required");
     }
 
     const project = await createProject(getPool(), {
@@ -43,6 +44,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ project }, { status: 201 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

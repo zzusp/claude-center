@@ -5,16 +5,19 @@ import {
   listTasks,
   listUserProjectIds,
   userHasProject,
+  TASK_STATUSES,
   type SortDir,
   type TaskModel
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../lib/session";
+import { errorResponse, badRequest } from "../../lib/api";
 import { projectChannel, publishRelay } from "../../lib/relay-publish";
 
 export const dynamic = "force-dynamic";
 
-const TASK_STATUSES = ["draft", "scheduled", "pending", "claimed", "running", "waiting", "success", "failed", "cancelled"];
+// 状态过滤白名单复用 TASK_STATUSES 单一出处(含 accepted/rejected/merged——曾因本地漏列导致
+// 「已合并」筛选被静默丢弃、返回全部)。
 const MERGE_STATUSES = ["unknown", "unmerged", "merged"];
 const PAGE_SIZES = [20, 50, 100];
 const TASK_MODELS = ["default", "opus", "sonnet", "haiku"];
@@ -31,7 +34,7 @@ export async function GET(request: NextRequest) {
     const status = (params.get("status") ?? "")
       .split(",")
       .map((value) => value.trim())
-      .filter((value) => TASK_STATUSES.includes(value));
+      .filter((value) => (TASK_STATUSES as readonly string[]).includes(value));
 
     const mergeStatus = (params.get("mergeStatus") ?? "")
       .split(",")
@@ -68,7 +71,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ tasks, total, page, pageSize });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
 
@@ -105,7 +108,7 @@ export async function POST(request: NextRequest) {
     };
 
     if (!body.projectId || !body.title?.trim() || !body.description?.trim()) {
-      return NextResponse.json({ error: "Project, title and description are required" }, { status: 400 });
+      return badRequest("Project, title and description are required");
     }
 
     // 定时发布时间（可选）：必须可解析且为将来时间；落 scheduled 态，到点由调度器转 pending。
@@ -114,10 +117,10 @@ export async function POST(request: NextRequest) {
     if (scheduledRaw) {
       const when = new Date(scheduledRaw);
       if (Number.isNaN(when.getTime())) {
-        return NextResponse.json({ error: "定时发布时间格式无效" }, { status: 400 });
+        return badRequest("定时发布时间格式无效");
       }
       if (when.getTime() <= Date.now()) {
-        return NextResponse.json({ error: "定时发布时间必须晚于当前时间" }, { status: 400 });
+        return badRequest("定时发布时间必须晚于当前时间");
       }
       scheduledAt = when.toISOString();
     }
@@ -177,6 +180,6 @@ export async function POST(request: NextRequest) {
       client.release();
     }
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

@@ -1,6 +1,7 @@
 import { deleteWorker, getPool, getWorker, updateWorkerLabel } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../../lib/session";
+import { errorResponse } from "../../../lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     }
     return NextResponse.json({ worker });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
 
@@ -38,7 +39,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
     return NextResponse.json({ ok: true, label: label || null });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
 
@@ -55,6 +56,6 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
     }
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

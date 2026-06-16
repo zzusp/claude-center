@@ -3,12 +3,13 @@ import {
   getPool,
   listConversations,
   listUserProjectIds,
-  userHasProject,
   workerLinkedToProject,
   type TaskModel
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../lib/session";
+import { requireProjectScope } from "../../lib/access";
+import { errorResponse, badRequest } from "../../lib/api";
 import { projectChannel, publishRelay } from "../../lib/relay-publish";
 
 export const dynamic = "force-dynamic";
@@ -31,13 +32,14 @@ export async function POST(request: NextRequest) {
       title?: string;
     };
     if (!body.projectId || !body.workerId || !body.branch?.trim()) {
-      return NextResponse.json({ error: "projectId、workerId、branch 必填" }, { status: 400 });
+      return badRequest("projectId、workerId、branch 必填");
     }
-    if (user.role !== "admin" && !(await userHasProject(getPool(), user.id, body.projectId))) {
-      return NextResponse.json({ error: "无权访问该项目" }, { status: 403 });
+    const denied = await requireProjectScope(user, body.projectId, "无权访问该项目");
+    if (denied) {
+      return denied;
     }
     if (!(await workerLinkedToProject(getPool(), body.workerId, body.projectId))) {
-      return NextResponse.json({ error: "该 worker 未关联此项目，无法对话" }, { status: 400 });
+      return badRequest("该 worker 未关联此项目，无法对话");
     }
     const model = (body.model && MODELS.has(body.model) ? body.model : "default") as TaskModel;
     const conversation = await createConversation(getPool(), {
@@ -57,7 +59,7 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json({ conversation }, { status: 201 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
 
@@ -73,6 +75,6 @@ export async function GET() {
     const conversations = await listConversations(getPool(), { projectIds });
     return NextResponse.json({ conversations });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

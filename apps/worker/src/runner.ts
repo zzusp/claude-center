@@ -74,6 +74,9 @@ import { projectChannel, type RelayEvent } from "@claude-center/relay-client";
 
 // 取消请求扫描间隔(ms):独立于工作态门控与认领循环,确保在执行中也能及时响应取消。
 const CANCEL_INTERVAL_MS = 3_000;
+// 孤儿 worktree GC 周期(ms):inline 清理(任务进终态即拆)是主路径,本定时器只兜底
+// 「进程崩溃/异常退出留下、不在活跃集里」的孤树。低频即可,避免长跑 worker 磁盘渐进泄漏。
+const GC_INTERVAL_MS = 30 * 60_000;
 // 桌面日志面板的内存日志环容量。
 const LOG_RING_CAPACITY = 200;
 
@@ -131,6 +134,9 @@ export class ClaudeCenterWorker {
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private infoTimer: NodeJS.Timeout | null = null;
   private cancelTimer: NodeJS.Timeout | null = null;
+  private gcTimer: NodeJS.Timeout | null = null;
+  // GC 重入护栏:周期触发,若上一轮未跑完则跳过本轮。
+  private gcRunning = false;
   // 仅护住「认领循环」，不护执行：执行 fire-and-forget 进 active 跟踪，实现真并发。
   private claiming = false;
   // 对话独立车道：≤1 轮在途、不占任务并发槽、不受工作态门控（用户显式点名了这个 worker，idle 也应答）。
@@ -189,6 +195,11 @@ export class ClaudeCenterWorker {
     this.cancelTimer = setInterval(() => {
       this.handleCancellations().catch((error) => this.log("error", `cancel: ${error}`));
     }, CANCEL_INTERVAL_MS);
+
+    // 周期 GC 兜底:启动已跑过一次(上面),此后低频重扫,清理崩溃残留的孤儿任务树。
+    this.gcTimer = setInterval(() => {
+      void this.gcOrphanWorktrees();
+    }, GC_INTERVAL_MS);
   }
 
   async stop(): Promise<void> {
@@ -196,6 +207,7 @@ export class ClaudeCenterWorker {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.infoTimer) clearInterval(this.infoTimer);
     if (this.cancelTimer) clearInterval(this.cancelTimer);
+    if (this.gcTimer) clearInterval(this.gcTimer);
     this.relay.stop();
   }
 
@@ -490,8 +502,13 @@ export class ClaudeCenterWorker {
     }
   }
 
-  // 启动时清理残留工作树：任务已进终态（不在 active 集）的工作树删掉，避免 worktrees 目录无限增长。
+  // 清理残留工作树：任务已进终态（不在 active 集）的工作树删掉，避免 worktrees 目录无限增长。
+  // 启动时跑一次 + 此后每 GC_INTERVAL_MS 周期兜底（崩溃/异常退出留下的孤树）。gcRunning 防重入。
   private async gcOrphanWorktrees(): Promise<void> {
+    if (this.gcRunning) {
+      return;
+    }
+    this.gcRunning = true;
     try {
       const activeIds = await listActiveTaskIdsForWorker(getPool(), this.config.workerId);
       const keep = new Set(activeIds);
@@ -500,6 +517,8 @@ export class ClaudeCenterWorker {
       }
     } catch (error) {
       this.log("error", `gcOrphanWorktrees: ${error}`);
+    } finally {
+      this.gcRunning = false;
     }
   }
 

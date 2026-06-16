@@ -1,12 +1,13 @@
 import { createSession, getPool, touchUserLogin, verifyUserCredentials } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE, SESSION_TTL_DAYS } from "../../../lib/session";
+import { errorResponse, badRequest } from "../../../lib/api";
 
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as { username?: string; password?: string };
     if (!body.username?.trim() || !body.password) {
-      return NextResponse.json({ error: "用户名和密码必填" }, { status: 400 });
+      return badRequest("用户名和密码必填");
     }
 
     const pool = getPool();
@@ -33,6 +34,6 @@ export async function POST(request: NextRequest) {
     });
     return response;
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

@@ -1,17 +1,18 @@
 import {
   deleteTask,
   getPool,
-  getTaskProjectId,
   getTaskWithDeps,
+  listTaskEvents,
   publishTask,
   reactivateTask,
   requestTaskCancellation,
   unpublishTask,
-  updateTask,
-  userHasProject
+  updateTask
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../../lib/session";
+import { requireTaskAccess } from "../../../lib/access";
+import { errorResponse, badRequest } from "../../../lib/api";
 import { projectChannel, publishRelay } from "../../../lib/relay-publish";
 import type { Task, TaskModel, TaskSubmitMode } from "@claude-center/db";
 
@@ -29,7 +30,10 @@ function publishTaskUpserted(task: Task): void {
   });
 }
 
-// 单任务详情：task 本体（含 project_name / depends_on / blocked）+ 前置任务标题，供独立详情页轮询。
+// 单任务详情聚合：task 本体（含 project_name / depends_on / blocked）+ 前置任务标题 + task_events，
+// 供详情页常驻轮询一次取齐（events 与 task 同为页面常驻数据，合并省一次往返）。
+// 注意：comments / session 仍是各自独立端点 + 按 tab 懒轮询，不并入这里——它们只在对应 tab
+// 打开时才拉，并入会让其常驻拉取、反而更费。
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requireUser();
   if (gate instanceof NextResponse) {
@@ -39,19 +43,18 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   try {
     const { id } = await params;
     // 项目隔离：非 admin 只能读分配给自己项目下的任务。
-    if (user.role !== "admin") {
-      const projectId = await getTaskProjectId(getPool(), id);
-      if (!projectId || !(await userHasProject(getPool(), user.id, projectId))) {
-        return NextResponse.json({ error: "无权访问该任务" }, { status: 403 });
-      }
+    const denied = await requireTaskAccess(user, id);
+    if (denied) {
+      return denied;
     }
     const detail = await getTaskWithDeps(getPool(), id);
     if (!detail) {
       return NextResponse.json({ error: "任务不存在" }, { status: 404 });
     }
-    return NextResponse.json(detail);
+    const events = await listTaskEvents(getPool(), id);
+    return NextResponse.json({ ...detail, events });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
 
@@ -82,11 +85,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     };
 
     // 项目隔离：非 admin 只能操作分配给自己项目下的任务。
-    if (user.role !== "admin") {
-      const projectId = await getTaskProjectId(getPool(), id);
-      if (!projectId || !(await userHasProject(getPool(), user.id, projectId))) {
-        return NextResponse.json({ error: "无权操作该任务" }, { status: 403 });
-      }
+    const denied = await requireTaskAccess(user, id, "无权操作该任务");
+    if (denied) {
+      return denied;
     }
 
     if (body.action === "publish") {
@@ -109,7 +110,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     if (body.action === "update") {
       if (!body.title || !body.description || !body.baseBranch || !body.workBranch || !body.targetBranch || !body.submitMode || !body.model) {
-        return NextResponse.json({ error: "缺少必要字段" }, { status: 400 });
+        return badRequest("缺少必要字段");
       }
       const autoReply = body.autoReply === true;
       const task = await updateTask(getPool(), id, {
@@ -149,9 +150,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ task });
     }
 
-    return NextResponse.json({ error: "Unsupported action" }, { status: 400 });
+    return badRequest("Unsupported action");
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
 
@@ -164,11 +165,9 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
   const user = gate;
   try {
     const { id } = await params;
-    if (user.role !== "admin") {
-      const projectId = await getTaskProjectId(getPool(), id);
-      if (!projectId || !(await userHasProject(getPool(), user.id, projectId))) {
-        return NextResponse.json({ error: "无权操作该任务" }, { status: 403 });
-      }
+    const denied = await requireTaskAccess(user, id, "无权操作该任务");
+    if (denied) {
+      return denied;
     }
     const deleted = await deleteTask(getPool(), id);
     if (!deleted) {
@@ -176,6 +175,6 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
     }
     return NextResponse.json({ deleted: true });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

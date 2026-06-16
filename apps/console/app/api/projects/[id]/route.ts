@@ -1,6 +1,7 @@
 import { deleteProject, getPool, updateProject } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "../../../lib/session";
+import { errorResponse, badRequest } from "../../../lib/api";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requirePermission("project.create");
@@ -17,7 +18,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     };
 
     if (!body.name?.trim() || !body.repoUrl?.trim()) {
-      return NextResponse.json({ error: "项目名与仓库地址不能为空" }, { status: 400 });
+      return badRequest("项目名与仓库地址不能为空");
     }
 
     const updated = await updateProject(getPool(), id, {
@@ -32,7 +33,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     return NextResponse.json({ project: updated });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
 
@@ -50,6 +51,6 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
     }
     return NextResponse.json({ ok: true, taskCount });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

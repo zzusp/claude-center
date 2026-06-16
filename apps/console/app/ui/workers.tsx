@@ -24,73 +24,16 @@ import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "rea
 import type { ReactNode } from "react";
 import {
   Empty, KvRow, MergeStatusBadge, StatusBadge, StatusDot,
-  fmtDateTime, fmtTime, metaOf, postJson, type Tone
+  fmtDateTime, fmtTime, metaOf, postJson
 } from "./shared";
 import {
-  ROLE_LABEL, ROLE_OPTIONS, SPARK_CAP, TONE_COLOR, emptyOverview, fmtAgo, syncAgo,
+  ROLE_LABEL, ROLE_OPTIONS, SPARK_CAP, emptyOverview, fmtAgo, syncAgo,
   type CurrentUser, type Health, type ViewKey
 } from "./dashboard-shared";
 import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
 import { Drawer, Select } from "./controls";
+import { WorkingStateBadge } from "./worker-shared";
 
-
-// 订阅类型展示：套餐档位 vs API 计费。isPlan 决定是否展示用量。
-const SUBSCRIPTION_LABEL: Record<string, string> = {
-  max: "套餐订阅 · Max",
-  pro: "套餐订阅 · Pro",
-  team: "套餐订阅 · Team",
-  enterprise: "套餐订阅 · Enterprise",
-  api: "API 计费",
-  unknown: "未识别"
-};
-
-function subscriptionLabel(type: string): string {
-  return SUBSCRIPTION_LABEL[type] ?? type;
-}
-
-function isPlanSubscription(type: string): boolean {
-  return type !== "api" && type !== "unknown";
-}
-
-// 用量窗口重置倒计时：oauth/usage 给的是 resets_at 绝对时间，这里换算成剩余。
-function fmtResetIn(iso: string): string {
-  const diff = new Date(iso).getTime() - Date.now();
-  if (diff <= 0) return "已重置";
-  const m = Math.round(diff / 60000);
-  if (m < 60) return `${m} 分钟`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时 ${m % 60} 分`;
-  return `${Math.floor(h / 24)} 天 ${h % 24} 小时`;
-}
-
-function WorkingStateBadge({ state }: { state: string }) {
-  const working = state === "working";
-  return (
-    <span className="badge" data-tone={working ? "success" : "pending"}>
-      <span className="glyph">{working ? "▶" : "⏸"}</span>
-      {working ? "工作中" : "空闲"}
-    </span>
-  );
-}
-
-// 套餐用量条：oauth/usage 只给利用率百分比（已用/总额度的比例）+ 重置时间，无绝对额度。
-function UsageBlock({ label, win }: { label: string; win: { utilization: number; resets_at: string } }) {
-  const pct = Math.max(0, Math.min(100, win.utilization));
-  const tone: Tone = pct >= 90 ? "failed" : pct >= 70 ? "pending" : "success";
-  return (
-    <div className="usage-block">
-      <div className="usage-head">
-        <span>{label}</span>
-        <span className="pct">
-          已用 {pct.toFixed(0)}% · 重置剩余 {fmtResetIn(win.resets_at)}
-        </span>
-      </div>
-      <div className="usage-track">
-        <div className="usage-fill" style={{ width: `${pct}%`, background: TONE_COLOR[tone] }} />
-      </div>
-    </div>
-  );
-}
 
 function WorkersView({
   workers,

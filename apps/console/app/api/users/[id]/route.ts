@@ -11,6 +11,7 @@ import {
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "../../../lib/session";
+import { errorResponse, badRequest } from "../../../lib/api";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requirePermission("user.manage");
@@ -29,10 +30,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     };
 
     if (body.role && !ROLES.includes(body.role as Role)) {
-      return NextResponse.json({ error: "无效角色" }, { status: 400 });
+      return badRequest("无效角色");
     }
     if (id === admin.id && body.disabled === true) {
-      return NextResponse.json({ error: "不能停用自己的账号" }, { status: 400 });
+      return badRequest("不能停用自己的账号");
     }
 
     const pool = getPool();
@@ -45,7 +46,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const removesAdmin =
       target.role === "admin" && !target.disabled && ((body.role && body.role !== "admin") || body.disabled === true);
     if (removesAdmin && (await countActiveAdmins(pool)) <= 1) {
-      return NextResponse.json({ error: "不能移除最后一个管理员" }, { status: 400 });
+      return badRequest("不能移除最后一个管理员");
     }
 
     const updated = await updateUser(pool, id, {
@@ -69,7 +70,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     return NextResponse.json({ user: updated });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
 
@@ -82,7 +83,7 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
   try {
     const { id } = await params;
     if (id === admin.id) {
-      return NextResponse.json({ error: "不能删除自己的账号" }, { status: 400 });
+      return badRequest("不能删除自己的账号");
     }
 
     const pool = getPool();
@@ -91,12 +92,12 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
       return NextResponse.json({ error: "用户不存在" }, { status: 404 });
     }
     if (target.role === "admin" && !target.disabled && (await countActiveAdmins(pool)) <= 1) {
-      return NextResponse.json({ error: "不能删除最后一个管理员" }, { status: 400 });
+      return badRequest("不能删除最后一个管理员");
     }
 
     await deleteUser(pool, id);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }

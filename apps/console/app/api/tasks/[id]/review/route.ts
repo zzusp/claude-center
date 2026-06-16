@@ -1,6 +1,8 @@
-import { acceptTask, getPool, getTaskProjectId, rejectTask, userHasProject } from "@claude-center/db";
+import { acceptTask, getPool, rejectTask } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "../../../../lib/session";
+import { requireTaskAccess } from "../../../../lib/access";
+import { errorResponse, badRequest } from "../../../../lib/api";
 import { projectChannel, publishRelay } from "../../../../lib/relay-publish";
 
 export const dynamic = "force-dynamic";
@@ -18,18 +20,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const body = (await request.json()) as { action?: "accept" | "reject"; feedback?: string };
 
     if (body.action !== "accept" && body.action !== "reject") {
-      return NextResponse.json({ error: "action must be 'accept' or 'reject'" }, { status: 400 });
+      return badRequest("action must be 'accept' or 'reject'");
     }
     if (body.action === "reject" && !body.feedback?.trim()) {
-      return NextResponse.json({ error: "打回必须填写意见" }, { status: 400 });
+      return badRequest("打回必须填写意见");
     }
 
     // 项目隔离：非 admin 只能验收分配给自己项目下的任务。
-    if (user.role !== "admin") {
-      const projectId = await getTaskProjectId(getPool(), id);
-      if (!projectId || !(await userHasProject(getPool(), user.id, projectId))) {
-        return NextResponse.json({ error: "无权验收该任务" }, { status: 403 });
-      }
+    const denied = await requireTaskAccess(user, id, "无权验收该任务");
+    if (denied) {
+      return denied;
     }
 
     const client = await getPool().connect();
@@ -62,6 +62,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       client.release();
     }
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+    return errorResponse(error);
   }
 }
