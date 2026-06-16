@@ -449,7 +449,7 @@ a:hover {
 }
 
 .grid-2 > .col > .card {
-  flex: 1 1 0;
+  flex: 1 1 auto; /* flex-basis:0 导致列固有高度仅含 card-head，card-body 折叠为 0 */
   min-height: 0;
   display: flex;
   flex-direction: column;
