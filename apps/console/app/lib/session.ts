@@ -1,6 +1,7 @@
 import { getPool, getSessionUser, permissionsForRole, type Permission, type User } from "@claude-center/db";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { cache } from "react";
 
 // 服务端鉴权工具：登录会话 cookie 解析 + 路由门禁。仅在服务端（route handler / 服务端组件）使用。
 export const SESSION_COOKIE = "cc_session";
@@ -17,7 +18,9 @@ export type CurrentUser = {
   permissions: Permission[];
 };
 
-export async function getCurrentUser(): Promise<AuthUser | null> {
+// React.cache() 在单次请求渲染内去重：同一次导航中 layout 与 page 各调一次，只查一次 DB session。
+// 跨请求不复用——cache 作用域是 React render 单次树渲染。
+export const getCurrentUser = cache(async (): Promise<AuthUser | null> => {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) {
@@ -28,7 +31,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     return null;
   }
   return { ...user, permissions: permissionsForRole(user.role) };
-}
+});
 
 export function toCurrentUser(user: AuthUser): CurrentUser {
   return {
