@@ -24,6 +24,10 @@ import type {
   TaskSubmitMode,
   User,
   UserWithProjects,
+  ProjectRepo,
+  ProjectRepoRole,
+  TaskRepo,
+  TaskRepoSubStatus,
   Worker,
   WorkerProjectLinkView
 } from "./types.js";
@@ -76,7 +80,10 @@ export async function createProject(
      RETURNING *`,
     [input.name, input.repoUrl, input.defaultBranch, input.description]
   );
-  return result.rows[0]!;
+  const project = result.rows[0]!;
+  // 多仓任务支持：项目建立时同时落 project_repos 主仓行（'.'），与 projects 保持一致。
+  await syncMainProjectRepo(client, project.id);
+  return project;
 }
 
 export async function getProject(client: pg.Pool | pg.PoolClient, id: string): Promise<Project | null> {
@@ -100,7 +107,12 @@ export async function updateProject(
       RETURNING *`,
     [id, input.name, input.repoUrl, input.defaultBranch, input.description]
   );
-  return result.rows[0] ?? null;
+  const project = result.rows[0] ?? null;
+  if (project) {
+    // 多仓任务支持：项目元信息（repo_url / default_branch / name）变更后同步主仓行。
+    await syncMainProjectRepo(client, project.id);
+  }
+  return project;
 }
 
 // 删除项目：其下任务及关联记录由外键 ON DELETE CASCADE 自动级联删除
@@ -2083,4 +2095,202 @@ export async function deleteConversation(
 ): Promise<boolean> {
   const r = await client.query(`DELETE FROM conversations WHERE id = $1`, [conversationId]);
   return (r.rowCount ?? 0) > 0;
+}
+
+/* ===== 多仓任务支持（project_repos + task_repos）=====
+ * 方案：docs/spec/task-multi-repo.md
+ *
+ * 单仓项目：task_repos 仅一行(role='main')，循环 finalize 等价于老 finalizeTask；
+ *           projects 与 project_repos 主仓行始终保持一致（由 syncMainProjectRepo 维护）。
+ *
+ * 强语义：任一仓 sub_status='failed' → 任务整体 failed（任务级状态机不变，聚合见 worker finalize）。
+ */
+
+// 列出项目所有仓（主仓行 + 子仓行）。主仓在最前（role 排序 'main' < 'sub'），随后按 position 升序。
+export async function listProjectRepos(
+  client: pg.Pool | pg.PoolClient,
+  projectId: string
+): Promise<ProjectRepo[]> {
+  const result = await client.query<ProjectRepo>(
+    `SELECT * FROM project_repos
+      WHERE project_id = $1
+      ORDER BY (role = 'main') DESC, position ASC, created_at ASC`,
+    [projectId]
+  );
+  return result.rows;
+}
+
+// 同步主仓行：从 projects 读 repo_url / default_branch / name 填到 role='main' 行。
+// createProject / updateProject 之后调用，保证主仓行与 projects 一致。
+// 幂等：ON CONFLICT 走 UPDATE。projects 不存在则什么也不做（无 RAISE）。
+export async function syncMainProjectRepo(
+  client: pg.Pool | pg.PoolClient,
+  projectId: string
+): Promise<void> {
+  await client.query(
+    `INSERT INTO project_repos (project_id, role, relative_path, repo_url, default_branch, display_name, position)
+     SELECT id, 'main', '.', repo_url, default_branch, name, 0 FROM projects WHERE id = $1
+     ON CONFLICT (project_id, relative_path) DO UPDATE
+        SET repo_url       = EXCLUDED.repo_url,
+            default_branch = EXCLUDED.default_branch,
+            display_name   = EXCLUDED.display_name,
+            updated_at     = now()`,
+    [projectId]
+  );
+}
+
+export type ProjectRepoInput = {
+  relativePath: string;
+  repoUrl: string;
+  defaultBranch: string;
+  displayName: string;
+  position: number;
+};
+
+// 整批替换项目的「子仓」清单（主仓行不受影响，由 syncMainProjectRepo 维护）。
+// 同事务里 DELETE 缺失子仓 + UPSERT 现有子仓（按 relative_path 匹配，保留 id 不变以避免外键级联误删 task_repos）。
+// 上层须在事务内调用：传入 PoolClient。
+export async function replaceProjectSubRepos(
+  client: pg.PoolClient,
+  projectId: string,
+  subs: ProjectRepoInput[]
+): Promise<void> {
+  // 校验：禁止子仓 relative_path = '.'（'.' 仅留给主仓）；relative_path 不可重复。
+  const seen = new Set<string>();
+  for (const sub of subs) {
+    if (!sub.relativePath || sub.relativePath === ".") {
+      throw new Error(`子仓 relative_path 不能为空或 '.'`);
+    }
+    if (sub.relativePath.startsWith("/") || sub.relativePath.includes("\\")) {
+      throw new Error(`子仓 relative_path 必须为 POSIX 风格（不以 '/' 开头，不含反斜杠）：${sub.relativePath}`);
+    }
+    if (seen.has(sub.relativePath)) {
+      throw new Error(`子仓 relative_path 重复：${sub.relativePath}`);
+    }
+    seen.add(sub.relativePath);
+  }
+
+  // 删除当前不在提交清单里的子仓行。ON DELETE RESTRICT 会在它们有 task_repos 引用时报错——
+  // 此时上层应明确告知用户该子仓还有任务依赖，需先处理任务后再移除。
+  const keepPaths = subs.map((s) => s.relativePath);
+  await client.query(
+    `DELETE FROM project_repos
+      WHERE project_id = $1
+        AND role = 'sub'
+        AND NOT (relative_path = ANY($2::text[]))`,
+    [projectId, keepPaths]
+  );
+
+  // upsert：以 (project_id, relative_path) 为匹配键。
+  for (const sub of subs) {
+    await client.query(
+      `INSERT INTO project_repos
+         (project_id, role, relative_path, repo_url, default_branch, display_name, position)
+       VALUES ($1, 'sub', $2, $3, $4, $5, $6)
+       ON CONFLICT (project_id, relative_path) DO UPDATE
+          SET repo_url       = EXCLUDED.repo_url,
+              default_branch = EXCLUDED.default_branch,
+              display_name   = EXCLUDED.display_name,
+              position       = EXCLUDED.position,
+              updated_at     = now()`,
+      [projectId, sub.relativePath, sub.repoUrl, sub.defaultBranch, sub.displayName, sub.position]
+    );
+  }
+}
+
+// 列出任务的所有仓快照行（主仓在前，子仓按 relative_path 排序）。
+export async function listTaskRepos(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string
+): Promise<TaskRepo[]> {
+  const result = await client.query<TaskRepo>(
+    `SELECT * FROM task_repos
+      WHERE task_id = $1
+      ORDER BY (role = 'main') DESC, relative_path ASC`,
+    [taskId]
+  );
+  return result.rows;
+}
+
+export type TaskRepoInput = {
+  projectRepoId: string;
+  role: ProjectRepoRole;
+  relativePath: string;
+  baseBranch: string;
+  workBranch: string;
+  targetBranch: string;
+  // 用户在 UI 上勾掉该仓（不启用）时传 'skipped'；其余创建时一律 'pending'。
+  subStatus?: TaskRepoSubStatus;
+};
+
+// 任务创建后批量写入 task_repos。期望调用方在同事务内、createTask 之后调用。
+// 入参须至少包含一行 role='main'；上层在 console route 校验。
+export async function createTaskRepos(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  inputs: TaskRepoInput[]
+): Promise<void> {
+  if (inputs.length === 0) {
+    throw new Error("createTaskRepos: 至少需要一行（含主仓）");
+  }
+  const mainCount = inputs.filter((i) => i.role === "main").length;
+  if (mainCount !== 1) {
+    throw new Error(`createTaskRepos: 须恰好一行 role='main'，当前 ${mainCount} 行`);
+  }
+  for (const input of inputs) {
+    await client.query(
+      `INSERT INTO task_repos
+         (task_id, project_repo_id, role, relative_path,
+          base_branch, work_branch, target_branch, sub_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        taskId,
+        input.projectRepoId,
+        input.role,
+        input.relativePath,
+        input.baseBranch,
+        input.workBranch,
+        input.targetBranch,
+        input.subStatus ?? "pending"
+      ]
+    );
+  }
+}
+
+// 删除任务的全部 task_repos（updateTask 重新生成时用；外键 ON DELETE CASCADE 在删任务时已覆盖，
+// 这里专供「编辑任务时整批替换分支配置」的场景：先 DELETE 再 createTaskRepos）。
+export async function deleteTaskRepos(client: pg.Pool | pg.PoolClient, taskId: string): Promise<void> {
+  await client.query(`DELETE FROM task_repos WHERE task_id = $1`, [taskId]);
+}
+
+// 单仓状态翻转（finalize 单仓收尾用）。同步打 last_sync_at。
+// errorMessage 仅 sub_status='failed' 时有意义；其它态传 null 清空。
+export async function updateTaskRepoStatus(
+  client: pg.Pool | pg.PoolClient,
+  taskRepoId: string,
+  subStatus: TaskRepoSubStatus,
+  errorMessage: string | null = null
+): Promise<void> {
+  await client.query(
+    `UPDATE task_repos
+        SET sub_status    = $2,
+            error_message = $3,
+            last_sync_at  = now(),
+            updated_at    = now()
+      WHERE id = $1`,
+    [taskRepoId, subStatus, errorMessage]
+  );
+}
+
+// 单仓 pr_url 写入（gh pr create 成功后调用）。不动 sub_status——由调用方后续 updateTaskRepoStatus
+// 翻成 'pr_created'。
+export async function updateTaskRepoPrUrl(
+  client: pg.Pool | pg.PoolClient,
+  taskRepoId: string,
+  prUrl: string | null
+): Promise<void> {
+  await client.query(
+    `UPDATE task_repos SET pr_url = $2, updated_at = now() WHERE id = $1`,
+    [taskRepoId, prUrl]
+  );
 }

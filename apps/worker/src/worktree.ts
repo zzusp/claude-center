@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { runCommand } from "./shell.js";
+import { runCommand, type CommandResult } from "./shell.js";
 
 // 真并发执行的工作树隔离：每个工作类任务一棵独立 git worktree，互不踩工作树（含同项目并发）。
 // 主仓（localPath）只用于 fetch 与 worktree 管理，不被切到工作分支，全程保持稳定。
@@ -94,6 +94,46 @@ export async function ensureWorktree(
     "git",
     ["-C", localPath, "worktree", "add", "--force", wtPath, opts.workBranch],
     { timeoutMs: 10 * 60_000 }
+  );
+}
+
+// 多仓任务支持（docs/spec/task-multi-repo.md §6）：
+// 子仓本地路径约定为 <mainLocal>/<relative_path>（与主仓 .gitignore 忽略路径一致）。
+// 任务执行前确保该子仓已 clone：不存在则 git clone；存在视为可复用。父目录不存在时先建。
+// clone 失败抛错（强语义下整任务 failed）。
+export async function ensureSubRepoCloned(subRepoLocal: string, repoUrl: string): Promise<void> {
+  if (existsSync(path.join(subRepoLocal, ".git"))) {
+    return;
+  }
+  mkdirSync(path.dirname(subRepoLocal), { recursive: true });
+  await runCommand("git", ["clone", repoUrl, subRepoLocal], { timeoutMs: 10 * 60_000 });
+}
+
+// 多仓任务前置硬约束：主仓 .gitignore 必须忽略子仓路径，否则 git worktree add 会撞
+// `'<path>' already exists`。`git check-ignore -q <path>` 返回 0 表示被忽略；1 未被忽略；
+// 128 命令异常。仅 0 时通过，1 抛带明确指引的错误。128 也抛（让上层把任务标 failed）。
+export async function assertSubRepoPathIgnoredInMain(
+  mainLocal: string,
+  subRelativePath: string
+): Promise<void> {
+  let result: CommandResult;
+  try {
+    result = await runCommand("git", ["-C", mainLocal, "check-ignore", "-q", subRelativePath], {
+      timeoutMs: 30_000,
+      // check-ignore 用 exit code 表达结果（0/1 均非异常）；让 shell 层不把 1 当失败抛出。
+      acceptExitCodes: [0, 1]
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `检查子仓路径 ignored 状态失败（${subRelativePath}）：${detail}。请确认主仓本地路径有效且 .gitignore 可被 git 读取。`
+    );
+  }
+  if (result.exitCode === 0) {
+    return;
+  }
+  throw new Error(
+    `子仓路径未被主仓 .gitignore 忽略：${subRelativePath}。多仓任务要求主仓忽略子仓目录，否则主仓工作树会占用该路径导致子仓 worktree add 冲突。请在主仓根 .gitignore 加入 "${subRelativePath}/" 后重试。`
   );
 }
 

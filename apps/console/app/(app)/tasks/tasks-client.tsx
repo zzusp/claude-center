@@ -49,6 +49,15 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
     setBusy(true);
     setSubmitError(null);
     try {
+      // 多仓任务：表单里 hidden taskRepos 字段是 JSON 序列化的子仓启用清单（仅 enabled=true 的子仓被包含）。
+      // 主仓的 base/work/target 仍走外层 baseBranch/workBranch/targetBranch；后端补主仓行并把未启用子仓落 'skipped'。
+      let taskRepos: unknown = undefined;
+      try {
+        const raw = String(data.get("taskRepos") ?? "").trim();
+        taskRepos = raw ? JSON.parse(raw) : undefined;
+      } catch {
+        taskRepos = undefined;
+      }
       await postJson("/api/tasks", {
         projectId: selectedProjectId,
         title: data.get("title"),
@@ -62,7 +71,8 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
         autoDecisionHints: String(data.get("autoDecisionHints") ?? ""),
         model: data.get("model"),
         dependsOn: data.getAll("dependsOn").map(String),
-        scheduledAt
+        scheduledAt,
+        taskRepos
       });
       form.reset();
       setDrawerOpen(false);
