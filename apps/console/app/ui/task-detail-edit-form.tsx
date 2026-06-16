@@ -1,8 +1,8 @@
 "use client";
 
 import type { Task } from "@claude-center/db";
-import { Check } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { Check, Send } from "lucide-react";
+import { FormEvent, useRef, useState } from "react";
 import { useAsyncAction } from "../lib/use-async-action";
 import { DateTimePicker, Select } from "./controls";
 
@@ -23,6 +23,9 @@ export function TaskEditForm({
   const [autoReply, setAutoReply] = useState(task.auto_reply);
   const [autoDecisionHints, setAutoDecisionHints] = useState(task.auto_decision_hints);
   const [model, setModel] = useState(task.model);
+  // 提交意图：save 仅保存编辑（保留 draft/scheduled），publish 保存后立刻发布为 pending（待处理）。
+  // 用 ref 而非 state，避免点击「保存并发布」后 setState 异步导致 handleSubmit 拿到旧值。
+  const submitIntentRef = useRef<"save" | "publish">("save");
 
   // datetime-local 值格式：去掉秒+时区（只保留 "YYYY-MM-DDTHH:MM"）
   const scheduledAtDefault = task.scheduled_at
@@ -34,6 +37,7 @@ export function TaskEditForm({
     const form = event.currentTarget;
     const data = new FormData(form);
     const scheduledAtRaw = (data.get("scheduledAt") as string) || "";
+    const intent = submitIntentRef.current;
     await run(async () => {
       const response = await fetch(`/api/tasks/${task.id}`, {
         method: "PATCH",
@@ -58,6 +62,22 @@ export function TaskEditForm({
         throw new Error(payload.error ?? `保存失败：${response.status}`);
       }
       const payload = (await response.json()) as { task: Task };
+      // 保存成功后若为「保存并发布」意图，紧跟一次 publish 把状态翻成 pending（待处理）。
+      // 复用详情页/列表页同一 publish action（draft/scheduled → pending）。
+      if (intent === "publish") {
+        const pubRes = await fetch(`/api/tasks/${task.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "publish" })
+        });
+        if (!pubRes.ok) {
+          const pubPayload = (await pubRes.json().catch(() => ({}))) as { error?: string };
+          throw new Error(pubPayload.error ?? `发布失败：${pubRes.status}`);
+        }
+        const pubJson = (await pubRes.json()) as { task: Task };
+        onSaved(pubJson.task);
+        return;
+      }
       onSaved(payload.task);
     });
   }
@@ -195,9 +215,28 @@ export function TaskEditForm({
         <button className="btn btn-sm" type="button" onClick={onCancel} disabled={busy}>
           取消
         </button>
-        <button className="btn btn-primary btn-sm" type="submit" disabled={busy}>
+        <button
+          className="btn btn-sm"
+          type="submit"
+          disabled={busy}
+          onClick={() => {
+            submitIntentRef.current = "save";
+          }}
+        >
           <Check size={14} />
-          {busy ? "保存中…" : "保存"}
+          {busy ? "处理中…" : "保存"}
+        </button>
+        <button
+          className="btn btn-primary btn-sm"
+          type="submit"
+          disabled={busy}
+          onClick={() => {
+            submitIntentRef.current = "publish";
+          }}
+          title="保存编辑并发布为「待处理」"
+        >
+          <Send size={14} />
+          {busy ? "处理中…" : "保存并发布"}
         </button>
       </div>
     </form>
