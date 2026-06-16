@@ -1,28 +1,45 @@
 "use client";
 
 import type { Project, ProjectRepo } from "@claude-center/db";
-import { FolderGit2, GitBranch, Pencil, Plus, Save, Trash2 } from "lucide-react";
-import { FormEvent, useEffect, useState } from "react";
+import { ChevronRight, FolderGit2, GitBranch, Pencil, Plus, Save, Trash2 } from "lucide-react";
+import { Fragment, FormEvent, useEffect, useState } from "react";
 import { Empty, fmtTime } from "./shared";
 import { Drawer, useConfirm } from "./controls";
 
+// 列表项：Project + 该项目的子仓清单（由 /api/projects 一次聚合）。
+export type ProjectListItem = Project & { subRepos: ProjectRepo[] };
+
+// 抽屉打开模式：编辑项目本身（含子仓编辑器） / 仅管理子仓（聚焦"添加子仓"）。
+type DrawerTarget =
+  | { mode: "edit"; project: ProjectListItem }
+  | { mode: "subs"; project: ProjectListItem; addNew: boolean };
 
 function ProjectsView({
   projects,
   onChanged,
   canManageProjects
 }: {
-  projects: Project[];
+  projects: ProjectListItem[];
   onChanged: () => void | Promise<void>;
   canManageProjects: boolean;
 }) {
-  const [editing, setEditing] = useState<Project | null>(null);
+  const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
   const [creating, setCreating] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { confirm, dialog } = useConfirm();
 
-  async function handleDelete(project: Project) {
+  function toggleExpanded(id: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleDelete(project: ProjectListItem) {
     const ok = await confirm({
       title: "删除项目",
       message: `确认删除项目「${project.name}」？其下所有任务记录将一并级联删除，且不可恢复。`,
@@ -62,7 +79,7 @@ function ProjectsView({
             className="btn btn-primary btn-sm"
             onClick={() => {
               setCreating(true);
-              setEditing(null);
+              setDrawer(null);
             }}
           >
             <Plus size={16} />
@@ -83,6 +100,7 @@ function ProjectsView({
               <table className="table">
                 <thead>
                   <tr>
+                    <th style={{ width: 28 }} aria-label="展开" />
                     <th>项目</th>
                     <th>仓库</th>
                     <th>默认分支</th>
@@ -91,64 +109,107 @@ function ProjectsView({
                   </tr>
                 </thead>
                 <tbody>
-                  {projects.map((project) => (
-                    <tr
-                      key={project.id}
-                      className={editing?.id === project.id ? "selected" : ""}
-                      style={canManageProjects ? undefined : { cursor: "default" }}
-                      onClick={
-                        canManageProjects
-                          ? () => {
-                              setEditing(project);
-                              setCreating(false);
-                            }
-                          : undefined
-                      }
-                    >
-                      <td>
-                        <div className="cell-stack">
-                          <span className="t-title">{project.name}</span>
-                          {project.description ? (
-                            <span className="t-meta">{project.description}</span>
+                  {projects.map((project) => {
+                    const subCount = project.subRepos.length;
+                    const isOpen = expanded.has(project.id);
+                    const colSpan = canManageProjects ? 6 : 5;
+                    return (
+                      <Fragment key={project.id}>
+                        <tr
+                          className={drawer?.project.id === project.id ? "selected" : ""}
+                          style={canManageProjects ? undefined : { cursor: "default" }}
+                          onClick={
+                            canManageProjects
+                              ? () => {
+                                  setDrawer({ mode: "edit", project });
+                                  setCreating(false);
+                                }
+                              : undefined
+                          }
+                        >
+                          <td onClick={(event) => event.stopPropagation()}>
+                            {subCount > 0 ? (
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                title={isOpen ? "折叠子仓" : `展开 ${subCount} 个子仓`}
+                                aria-expanded={isOpen}
+                                onClick={() => toggleExpanded(project.id)}
+                              >
+                                <ChevronRight
+                                  size={14}
+                                  className="tx-caret"
+                                  style={{ transform: isOpen ? "rotate(90deg)" : undefined }}
+                                />
+                              </button>
+                            ) : null}
+                          </td>
+                          <td>
+                            <div className="cell-stack">
+                              <span className="t-title">{project.name}</span>
+                              {project.description ? (
+                                <span className="t-meta">{project.description}</span>
+                              ) : null}
+                            </div>
+                          </td>
+                          <td className="mono">{project.repo_url}</td>
+                          <td>
+                            <span className="tag">
+                              <GitBranch size={13} className="ico" />
+                              {project.default_branch}
+                            </span>
+                          </td>
+                          <td className="t-right t-num">{fmtTime(project.created_at)}</td>
+                          {canManageProjects ? (
+                            <td className="t-right">
+                              <div className="row-actions" onClick={(event) => event.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  className="icon-btn"
+                                  title="添加子仓"
+                                  onClick={() => {
+                                    setDrawer({ mode: "subs", project, addNew: true });
+                                    setCreating(false);
+                                    if (subCount > 0 && !isOpen) toggleExpanded(project.id);
+                                  }}
+                                >
+                                  <Plus size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="icon-btn"
+                                  title="编辑"
+                                  onClick={() => {
+                                    setDrawer({ mode: "edit", project });
+                                    setCreating(false);
+                                  }}
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="icon-btn danger"
+                                  title="删除"
+                                  disabled={busy}
+                                  onClick={() => handleDelete(project)}
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </td>
                           ) : null}
-                        </div>
-                      </td>
-                      <td className="mono">{project.repo_url}</td>
-                      <td>
-                        <span className="tag">
-                          <GitBranch size={13} className="ico" />
-                          {project.default_branch}
-                        </span>
-                      </td>
-                      <td className="t-right t-num">{fmtTime(project.created_at)}</td>
-                      {canManageProjects ? (
-                        <td className="t-right">
-                          <div className="row-actions" onClick={(event) => event.stopPropagation()}>
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              title="编辑"
-                              onClick={() => {
-                                setEditing(project);
-                                setCreating(false);
-                              }}
-                            >
-                              <Pencil size={14} />
-                            </button>
-                            <button
-                              type="button"
-                              className="icon-btn danger"
-                              title="删除"
-                              disabled={busy}
-                              onClick={() => handleDelete(project)}
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                        </td>
-                      ) : null}
-                    </tr>
-                  ))}
+                        </tr>
+                        {isOpen && subCount > 0 ? (
+                          <tr className="sub-row">
+                            <td />
+                            <td colSpan={colSpan - 1} style={{ padding: "8px 16px 12px" }}>
+                              <SubReposInlineList subRepos={project.subRepos} />
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -157,11 +218,19 @@ function ProjectsView({
       </section>
 
       <Drawer
-        open={creating || editing !== null}
-        title={creating ? "新建项目" : editing ? `编辑 ${editing.name}` : ""}
+        open={creating || drawer !== null}
+        title={
+          creating
+            ? "新建项目"
+            : drawer?.mode === "edit"
+              ? `编辑 ${drawer.project.name}`
+              : drawer?.mode === "subs"
+                ? `管理子仓 · ${drawer.project.name}`
+                : ""
+        }
         onClose={() => {
           setCreating(false);
-          setEditing(null);
+          setDrawer(null);
         }}
       >
         {creating ? (
@@ -173,13 +242,23 @@ function ProjectsView({
               await onChanged();
             }}
           />
-        ) : editing ? (
+        ) : drawer?.mode === "edit" ? (
           <ProjectForm
             mode="edit"
-            key={editing.id}
-            project={editing}
+            key={drawer.project.id}
+            project={drawer.project}
             onDone={async (note) => {
-              setEditing(null);
+              setDrawer(null);
+              setMessage(note);
+              await onChanged();
+            }}
+          />
+        ) : drawer?.mode === "subs" ? (
+          <ProjectSubReposEditor
+            key={`subs-${drawer.project.id}`}
+            projectId={drawer.project.id}
+            autoAddNew={drawer.addNew}
+            onSaved={async (note) => {
               setMessage(note);
               await onChanged();
             }}
@@ -198,7 +277,7 @@ function ProjectForm({
   onDone
 }: {
   mode: "create" | "edit";
-  project?: Project;
+  project?: ProjectListItem;
   onDone: (note: string) => void | Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -280,7 +359,17 @@ function ProjectForm({
 // - 子仓列表 fetch /api/projects/[id]/repos，过滤 role='sub' 后展示并允许增删改
 // - 保存按钮 PUT /api/projects/[id]/repos 整批替换；删除有任务引用的子仓后端返回 409
 // 子仓在主仓本地路径下的 relative_path **必须** 被主仓 .gitignore 忽略；UI 加一行提示
-function ProjectSubReposEditor({ projectId }: { projectId: string }) {
+// autoAddNew：列表行"+ 子仓"快捷入口打开抽屉时，加载完已有子仓后自动追加一行空行供填写
+// onSaved：保存成功回调，通知父组件触发列表重拉
+function ProjectSubReposEditor({
+  projectId,
+  autoAddNew = false,
+  onSaved
+}: {
+  projectId: string;
+  autoAddNew?: boolean;
+  onSaved?: (note: string) => void | Promise<void>;
+}) {
   const [subs, setSubs] = useState<Array<{ id?: string; relativePath: string; repoUrl: string; defaultBranch: string; displayName: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -295,16 +384,19 @@ function ProjectSubReposEditor({ projectId }: { projectId: string }) {
         if (!response.ok) throw new Error();
         const data = (await response.json()) as { repos: ProjectRepo[] };
         if (!active) return;
+        const existing = data.repos
+          .filter((r) => r.role === "sub")
+          .map((r) => ({
+            id: r.id,
+            relativePath: r.relative_path,
+            repoUrl: r.repo_url,
+            defaultBranch: r.default_branch,
+            displayName: r.display_name
+          }));
         setSubs(
-          data.repos
-            .filter((r) => r.role === "sub")
-            .map((r) => ({
-              id: r.id,
-              relativePath: r.relative_path,
-              repoUrl: r.repo_url,
-              defaultBranch: r.default_branch,
-              displayName: r.display_name
-            }))
+          autoAddNew
+            ? [...existing, { relativePath: "", repoUrl: "", defaultBranch: "main", displayName: "" }]
+            : existing
         );
         setLoading(false);
       })
@@ -317,7 +409,7 @@ function ProjectSubReposEditor({ projectId }: { projectId: string }) {
     return () => {
       active = false;
     };
-  }, [projectId]);
+  }, [projectId, autoAddNew]);
 
   function add() {
     setSubs([...subs, { relativePath: "", repoUrl: "", defaultBranch: "main", displayName: "" }]);
@@ -364,6 +456,7 @@ function ProjectSubReposEditor({ projectId }: { projectId: string }) {
           }))
       );
       setNote("已保存子仓清单");
+      await onSaved?.("已保存子仓清单");
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存失败");
     } finally {
@@ -430,6 +523,40 @@ function ProjectSubReposEditor({ projectId }: { projectId: string }) {
         <Save size={14} />
         保存子仓清单
       </button>
+    </div>
+  );
+}
+
+// 列表行展开后的子仓只读视图：仅展示，不在此处编辑（编辑走"+ 子仓"或"编辑"抽屉）。
+function SubReposInlineList({ subRepos }: { subRepos: ProjectRepo[] }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <span className="t-meta">子仓 {subRepos.length} 个</span>
+      <table className="table" style={{ background: "var(--surface-1)" }}>
+        <thead>
+          <tr>
+            <th>显示名</th>
+            <th>相对路径</th>
+            <th>仓库</th>
+            <th>默认分支</th>
+          </tr>
+        </thead>
+        <tbody>
+          {subRepos.map((r) => (
+            <tr key={r.id} style={{ cursor: "default" }}>
+              <td><span className="t-title">{r.display_name || r.relative_path}</span></td>
+              <td className="mono">{r.relative_path}</td>
+              <td className="mono">{r.repo_url}</td>
+              <td>
+                <span className="tag">
+                  <GitBranch size={13} className="ico" />
+                  {r.default_branch}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
