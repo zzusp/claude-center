@@ -2337,6 +2337,30 @@ select:focus {
   background: var(--surface-2);
 }
 
+/* 子仓清单编辑器（弹窗内）局部排版：标题 + "新增子仓"按钮 一行；每条子仓一个卡片块。 */
+.sub-editor-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.sub-editor-head-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sub-editor-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
 /* ---------------- Responsive ---------------- */
 
 @media (max-width: 1200px) {
