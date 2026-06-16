@@ -59,7 +59,16 @@ export function usePolling(
     // 只剩首次 + deps 变化触发；用于不希望被任意事件刷的下拉/列表（如任务调度页主列表与下拉数据）。
     // 注意：setInterval(fn, Infinity) 在 HTML 规范下会被钳到 ≤1ms，叠加 inflight 锁会变成"上一个回完立刻发下一个"
     // 的请求风暴；relay 监听又会让任意频道事件穿过来触发刷新——两个都得在 Infinity 时拦掉。
-    void run();
+    //
+    // 首跑挂到微任务上：React 严格模式 dev 下 useEffect 会 mount→cleanup→mount 同步双发，
+    // 同步 `void run()` 已经把 fetch 打到网络上，`active=false` 只挡 setState、挡不住请求本身——
+    // 表现就是「页面跳转每个自动接口被调两次」。微任务等当前 commit 任务跑完才执行，被中间
+    // cleanup 标记 cancelled 的首次会被跳过，只剩二次 mount 真正发请求。
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      void run();
+    });
     let intervalTimer: number | undefined;
     let jitterTimer: number | undefined;
     let unregister: (() => void) | undefined;
@@ -83,6 +92,7 @@ export function usePolling(
     }
 
     return () => {
+      cancelled = true;
       active = false;
       if (jitterTimer !== undefined) window.clearTimeout(jitterTimer);
       if (intervalTimer !== undefined) window.clearInterval(intervalTimer);
