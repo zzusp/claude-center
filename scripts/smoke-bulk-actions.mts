@@ -117,6 +117,36 @@ async function main(): Promise<void> {
   }
   console.log("✓ accept: success → accepted（事务路径）");
 
+  // 4b) accept 幂等：已为 accepted 仍返回任务（避免 Console 自动验收与用户勾选验收的天然竞态被误报）
+  const idemClient = await getPool().connect();
+  try {
+    await idemClient.query("BEGIN");
+    const t2 = await acceptTask(idemClient, acceptId);
+    if (!t2) throw new Error("accept(幂等): 返回 null，应视作已验收成功");
+    assertEq(t2.status, "accepted", "accept(幂等).status");
+    await idemClient.query("COMMIT");
+  } catch (error) {
+    await idemClient.query("ROLLBACK");
+    throw error;
+  } finally {
+    idemClient.release();
+  }
+  console.log("✓ accept 幂等：accepted 仍返回任务（无重复事件）");
+
+  // 4c) accept 负例：非 success/merged/accepted 真不可验收（返回 null）
+  const acceptNegId = await mkTask("accept-neg-case");
+  await forceStatus(acceptNegId, "failed", { error_message: "boom" });
+  const negClient = await getPool().connect();
+  try {
+    await negClient.query("BEGIN");
+    const tNeg = await acceptTask(negClient, acceptNegId);
+    if (tNeg) throw new Error("accept 守卫失效：failed 不应可验收");
+    await negClient.query("ROLLBACK");
+  } finally {
+    negClient.release();
+  }
+  console.log("✓ guard: accept(failed) 返回 null");
+
   // 5) reactivate: failed → draft
   const reactId = await mkTask("reactivate-case");
   await forceStatus(reactId, "failed", { error_message: "boom" });
