@@ -188,35 +188,6 @@ function ProjectsView({
 
   return (
     <>
-      <div className="page-head">
-        <h1 className="page-head-title">代码项目</h1>
-        <div className="page-head-actions">
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => void handleRefresh()}
-            title="刷新"
-            disabled={refreshing}
-          >
-            <RefreshCw size={16} />
-            刷新
-          </button>
-          {canManageProjects ? (
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={() => {
-                setCreating(true);
-                setModal(null);
-              }}
-            >
-              <Plus size={16} />
-              新建项目
-            </button>
-          ) : null}
-        </div>
-      </div>
-
       <div className="page-grid">
         <main className="page-grid-main">
           <section className="card">
@@ -226,6 +197,31 @@ function ProjectsView({
                 <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="搜索项目名 / 描述 / 仓库地址" />
               </div>
               {message ? <span className="t-meta">{message}</span> : null}
+              <div className="tb-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => void handleRefresh()}
+                  title="刷新"
+                  disabled={refreshing}
+                >
+                  <RefreshCw size={16} />
+                  刷新
+                </button>
+                {canManageProjects ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => {
+                      setCreating(true);
+                      setModal(null);
+                    }}
+                  >
+                    <Plus size={16} />
+                    新建项目
+                  </button>
+                ) : null}
+              </div>
             </div>
 
             <div className="card-body flush">

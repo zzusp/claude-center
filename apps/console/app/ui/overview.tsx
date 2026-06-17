@@ -85,13 +85,6 @@ function DashboardView({
 
   return (
     <>
-      <div className="page-head">
-        <div className="page-head-title-wrap">
-          <h1 className="page-head-title">总览</h1>
-          <span className="page-head-sub">AI 编码任务中央调度台</span>
-        </div>
-      </div>
-
       <div className="grid-stats">
         <StatCard
           icon={<Cpu size={16} />}
@@ -260,18 +253,11 @@ function DashboardView({
   );
 }
 
-// 总览骨架：与真实版式严格对齐（page-head + grid-stats + health-section + grid-2），
+// 总览骨架：与真实版式严格对齐（grid-stats + health-section + grid-2），
 // 仅替换字段为灰块占位 + cc-skeleton 呼吸闪烁动画，避免"未连接 / 失败任务 0 / 暂无任务"误读。
 function DashboardSkeleton() {
   return (
     <div aria-busy="true" aria-live="polite" style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      <div className="page-head">
-        <div className="page-head-title-wrap">
-          <span style={skeletonStyle(120, 28)} />
-          <span style={skeletonStyle(160, 13)} />
-        </div>
-      </div>
-
       <div className="grid-stats">
         {Array.from({ length: 4 }).map((_, i) => (
           <article className="stat-card" key={i}>

@@ -379,32 +379,6 @@ function TasksView({
 
   return (
     <>
-      <div className="page-head">
-        <h1 className="page-head-title">任务调度</h1>
-        <div className="page-head-actions">
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => setRefreshKey((prev) => prev + 1)}
-            title="刷新"
-          >
-            <RefreshCw size={16} />
-            刷新
-          </button>
-          {canCreateTask ? (
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={onOpenCompose}
-              disabled={projects.length === 0}
-            >
-              <Plus size={16} />
-              新建任务
-            </button>
-          ) : null}
-        </div>
-      </div>
-
       <div className="page-grid">
         <main className="page-grid-main">
           <section className="card">
@@ -447,6 +421,28 @@ function TasksView({
                 options={SUBMIT_MODE_FILTERS}
                 ariaLabel="按提交模式筛选"
               />
+              <div className="tb-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setRefreshKey((prev) => prev + 1)}
+                  title="刷新"
+                >
+                  <RefreshCw size={16} />
+                  刷新
+                </button>
+                {canCreateTask ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={onOpenCompose}
+                    disabled={projects.length === 0}
+                  >
+                    <Plus size={16} />
+                    新建任务
+                  </button>
+                ) : null}
+              </div>
             </div>
 
             <div className="card-body flush">

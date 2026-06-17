@@ -45,7 +45,6 @@ function WorkersView({
   onDeleted: (id: string) => void;
 }) {
   const router = useRouter();
-  const onlineWorkers = workers.filter((worker) => worker.status === "online").length;
 
   function displayName(worker: Worker): string {
     return worker.label || worker.name;
@@ -71,15 +70,6 @@ function WorkersView({
 
   return (
     <>
-      <div className="page-head">
-        <div className="page-head-title-wrap">
-          <h1 className="page-head-title">执行机群</h1>
-          <span className="page-head-sub">
-            {onlineWorkers}/{workers.length} 在线 · 心跳 60s 超时判离线 · 在线≠接任务
-          </span>
-        </div>
-      </div>
-
       {workers.length === 0 ? (
         <section className="card">
           <Empty icon={<Server size={28} />} text="暂无 Worker 心跳" />

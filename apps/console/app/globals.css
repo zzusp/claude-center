@@ -4,7 +4,7 @@
 
 :root {
   /* Neutral */
-  --bg: #fafaf9;
+  --bg: #f8f8f6;
   --surface-1: #ffffff;
   --surface-2: #f5f5f4;
   --surface-3: #fafaf9;
@@ -45,7 +45,7 @@
   --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", "SFMono-Regular",
     Consolas, monospace;
 
-  --sidebar-w: 240px;
+  --sidebar-w: 220px;
 }
 
 * {
@@ -102,7 +102,7 @@ a:hover {
   flex-direction: column;
   gap: 4px;
   padding: 18px 14px;
-  background: var(--surface-1);
+  background: var(--bg);
   border-right: 1px solid var(--border);
 }
 
@@ -133,8 +133,8 @@ a:hover {
 .nav {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-top: 4px;
+  gap: 10px;
+  margin-top: 8px;
 }
 
 .nav-section {
@@ -150,9 +150,9 @@ a:hover {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 16px 12px;
   border: none;
   border-radius: var(--r-sm);
   background: transparent;
@@ -166,42 +166,34 @@ a:hover {
 }
 
 .nav-item:hover {
-  background: var(--surface-2);
+  background: #efeeeb;
   color: var(--text-1);
   text-decoration: none;
 }
 
 .nav-item.active {
-  background: var(--surface-2);
+  background: #efeeeb;
   color: var(--text-1);
   font-weight: 500;
 }
 
-.nav-item.active::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 2px;
-  height: 60%;
-  background: var(--border-strong);
-  border-radius: 2px;
-}
+/*.nav-item.active::before {*/
+/*  content: "";*/
+/*  position: absolute;*/
+/*  left: 0;*/
+/*  top: 50%;*/
+/*  transform: translateY(-50%);*/
+/*  width: 2px;*/
+/*  height: 60%;*/
+/*  background: var(--border-strong);*/
+/*  border-radius: 2px;*/
+/*}*/
 
 .nav-ico {
   display: grid;
   place-items: center;
   color: inherit;
   flex-shrink: 0;
-}
-
-.sidebar-foot {
-  margin-top: auto;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
 }
 
 .heartbeat {
@@ -332,6 +324,48 @@ a:hover {
 .section-sub {
   font-size: 13px;
   color: var(--text-3);
+}
+
+/* 系统级 header：钉在主内容区顶部，左侧承担页面标题/描述，右侧承担通知 + 用户信息。
+   各页面不再渲染 page-head；如需在内容区右上角放页面级 action（如表格刷新/新建按钮），
+   按 card-head / toolbar 内 right-cluster 排版即可。 */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 16px 32px;
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.app-header-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.app-header-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-1);
+  line-height: 1.2;
+}
+
+.app-header-sub {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.app-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 
 /* 各页顶部大标题：与原型一致 ~28px 加粗，右侧并排放置 action 按钮 */
@@ -1641,6 +1675,14 @@ select:focus {
   border-bottom: 1px solid var(--border);
 }
 
+/* 表格 toolbar 内右侧操作簇：放在筛选条件右侧的页面级 actions（如刷新/新建）。 */
+.toolbar .tb-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* 批量管理悬浮面板：fixed 在视口底部居中，不挤压表格布局。
    全部动作常驻显示，不适用时按钮置灰 (0)，让用户明确感知功能完整性。 */
 .bulk-fab {
@@ -2512,8 +2554,7 @@ tr[data-selected] {
     flex-direction: row;
     flex: 1;
   }
-  .nav-section,
-  .sidebar-foot {
+  .nav-section {
     display: none;
   }
   .nav-label {
@@ -2726,29 +2767,30 @@ tr[data-selected] {
 
 /* ---------------- Sidebar user card ---------------- */
 
-.user-card {
+.user-chip {
   position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px;
-  border-radius: var(--r-sm);
+  padding: 4px 6px 4px 4px;
+  border: none;
+  border-radius: 999px;
   background: transparent;
   cursor: pointer;
   outline: none;
   transition: background 0.12s ease;
 }
 
-.user-card:hover,
-.user-card:focus-within {
+.user-chip:hover,
+.user-chip:focus-within {
   background: var(--surface-2);
 }
 
 .user-avatar {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   background: var(--text-1);
   color: var(--surface-1);
@@ -2757,9 +2799,9 @@ tr[data-selected] {
 
 .user-menu {
   position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: calc(100% + 6px);
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 160px;
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
@@ -2770,13 +2812,13 @@ tr[data-selected] {
   gap: 2px;
   opacity: 0;
   visibility: hidden;
-  transform: translateY(4px);
+  transform: translateY(-4px);
   transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s ease;
-  z-index: 10;
+  z-index: 50;
 }
 
-.user-card:hover .user-menu,
-.user-card:focus-within .user-menu {
+.user-chip:hover .user-menu,
+.user-chip:focus-within .user-menu {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
@@ -4531,25 +4573,7 @@ a.ds-v:hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------------- Sidebar notification bell ---------------- */
-
-/* 页面右上角铃铛（消息通知）：与下方表格右缘对齐，与 .view 左右内边距(32px)一致。 */
-.main {
-  position: relative;
-}
-
-.main-corner {
-  position: absolute;
-  top: 24px;
-  right: 32px;
-  z-index: 40;
-}
-
-/* 给 page-head 的右侧按钮腾出铃铛位（28px 图标 + 12px 间距），避免与铃铛重叠；
-   按钮整体相应左移，仍与下方表格右缘呈左右对齐布局。 */
-.page-head-actions {
-  margin-right: 40px;
-}
+/* ---------------- Notification bell (in app-header) ---------------- */
 
 .notif {
   position: relative;
@@ -4560,19 +4584,17 @@ a.ds-v:hover {
   position: relative;
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface-1);
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
   color: var(--text-2);
   cursor: pointer;
-  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  transition: color 0.12s ease;
 }
 
 .notif-trigger:hover {
   color: var(--text-1);
-  border-color: var(--border-strong);
 }
 
 .notif-dot {
@@ -4606,6 +4628,18 @@ a.ds-v:hover {
   background: var(--surface-1);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
   overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
+  pointer-events: none;
+}
+
+.notif:hover .notif-panel {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
 .notif-head {

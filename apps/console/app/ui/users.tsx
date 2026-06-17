@@ -115,12 +115,9 @@ function UsersView({ projects, currentUser }: { projects: Project[]; currentUser
   return (
     <>
       <div className="section-head">
-        <div>
-          <h2 className="section-title">用户权限</h2>
-          <span className="section-sub">
-            {users.length} 个用户{message ? ` · ${message}` : ""}
-          </span>
-        </div>
+        <span className="section-sub">
+          {users.length} 个用户{message ? ` · ${message}` : ""}
+        </span>
         <button
           type="button"
           className="btn btn-primary btn-sm"

@@ -6,7 +6,7 @@ import {
   PlugZap, ServerCrash, ServerOff, Wifi, WifiOff, XCircle
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { usePolling } from "../lib/use-polling";
 import { useRelayStatus, type RelayStatus } from "../lib/use-relay";
 import { fmtAgo } from "./dashboard-shared";
@@ -110,9 +110,7 @@ function ephemeralFromRelay(status: RelayStatus): EphemeralItem | null {
 export default function Notifications() {
   const [items, setItems] = useState<Item[]>([]);
   const [unread, setUnread] = useState(0);
-  const [open, setOpen] = useState(false);
   const [dbFailures, setDbFailures] = useState(0);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
   const relayStatus = useRelayStatus();
 
   // 关心 disabled 状态：用户没配 relay 时 disabled 永远是「就该如此」，不需要冒红。
@@ -147,17 +145,6 @@ export default function Notifications() {
   // 通知非高频写入，5s 轮询足够；relay 推送时会顺带触发额外刷新（usePolling 默认订阅）。
   usePolling(refresh, [], 5000);
 
-  // 点击外部关闭下拉。
-  useEffect(() => {
-    if (!open) return;
-    function onDocClick(event: MouseEvent) {
-      if (!wrapRef.current) return;
-      if (wrapRef.current.contains(event.target as Node)) return;
-      setOpen(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
 
   async function markRead(id?: string) {
     try {
@@ -176,14 +163,13 @@ export default function Notifications() {
   const empty = items.length === 0 && ephemerals.length === 0;
 
   return (
-    <div className="notif" ref={wrapRef}>
+    <div className="notif">
       <button
         type="button"
         className="notif-trigger"
         aria-label={`消息通知（${totalDot} 条未读）`}
-        onClick={() => setOpen((v) => !v)}
       >
-        {totalDot > 0 ? <BellRing size={16} strokeWidth={1.6} /> : <Bell size={16} strokeWidth={1.6} />}
+        {totalDot > 0 ? <BellRing size={18} strokeWidth={1.6} /> : <Bell size={18} strokeWidth={1.6} />}
         {totalDot > 0 && (
           <span className="notif-dot" aria-hidden>
             {totalDot > 99 ? "99+" : totalDot}
@@ -191,8 +177,7 @@ export default function Notifications() {
         )}
       </button>
 
-      {open && (
-        <div className="notif-panel" role="dialog" aria-label="消息通知">
+      <div className="notif-panel" role="dialog" aria-label="消息通知">
           <header className="notif-head">
             <span className="notif-title">消息通知</span>
             <button
@@ -257,10 +242,7 @@ export default function Notifications() {
                     className={classes}
                     data-tone={tone}
                     href={item.link}
-                    onClick={() => {
-                      void markRead(item.id);
-                      setOpen(false);
-                    }}
+                    onClick={() => void markRead(item.id)}
                   >
                     {inner}
                   </Link>
@@ -287,7 +269,6 @@ export default function Notifications() {
             )}
           </div>
         </div>
-      )}
     </div>
   );
 }

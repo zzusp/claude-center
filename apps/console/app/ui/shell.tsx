@@ -20,10 +20,29 @@ const NAV: NavItem[] = [
   { href: "/users", label: "用户权限", icon: <Users size={16} strokeWidth={1.5} />, adminOnly: true }
 ];
 
-// 全站外壳：仅侧边栏 + 主内容区。页面标题由各页 section-head 渲染，topbar 已下线避免两层 header。
+// 系统 header 标题映射：按最长前缀匹配（详情子路由复用父级标题）。
+const PAGE_META: { match: (pathname: string) => boolean; title: string; sub: string }[] = [
+  { match: (p) => p === "/", title: "总览", sub: "AI 编码任务中央调度台" },
+  { match: (p) => p.startsWith("/tasks"), title: "任务调度", sub: "管理 AI 编码任务的发布、认领与执行进度" },
+  { match: (p) => p.startsWith("/chat"), title: "实时对话", sub: "与 Worker 直连的低延迟对话流" },
+  { match: (p) => p.startsWith("/workers"), title: "执行机群", sub: "Worker 节点的心跳、容量与在途任务" },
+  { match: (p) => p.startsWith("/projects"), title: "代码项目", sub: "代码仓库与子仓的配置中心" },
+  { match: (p) => p.startsWith("/users"), title: "用户权限", sub: "用户、角色与项目权限管理" }
+];
+
+function pageMetaFor(pathname: string): { title: string; sub: string } {
+  for (const entry of PAGE_META) {
+    if (entry.match(pathname)) return { title: entry.title, sub: entry.sub };
+  }
+  return { title: "ClaudeCenter", sub: "" };
+}
+
+// 全站外壳：侧边栏 + 主内容区。系统级 header 钉在主内容区顶部，左侧承担页面标题/描述，
+// 右侧承担通知 + 当前用户信息（含登出）。各页面不再渲染 page-head。
 export default function Shell({ currentUser, children }: { currentUser: CurrentUser; children: ReactNode }) {
   const canManageUsers = currentUser.permissions.includes("user.manage");
   const pathname = usePathname();
+  const meta = pageMetaFor(pathname);
 
   async function handleLogout() {
     try {
@@ -57,30 +76,33 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
             </Link>
           ))}
         </nav>
-
-        <div className="sidebar-foot">
-          <div className="user-card" tabIndex={0}>
-            <span className="user-avatar">
-              <UserRound size={20} />
-            </span>
-            <div className="user-meta">
-              <span className="user-name">{currentUser.displayName || currentUser.username}</span>
-              <span className="user-role">{ROLE_LABEL[currentUser.role]}</span>
-            </div>
-            <div className="user-menu" role="menu">
-              <button type="button" className="user-menu-item" role="menuitem" onClick={handleLogout}>
-                <LogOut size={14} />
-                <span>登出</span>
-              </button>
-            </div>
-          </div>
-        </div>
       </aside>
 
       <main className="main">
-        <div className="main-corner">
-          <Notifications />
-        </div>
+        <header className="app-header">
+          <div className="app-header-titles">
+            <h1 className="app-header-title">{meta.title}</h1>
+            {meta.sub ? <span className="app-header-sub">{meta.sub}</span> : null}
+          </div>
+          <div className="app-header-actions">
+            <Notifications />
+            <div className="user-chip" tabIndex={0}>
+              <span className="user-avatar">
+                <UserRound size={20} />
+              </span>
+              <div className="user-meta">
+                <span className="user-name">{currentUser.displayName || currentUser.username}</span>
+                <span className="user-role">{ROLE_LABEL[currentUser.role]}</span>
+              </div>
+              <div className="user-menu" role="menu">
+                <button type="button" className="user-menu-item" role="menuitem" onClick={handleLogout}>
+                  <LogOut size={14} />
+                  <span>登出</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </header>
         <div className="view">{children}</div>
       </main>
     </div>
