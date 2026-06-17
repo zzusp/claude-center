@@ -1620,6 +1620,78 @@ select:focus {
   border-bottom: 1px solid var(--border);
 }
 
+/* 批量管理：选区出现时在筛选 toolbar 与表格之间渲染。color/bg 与卡片表头边界呼应，左侧 info 信息，右侧动作按钮。 */
+.bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.bulk-bar-info {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.bulk-bar-info strong {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.bulk-bar-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.bulk-bar-hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.bulk-count {
+  margin-left: 4px;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.bulk-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 18px 0;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  background: rgba(22, 163, 74, 0.08);
+  color: var(--success);
+  font-size: 13px;
+}
+
+.bulk-result[data-tone="warn"] {
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--pending);
+}
+
+.bulk-result-close {
+  margin-left: 6px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+tr[data-selected] {
+  background: rgba(37, 99, 235, 0.04);
+}
+
 .tb-search {
   display: flex;
   align-items: center;
