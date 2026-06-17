@@ -6,7 +6,7 @@ import { KvRow, StatusBadge, fmtTime, isPendingSubRepoPath } from "./shared";
 import { Section, type LifecycleStep } from "./task-detail-shared";
 
 // 概览 Tab:描述/错误 + 信息 + 前置任务 + 多仓 PR 表。
-// 人工验收(accept/reject)已随状态机简化移除——success 由 Console 30s 轮询检测 PR 合并自动翻 merged。
+// success 由 Console 30s 轮询检测 PR 合并自动翻 merged。
 export function OverviewTab({
   task,
   taskRepos,

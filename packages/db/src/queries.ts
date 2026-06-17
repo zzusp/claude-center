@@ -509,8 +509,8 @@ export async function listTasks(
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  // 排序固定按 updated_at，仅方向可变（白名单 asc/desc），避免把外部输入拼进 ORDER BY。
-  const orderBy = `tasks.updated_at ${filters.dir === "asc" ? "ASC" : "DESC"}`;
+  // 排序固定按 created_at，仅方向可变（白名单 asc/desc），避免把外部输入拼进 ORDER BY。
+  const orderBy = `tasks.created_at ${filters.dir === "asc" ? "ASC" : "DESC"}`;
 
   params.push(filters.limit);
   const limitIdx = params.length;

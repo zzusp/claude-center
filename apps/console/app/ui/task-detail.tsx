@@ -186,7 +186,7 @@ export default function TaskDetailPage({
   const canReactivate = canRetry;
 
   // 生命周期:已完成节点根据终态显示「执行完成 / 已合并落地 / 执行失败 / 已取消」;
-  // 取消「人工验收」后,success/merged 都是终态,不再有「等人工签收」中间步骤。
+  // success/merged 都是终态,无中间签收步骤。
   const lifecycle: { label: string; time: string | null; state: "done" | "active" | "idle" }[] = [
     { label: "已创建", time: task.created_at, state: "done" },
     { label: "已认领", time: task.claimed_at, state: task.claimed_at ? "done" : "idle" },

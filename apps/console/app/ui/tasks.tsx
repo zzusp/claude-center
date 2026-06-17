@@ -187,7 +187,7 @@ function TasksView({
   const [submitMode, setSubmitMode] = useState("");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
-  // 列表固定按更新时间排序，方向由「更新」表头切换（默认降序）。
+  // 列表固定按创建时间排序，方向由「创建」表头切换（默认降序）。
   const [dir, setDir] = useState<SortDir>("desc");
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(1);
@@ -483,10 +483,10 @@ function TasksView({
                         <th
                           style={{ cursor: "pointer", userSelect: "none" }}
                           onClick={() => setDir((prev) => (prev === "desc" ? "asc" : "desc"))}
-                          title="点击切换更新时间排序"
+                          title="点击切换创建时间排序"
                         >
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                            更新
+                            创建
                             {dir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
                           </span>
                         </th>
@@ -551,7 +551,7 @@ function TasksView({
                               )}
                             </td>
                             <td className="t-num">{fmtDurationMs(computeTaskDurationMs(task))}</td>
-                            <td className="t-num">{fmtDateTime(task.updated_at)}</td>
+                            <td className="t-num">{fmtDateTime(task.created_at)}</td>
                             <td className="t-right">
                               <div className="row-actions">
                                 <button

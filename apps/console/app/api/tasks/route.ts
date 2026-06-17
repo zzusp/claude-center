@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
         : null;
     const q = params.get("q")?.trim() || null;
 
-    // 排序方向：表头切换 updated_at 升/降序，白名单 asc/desc，默认 desc。
+    // 排序方向：表头切换 created_at 升/降序，白名单 asc/desc，默认 desc。
     const dir: SortDir = params.get("dir") === "asc" ? "asc" : "desc";
 
     const pageSizeRaw = Number(params.get("pageSize"));

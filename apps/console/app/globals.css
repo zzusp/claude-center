@@ -4533,13 +4533,22 @@ a.ds-v:hover {
 
 /* ---------------- Sidebar notification bell ---------------- */
 
-.brand {
-  /* 让铃铛贴最右；保留原 8px 内边距与对齐 */
-  justify-content: flex-start;
+/* 页面右上角铃铛（消息通知）：与下方表格右缘对齐，与 .view 左右内边距(32px)一致。 */
+.main {
+  position: relative;
 }
 
-.brand .notif {
-  margin-left: auto;
+.main-corner {
+  position: absolute;
+  top: 24px;
+  right: 32px;
+  z-index: 40;
+}
+
+/* 给 page-head 的右侧按钮腾出铃铛位（28px 图标 + 12px 间距），避免与铃铛重叠；
+   按钮整体相应左移，仍与下方表格右缘呈左右对齐布局。 */
+.page-head-actions {
+  margin-right: 40px;
 }
 
 .notif {
@@ -4586,8 +4595,8 @@ a.ds-v:hover {
 .notif-panel {
   position: absolute;
   top: calc(100% + 8px);
-  left: 0;
-  z-index: 30;
+  right: 0;
+  z-index: 100;
   width: 360px;
   max-height: 480px;
   display: flex;

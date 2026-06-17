@@ -43,7 +43,6 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
             <Boxes size={18} />
           </span>
           <span className="brand-text">ClaudeCenter</span>
-          <Notifications />
         </div>
 
         <nav className="nav">
@@ -79,6 +78,9 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
       </aside>
 
       <main className="main">
+        <div className="main-corner">
+          <Notifications />
+        </div>
         <div className="view">{children}</div>
       </main>
     </div>
