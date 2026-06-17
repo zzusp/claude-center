@@ -1296,6 +1296,10 @@ export async function claimNextResumableTask(
   client: pg.Pool | pg.PoolClient,
   workerId: string
 ): Promise<Task | null> {
+  // 待消费 user 评论的判定锚点：上一次 worker 真正消费用户回复的时刻——即最近一次 resumed /
+  // rerun_started 事件时间，没有则 epoch。不再用「最后一条 worker 评论」做锚点：开放任意态
+  // 输入后，用户在 running 期间发的消息会被同轮新生的 worker question 覆盖（评论时间 < 问题时间
+  // → 现行谓词漏判），导致 worker 翻入 waiting 后认为没新回复、消息丢失。
   const result = await client.query<Task>(
     `WITH candidate AS (
        SELECT tasks.id
@@ -1308,9 +1312,10 @@ export async function claimNextResumableTask(
              WHERE uc.task_id = tasks.id
                AND uc.author = 'user'
                AND uc.created_at > COALESCE(
-                 (SELECT max(wc.created_at)
-                    FROM task_comments wc
-                   WHERE wc.task_id = tasks.id AND wc.author = 'worker'),
+                 (SELECT max(te.created_at)
+                    FROM task_events te
+                   WHERE te.task_id = tasks.id
+                     AND te.event_type IN ('resumed', 'rerun_started')),
                  'epoch'::timestamptz)
           )
         ORDER BY tasks.updated_at ASC
@@ -1479,7 +1484,9 @@ export async function listTaskComments(
   return comments;
 }
 
-// 取「最后一条 worker 评论之后」的所有 user 评论，按时间拼接为续接回复。
+// 取「上一次 resumed / rerun_started 事件之后」的所有 user 评论，按时间拼接为续接回复。
+// 用事件而非 worker 评论作锚点：开放任意态输入后，用户在 running 期间发的消息也能被下一轮 resume
+// 一并消费——若以 worker 评论为锚点，同轮新生的 worker question 会把这些消息排到锚点之前导致丢失。
 export async function getPendingReply(
   client: pg.Pool | pg.PoolClient,
   taskId: string
@@ -1490,7 +1497,8 @@ export async function getPendingReply(
       WHERE task_id = $1
         AND author = 'user'
         AND created_at > COALESCE(
-          (SELECT max(created_at) FROM task_comments WHERE task_id = $1 AND author = 'worker'),
+          (SELECT max(created_at) FROM task_events
+            WHERE task_id = $1 AND event_type IN ('resumed', 'rerun_started')),
           'epoch'::timestamptz)`,
     [taskId]
   );
@@ -2706,8 +2714,8 @@ export async function deleteOrphanedAttachments(
   return result.rowCount ?? 0;
 }
 
-// Worker resume / rerun-rejected 路径用：聚合「最后一条 worker 评论之后」所有 user 评论的附件。
-// 跟 getPendingReply 的文本逻辑配套：那边返回拼接 body，这边返回拼接 attachments。
+// Worker resume / rerun-rejected 路径用：聚合「上一次 resumed/rerun_started 事件之后」所有 user
+// 评论的附件。跟 getPendingReply 的文本逻辑配套：那边返回拼接 body，这边返回拼接 attachments。
 export async function listPendingReplyAttachments(
   client: pg.Pool | pg.PoolClient,
   taskId: string
@@ -2720,7 +2728,8 @@ export async function listPendingReplyAttachments(
          WHERE task_id = $1
            AND author = 'user'
            AND created_at > COALESCE(
-             (SELECT max(created_at) FROM task_comments WHERE task_id = $1 AND author = 'worker'),
+             (SELECT max(created_at) FROM task_events
+               WHERE task_id = $1 AND event_type IN ('resumed', 'rerun_started')),
              'epoch'::timestamptz)
       )
       ORDER BY a.created_at ASC`,
