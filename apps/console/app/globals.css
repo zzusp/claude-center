@@ -1492,6 +1492,27 @@ select {
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
+/* 复选/单选恢复原生外观：上面的通用 input 规则会把 width:100% + padding + box-shadow 加到 checkbox/radio 上，
+   勾选瞬间因 :focus box-shadow 过渡 + 100% 拉伸出现「大→小」的闪动；这里独立 reset 一次，避免每个用法
+   都得在祖先类里改回 width:auto。 */
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  transition: none;
+}
+
+input[type="checkbox"]:focus,
+input[type="radio"]:focus {
+  box-shadow: none;
+  border-color: transparent;
+}
+
 input::placeholder,
 textarea::placeholder {
   color: var(--text-4);

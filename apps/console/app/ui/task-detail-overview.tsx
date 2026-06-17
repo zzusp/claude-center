@@ -226,9 +226,12 @@ function TaskReviewActions({ task, onReviewed }: { task: Task; onReviewed: () =>
     });
   }
 
+  const isMerged = task.status === "merged";
   return (
     <div className="review-actions">
-      <div className="review-hint">该任务已执行完成，待人工验收。</div>
+      <div className="review-hint">
+        {isMerged ? "PR 已合并，签收后归入「已验收」终态。" : "该任务已执行完成，待人工验收。"}
+      </div>
       {rejecting ? (
         <>
           <textarea
@@ -259,10 +262,12 @@ function TaskReviewActions({ task, onReviewed }: { task: Task; onReviewed: () =>
             <Check size={15} />
             验收通过
           </button>
-          <button className="btn btn-sm" type="button" onClick={() => setRejecting(true)} disabled={busy}>
-            <RotateCcw size={15} />
-            打回重跑
-          </button>
+          {isMerged ? null : (
+            <button className="btn btn-sm" type="button" onClick={() => setRejecting(true)} disabled={busy}>
+              <RotateCcw size={15} />
+              打回重跑
+            </button>
+          )}
         </div>
       )}
       {error ? <div className="error-box">{error}</div> : null}

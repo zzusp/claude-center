@@ -8,7 +8,8 @@ import { projectChannel, publishRelay } from "../../../../lib/relay-publish";
 export const dynamic = "force-dynamic";
 
 // 人工验收：accept 翻为终态 accepted；reject 落打回意见并翻为 rejected（Worker 续接重跑）。
-// accept/reject 各自在事务内完成，非「待验收(success)」状态返回 409。
+// accept 接受 success / merged 两态（已合并仍可签收为 accepted）；reject 仅对 success 生效；
+// 各自在事务内完成，状态不符返回 409。
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requirePermission("task.create");
   if (gate instanceof NextResponse) {
@@ -42,7 +43,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
       if (!task) {
         await client.query("ROLLBACK");
-        return NextResponse.json({ error: "任务不在待验收状态" }, { status: 409 });
+        return NextResponse.json({ error: "任务不可验收（仅已完成/已合并可通过，已完成可打回）" }, { status: 409 });
       }
 
       await client.query("COMMIT");

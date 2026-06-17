@@ -52,7 +52,7 @@ function parsePrNumber(url: string | null): number | null {
   return m ? Number(m[1]) : null;
 }
 
-// 平均耗时人读：右栏「今日统计」用，单位毫秒 → 自适应秒/分/时。
+// 平均耗时人读：右栏「今日统计」与列表「耗时」列共用，单位毫秒 → 自适应秒/分/时。
 function fmtDurationMs(ms: number | null): string {
   if (ms == null || ms <= 0) return "—";
   const s = Math.round(ms / 1000);
@@ -62,6 +62,20 @@ function fmtDurationMs(ms: number | null): string {
   const h = Math.floor(m / 60);
   const rest = m % 60;
   return rest === 0 ? `${h} 小时` : `${h}h ${rest}m`;
+}
+
+// 列表「耗时」列：起点优先 started_at（Worker 实际开工），无则退到 claimed_at（认领）；
+// 终点优先 finished_at，未结束则取 now（轮询周期内随刷新自然走动）。三者都缺即「—」。
+function computeTaskDurationMs(task: Task): number | null {
+  const startSrc = task.started_at ?? task.claimed_at;
+  if (!startSrc) return null;
+  const start = Date.parse(startSrc);
+  if (Number.isNaN(start)) return null;
+  const endSrc = task.finished_at;
+  const end = endSrc ? Date.parse(endSrc) : Date.now();
+  if (Number.isNaN(end)) return null;
+  const diff = end - start;
+  return diff > 0 ? diff : null;
 }
 
 const STATUS_FILTERS: { value: string; label: string }[] = [
@@ -116,7 +130,8 @@ const BULK_ACTION_META: {
     key: "accept",
     label: "验收通过",
     icon: <CheckCheck size={14} />,
-    applicable: (s) => s === "success",
+    // 已完成（待验收）与已合并均可验收：合并落地后仍需人工签收，否则任务停留在 merged 不进终态。
+    applicable: (s) => s === "success" || s === "merged",
     confirm: (n) => `确认通过选中的 ${n} 个任务的人工验收？`
   },
   {
@@ -454,6 +469,7 @@ function TasksView({
                         <th>状态</th>
                         <th>Worker</th>
                         <th>PR</th>
+                        <th>耗时</th>
                         <th
                           style={{ cursor: "pointer", userSelect: "none" }}
                           onClick={() => setDir((prev) => (prev === "desc" ? "asc" : "desc"))}
@@ -524,6 +540,7 @@ function TasksView({
                                 <span className="cell-muted">—</span>
                               )}
                             </td>
+                            <td className="t-num">{fmtDurationMs(computeTaskDurationMs(task))}</td>
                             <td className="t-num">{fmtDateTime(task.updated_at)}</td>
                             <td className="t-right">
                               <div className="row-actions">

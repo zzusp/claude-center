@@ -73,7 +73,7 @@ async function runAction(
       const task = await acceptTask(client, id);
       if (!task) {
         await client.query("ROLLBACK");
-        return { ok: false, error: "任务不在待验收状态" };
+        return { ok: false, error: "仅已完成/已合并任务可验收通过" };
       }
       await client.query("COMMIT");
       return { ok: true, task };

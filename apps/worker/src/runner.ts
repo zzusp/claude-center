@@ -405,7 +405,7 @@ export class ClaudeCenterWorker {
     return Boolean(task);
   }
 
-  // 验收通过待审（success）任务：事务内翻为终态 accepted。返回 false = 任务已不在 success 态。
+  // 验收通过：success / merged 均可翻为终态 accepted（事务内）。返回 false = 状态不符。
   async acceptMyTask(taskId: string): Promise<boolean> {
     const client = await getPool().connect();
     try {
