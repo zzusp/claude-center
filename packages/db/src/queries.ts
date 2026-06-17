@@ -1232,6 +1232,27 @@ export async function setTaskMergeChecked(
   );
 }
 
+// 数最近一次非 cleanup_retry 事件之后累积的连续 cleanup_retry 条数。用于给清理失败做指数退避——
+// 连续失败越多说明越像不可自愈的问题（凭据失效 / 网络长时间断 / 仓库被外部人为搞乱），把退避拉长
+// 避免每 5min 一发的事件长期累积。成功清理会落 `merged` 事件，自动重置计数。
+export async function countConsecutiveCleanupRetries(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string
+): Promise<number> {
+  const result = await client.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+       FROM task_events
+      WHERE task_id = $1
+        AND event_type = 'cleanup_retry'
+        AND created_at > COALESCE(
+              (SELECT max(created_at) FROM task_events
+                 WHERE task_id = $1 AND event_type <> 'cleanup_retry'),
+              'epoch'::timestamptz)`,
+    [taskId]
+  );
+  return Number(result.rows[0]?.count ?? "0");
+}
+
 /* ===== Console 侧定时合并检查（独立于上面的 Worker 清理流程）=====
  * 方案见 docs/spec/task-merge-status-check.md。Console 不持有本地工作树，只读 repo_url 远程判定
  * work_branch 是否已并入 target_branch；检测到合并把 success 工作任务自动转 accepted。
