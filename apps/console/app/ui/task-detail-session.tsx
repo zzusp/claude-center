@@ -77,15 +77,18 @@ export function SessionTranscript({
   );
 }
 
-// 续接回复表单：仅在 task.status='waiting' 时启用输入；提交落一条 user 评论到 task_comments，
-// Worker 下一轮认领循环（getPendingReply）会把它注入 --resume 的 prompt，再回到 jsonl 渲染。
-// 附件上传走通用 AttachmentUploader，提交后清空本地状态——用户看自己说的话等 jsonl 同步过来。
+// 续接回复表单：在「在途」态（claimed / running / waiting）均启用输入——用户可随时发送消息给 Worker，
+// 不必等 Worker 显式提问。提交落一条 user 评论到 task_comments，Worker 下一轮认领循环
+// （claimNextResumableTask + getPendingReply）会把「自上一次 resumed/rerun_started 事件以来」的
+// 所有 user 评论一并注入 --resume 的 prompt，再回到 jsonl 渲染——running 期间提交的消息也不会被
+// 同轮新生的 worker question 覆盖。附件上传走通用 AttachmentUploader，提交后清空本地状态。
 function ReplyForm({ task, canComment }: { task: Task; canComment: boolean }) {
   const [reply, setReply] = useState("");
   const [replyAttachments, setReplyAttachments] = useState<AttachmentMeta[]>([]);
   const { busy, error, run } = useAsyncAction();
-  const waiting = task.status === "waiting";
-  const canReply = waiting && canComment;
+  // 在途态：worker 正在/即将处理本任务，发送的消息会在下一次 resume 时被消费。
+  const live = task.status === "claimed" || task.status === "running" || task.status === "waiting";
+  const canReply = live && canComment;
 
   async function submitReply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -117,9 +120,11 @@ function ReplyForm({ task, canComment }: { task: Task; canComment: boolean }) {
         placeholder={
           !canComment
             ? "你没有任务对话权限"
-            : waiting
-              ? "回复 Worker 的提问，提交后将续接执行…"
-              : "仅在任务「等待回复」时可回复"
+            : live
+              ? task.status === "waiting"
+                ? "回复 Worker 的提问，提交后将续接执行…"
+                : "随时给 Worker 留言，下一轮续接时一并注入…"
+              : "任务未在执行中，无法发送消息"
         }
         disabled={!canReply || busy}
       />
@@ -138,7 +143,7 @@ function ReplyForm({ task, canComment }: { task: Task; canComment: boolean }) {
           disabled={!canReply || busy || (!reply.trim() && replyAttachments.length === 0)}
         >
           <Send size={16} />
-          {!canComment ? "无回复权限" : waiting ? "回复并续接" : "等待 Worker 提问"}
+          {!canComment ? "无回复权限" : live ? (task.status === "waiting" ? "回复并续接" : "发送消息") : "任务非在途"}
         </button>
       </div>
     </form>
