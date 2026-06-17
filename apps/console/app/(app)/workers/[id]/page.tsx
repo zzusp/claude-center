@@ -1,7 +1,7 @@
 import { getPool, getWorker } from "@claude-center/db";
 import { notFound, redirect } from "next/navigation";
-import { getCurrentUser, toCurrentUser } from "../../lib/session";
-import WorkerDetailPage from "../../ui/worker-detail";
+import { getCurrentUser, toCurrentUser } from "../../../lib/session";
+import WorkerDetailPage from "../../../ui/worker-detail";
 
 export const dynamic = "force-dynamic";
 
