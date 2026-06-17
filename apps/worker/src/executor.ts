@@ -489,79 +489,106 @@ async function prepareAllRepoWorktrees(
   return ctxs;
 }
 
-// 处理一轮 Claude 输出：先记下续接所需 session；若请求确认则落评论 + 转入等待；
-// 否则按各仓 git 改动收尾（多仓循环 commit / push / PR）。ctxs 是当前轮各参与仓的快照。
+// 处理 Claude 输出：先记下续接所需 session；若请求确认则落评论 + 转入等待；否则按各仓 git 改动收尾。
+// 「执行中随时留言、直接注入」（docs/spec/task-live-inject.md）：每轮无哨兵收尾前，先看本轮执行期间用户
+// 有没有留言（task_comments 里有未消费的 user 评论），有则**不收尾、不进 waiting、不等下一次认领**——直接
+// --resume 同一会话把留言注入续接，循环到某轮结束且确无新留言才收尾。onSpawn 把每轮 Claude 子进程句柄回
+// 填给 runner，保证循环中途也能被取消杀到。ctxs 是各参与仓的快照（同工作树续接，无需重新准备）。
 async function handleClaudeTurn(
   config: WorkerConfig,
   task: Task,
   localPath: string,
   wtPath: string,
   ctxs: TaskRepoCtx[],
-  turn: ClaudeTurn
+  turn: ClaudeTurn,
+  onSpawn?: (child: ChildProcess) => void
 ): Promise<void> {
   const pool = getPool();
-  if (turn.sessionId) {
-    await setTaskClaudeSession(pool, task.id, config.workerId, turn.sessionId);
-  }
+  let current = turn;
+  for (;;) {
+    if (current.sessionId) {
+      await setTaskClaudeSession(pool, task.id, config.workerId, current.sessionId);
+    }
 
-  const question = extractQuestion(turn.result);
-  // 本轮 Claude 结束:细颗粒度时间线节点(逐轮对话富展示在「Claude Code 执行」Tab,这里只记里程碑)。
-  await addTaskEvent(pool, task.id, config.workerId, "claude_turn_finished", question ? "本轮结束·请求确认" : "本轮执行结束", {
-    hitSentinel: Boolean(question),
-    resultPreview: turn.result.slice(0, 500)
-  });
-  if (question) {
-    // 哨兵命中：先把问题落成 worker 评论（不论是否 auto_reply 都留审计）。
-    await addTaskComment(pool, { taskId: task.id, author: "worker", workerId: config.workerId, body: question });
+    const question = extractQuestion(current.result);
+    // 本轮 Claude 结束:细颗粒度时间线节点(逐轮对话富展示在「Claude Code 执行」Tab,这里只记里程碑)。
+    await addTaskEvent(pool, task.id, config.workerId, "claude_turn_finished", question ? "本轮结束·请求确认" : "本轮执行结束", {
+      hitSentinel: Boolean(question),
+      resultPreview: current.result.slice(0, 500)
+    });
+    if (question) {
+      // 哨兵命中：先把问题落成 worker 评论（不论是否 auto_reply 都留审计）。
+      await addTaskComment(pool, { taskId: task.id, author: "worker", workerId: config.workerId, body: question });
 
-    // auto_reply 兜底分支：所有参与仓零改动 → 直接 fail（任务多半描述不全，再问也是同样结果）；
-    // 任一仓有改动 → 自动塞一条 user 评论让现有 resumable 流续接，cap=AUTO_REPLY_MAX_ROUNDS。
-    if (task.auto_reply) {
-      const hasChanges = await anyRepoHasChanges(ctxs, localPath, task.id);
-      if (!hasChanges) {
-        await markTaskFailed(
+      // auto_reply 兜底分支：所有参与仓零改动 → 直接 fail（任务多半描述不全，再问也是同样结果）；
+      // 任一仓有改动 → 自动塞一条 user 评论让现有 resumable 流续接，cap=AUTO_REPLY_MAX_ROUNDS。
+      if (task.auto_reply) {
+        const hasChanges = await anyRepoHasChanges(ctxs, localPath, task.id);
+        if (!hasChanges) {
+          await markTaskFailed(
+            pool,
+            task.id,
+            config.workerId,
+            `auto_reply: Claude requested input before making any changes. Question: ${question}`,
+            { failedAt: new Date().toISOString(), autoReply: { reason: "no-changes", question } }
+          );
+          await addTaskEvent(pool, task.id, config.workerId, "auto_reply_blocked", "auto_reply: 零改动卡住 → 失败", { question });
+          return;
+        }
+        const usedRounds = await countAutoReplyRounds(task.id);
+        if (usedRounds >= AUTO_REPLY_MAX_ROUNDS) {
+          await markTaskFailed(
+            pool,
+            task.id,
+            config.workerId,
+            `auto_reply: blocked after ${AUTO_REPLY_MAX_ROUNDS} auto-reply rounds. Last question: ${question}`,
+            { failedAt: new Date().toISOString(), autoReply: { reason: "max-rounds", usedRounds, question } }
+          );
+          await addTaskEvent(pool, task.id, config.workerId, "auto_reply_blocked", `auto_reply: cap=${AUTO_REPLY_MAX_ROUNDS} 仍在问 → 失败`, { usedRounds, question });
+          return;
+        }
+        const nextRound = usedRounds + 1;
+        await addTaskComment(pool, { taskId: task.id, author: "user", workerId: null, body: AUTO_REPLY_CANNED });
+        await addTaskEvent(
           pool,
           task.id,
           config.workerId,
-          `auto_reply: Claude requested input before making any changes. Question: ${question}`,
-          { failedAt: new Date().toISOString(), autoReply: { reason: "no-changes", question } }
+          "auto_reply",
+          `Auto-replied (round ${nextRound}/${AUTO_REPLY_MAX_ROUNDS})`,
+          { round: nextRound, question, reply: AUTO_REPLY_CANNED }
         );
-        await addTaskEvent(pool, task.id, config.workerId, "auto_reply_blocked", "auto_reply: 零改动卡住 → 失败", { question });
+        await setTaskWaiting(pool, task.id, config.workerId, current.sessionId);
         return;
       }
-      const usedRounds = await countAutoReplyRounds(task.id);
-      if (usedRounds >= AUTO_REPLY_MAX_ROUNDS) {
-        await markTaskFailed(
-          pool,
-          task.id,
-          config.workerId,
-          `auto_reply: blocked after ${AUTO_REPLY_MAX_ROUNDS} auto-reply rounds. Last question: ${question}`,
-          { failedAt: new Date().toISOString(), autoReply: { reason: "max-rounds", usedRounds, question } }
-        );
-        await addTaskEvent(pool, task.id, config.workerId, "auto_reply_blocked", `auto_reply: cap=${AUTO_REPLY_MAX_ROUNDS} 仍在问 → 失败`, { usedRounds, question });
-        return;
-      }
-      const nextRound = usedRounds + 1;
-      await addTaskComment(pool, { taskId: task.id, author: "user", workerId: null, body: AUTO_REPLY_CANNED });
-      await addTaskEvent(
-        pool,
-        task.id,
-        config.workerId,
-        "auto_reply",
-        `Auto-replied (round ${nextRound}/${AUTO_REPLY_MAX_ROUNDS})`,
-        { round: nextRound, question, reply: AUTO_REPLY_CANNED }
-      );
-      await setTaskWaiting(pool, task.id, config.workerId, turn.sessionId);
+
+      // 默认（auto_reply=false）：等待用户回复期间，工作树原样保留（持有未提交改动），续接时复用。
+      await setTaskWaiting(pool, task.id, config.workerId, current.sessionId);
+      await addTaskEvent(pool, task.id, config.workerId, "waiting", "Worker is waiting for user reply", { question });
       return;
     }
 
-    // 默认（auto_reply=false）：等待用户回复期间，工作树原样保留（持有未提交改动），续接时复用。
-    await setTaskWaiting(pool, task.id, config.workerId, turn.sessionId);
-    await addTaskEvent(pool, task.id, config.workerId, "waiting", "Worker is waiting for user reply", { question });
-    return;
+    // 无哨兵：收尾前先看本轮执行期间用户有没有留言；有则直接注入续接（同一会话、同一工作树），否则收尾。
+    // 锚点（getPendingReply / listPendingReplyAttachments）= 上一次 resumed/rerun_started 之后的 user 评论；
+    // 注入前补一条 resumed 推进锚点，保证同一批消息只消费一次、下一轮循环不重复注入。
+    const reply = current.sessionId ? await getPendingReply(pool, task.id) : null;
+    if (reply) {
+      const replyAtts = await loadReplyAttachments(task.id);
+      await materializeAttachments(wtPath, replyAtts);
+      await addTaskEvent(pool, task.id, config.workerId, "resumed", "用户执行中留言，直接注入续接", { injected: true });
+      current = await runTaskClaude(config, task.id, {
+        prompt: resumePrompt(task, reply, replyAtts),
+        cwd: wtPath,
+        resumeSessionId: current.sessionId ?? undefined,
+        model: task.model,
+        onSpawn
+      });
+      continue;
+    }
+
+    break;
   }
 
-  await finalizeTaskMultiRepo(config, task, localPath, wtPath, ctxs, turn.result);
+  await finalizeTaskMultiRepo(config, task, localPath, wtPath, ctxs, current.result);
 }
 
 // 多仓 helper：任一参与仓 git status 非空即返回 true（auto_reply 兜底判定用）。
@@ -903,7 +930,7 @@ export async function executeTask(config: WorkerConfig, task: Task, hooks?: Exec
       model: task.model,
       onSpawn: hooks?.onClaudeSpawn
     });
-    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn);
+    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, hooks?.onClaudeSpawn);
   } catch (error) {
     // 失败保留工作树:供「续接重试」精确恢复未提交改动(见 docs/spec/task-event-timeline-retry.md §4.3);
     // 不重试也不激活的残留树由 GC 在任务离开 failed/cancelled 后回收。
@@ -950,7 +977,7 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
       model: task.model,
       onSpawn: hooks?.onClaudeSpawn
     });
-    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn);
+    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, hooks?.onClaudeSpawn);
   } catch (error) {
     // 失败保留工作树(供续接重试),不删树。
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
@@ -992,7 +1019,7 @@ export async function retryFailedTask(config: WorkerConfig, task: Task, hooks?: 
       model: task.model,
       onSpawn: hooks?.onClaudeSpawn
     });
-    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn);
+    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, hooks?.onClaudeSpawn);
   } catch (error) {
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
       failedAt: new Date().toISOString()
