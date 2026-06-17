@@ -3007,21 +3007,18 @@ tr[data-selected] {
   position: sticky;
   top: 0;
   z-index: 10;
-  padding: 16px 32px 18px;
-  border-bottom: 1px solid var(--border);
-  background: rgba(250, 250, 249, 0.85);
   backdrop-filter: blur(8px);
 }
 
 .detail-back {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   padding: 2px 0;
   border: none;
   background: transparent;
   color: var(--text-3);
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 500;
   cursor: pointer;
   transition: color 120ms ease;
@@ -3349,7 +3346,7 @@ a.dep-item:hover {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   gap: 16px;
-  height: calc(100vh - 150px);
+  height: calc(100vh - 160px);
   min-height: 480px;
 }
 .chat-list {
@@ -4214,7 +4211,7 @@ a.dep-item:hover {
 }
 
 .sb-stat-col-value {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 600;
   color: var(--text-1);
   font-variant-numeric: tabular-nums;
@@ -4315,9 +4312,7 @@ a.dep-item:hover {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 24px;
-  padding: 12px 32px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  padding: 12px 0px;
   font-size: 12.5px;
 }
 
@@ -4356,10 +4351,6 @@ a.ds-v:hover {
 .detail-tabs {
   display: flex;
   gap: 4px;
-  padding: 0 32px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-1);
-  overflow-x: auto;
 }
 
 .detail-tab-btn {
@@ -4616,7 +4607,7 @@ a.ds-v:hover {
 
 .notif-panel {
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% - 4px);
   right: 0;
   z-index: 100;
   width: 360px;
@@ -4703,6 +4694,7 @@ a.ds-v:hover {
 .notif-row:hover {
   background: var(--surface-2);
   color: var(--text-1);
+  text-decoration: none;
 }
 
 .notif-row:last-child {

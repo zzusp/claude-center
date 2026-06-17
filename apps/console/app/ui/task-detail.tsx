@@ -280,7 +280,7 @@ export default function TaskDetailPage({
 
       <div className="detail-summary-bar">
         <div className="ds-item">
-          <span className="ds-k">Task ID</span>
+          <span className="ds-k">ID</span>
           <span className="ds-v mono">{task.id}</span>
         </div>
         <div className="ds-item">
