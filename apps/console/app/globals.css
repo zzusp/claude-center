@@ -1677,6 +1677,12 @@ select:focus {
   font-variant-numeric: tabular-nums;
 }
 
+/* 红底「批量删除」按钮：text-3 灰色计数在红色背景下几乎不可见，
+   让计数与按钮文字同色（白），保持可读性。 */
+.btn-danger .bulk-count {
+  color: inherit;
+}
+
 /* 批量结果 toast：紧邻悬浮面板上方，同样 fixed，不挤压表格。 */
 .bulk-toast {
   position: fixed;
