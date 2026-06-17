@@ -13,7 +13,7 @@ import { AttachmentUploader } from "./attachment-uploader";
 // 任务执行会话回放 + 续接回复入口（原「对话」Tab 合并入此）。
 // transcript：执行期间（claimed/running/waiting）每 5s 懒轮询，终态后再取数次拿到 Worker 最终强制同步的
 // 完整 transcript 即停拉（避免持续拖大 blob）。Worker 周期 + 终态把 session .jsonl 同步到 task_sessions。
-// 回复表单：waiting 时启用；提交落 task_comments → Worker 下一轮 --resume 注入 prompt → 再回到 jsonl 渲染。
+// 回复表单：在途态启用；提交落 task_comments → Worker 在当前轮停止点直接 --resume 同一会话注入续接 → 再回到 jsonl 渲染。
 // 解析 + 富展示走共用 transcript.tsx（与对话页同款）。
 // 顶部 SessionMetaBar 复用对话页同款：通道 + 模型 + Worker 套餐 / 用量 + 上下文 / 会话累计 token。
 // worker 由父组件 /api/tasks/[id] polling 顺路带回（未认领时为 null，meta bar 自适应隐藏 worker chip）。
@@ -78,10 +78,10 @@ export function SessionTranscript({
 }
 
 // 续接回复表单：在「在途」态（claimed / running / waiting）均启用输入——用户可随时发送消息给 Worker，
-// 不必等 Worker 显式提问。提交落一条 user 评论到 task_comments，Worker 下一轮认领循环
-// （claimNextResumableTask + getPendingReply）会把「自上一次 resumed/rerun_started 事件以来」的
-// 所有 user 评论一并注入 --resume 的 prompt，再回到 jsonl 渲染——running 期间提交的消息也不会被
-// 同轮新生的 worker question 覆盖。附件上传走通用 AttachmentUploader，提交后清空本地状态。
+// 不必等 Worker 显式提问。提交落一条 user 评论到 task_comments；Worker 在当前轮跑到停止点后**直接注入**
+// （handleClaudeTurn 收尾前 getPendingReply 看到未消费的 user 评论 → 不收尾、不进 waiting、直接 --resume
+// 同一会话续接），消息不会等到下一次认领循环、也不会因本轮没命中哨兵而被丢弃（详见 docs/spec/task-live-inject.md）。
+// 附件上传走通用 AttachmentUploader，提交后清空本地状态。
 function ReplyForm({ task, canComment }: { task: Task; canComment: boolean }) {
   const [reply, setReply] = useState("");
   const [replyAttachments, setReplyAttachments] = useState<AttachmentMeta[]>([]);
@@ -123,7 +123,7 @@ function ReplyForm({ task, canComment }: { task: Task; canComment: boolean }) {
             : live
               ? task.status === "waiting"
                 ? "回复 Worker 的提问，提交后将续接执行…"
-                : "随时给 Worker 留言，下一轮续接时一并注入…"
+                : "随时给 Worker 留言，将在当前轮停止点直接注入续接…"
               : "任务未在执行中，无法发送消息"
         }
         disabled={!canReply || busy}
