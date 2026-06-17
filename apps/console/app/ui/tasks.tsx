@@ -13,7 +13,7 @@ import type {
   Worker
 } from "@claude-center/db";
 import {
-  Activity, ArrowDown, ArrowUp, Ban, Boxes, Bot, Check, CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleAlert,
+  Activity, ArrowDown, ArrowUp, Ban, Boxes, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert,
   Clock, Cpu, Database, ExternalLink, Eye, FolderGit2, GitBranch, GitPullRequest, Inbox, LayoutGrid, ListTodo, LogOut,
   MessageSquare, Network, Pencil, Plus, Power, RadioTower, RefreshCw, RotateCcw, RotateCw, Save, Search, Send, Server,
   ShieldCheck, Tag, Trash2, UserRound, Users, X
@@ -42,7 +42,7 @@ type TaskStatsPayload = {
   total: number;
   byStatus: Record<string, number>;
   byProject: { id: string; name: string; n: number }[];
-  today: { created: number; finished: number; accepted: number; rejected: number; avgDurationMs: number | null };
+  today: { created: number; finished: number; completed: number; failed: number; avgDurationMs: number | null };
 };
 
 // 从 GitHub PR URL 抽 PR 号；非标准格式（含手填）返回 null，UI 退回 ExternalLink。
@@ -97,12 +97,20 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100];
 // 右侧栏「状态分布」按钩子顺序排序（与 STATUS_FILTERS 对齐），未出现的状态隐藏。
 const STATUS_ORDER: string[] = [
   "draft", "scheduled", "pending", "claimed", "running", "waiting",
-  "success", "merged", "accepted", "rejected", "failed", "cancelled"
+  "success", "merged", "failed", "cancelled"
+];
+
+// 提交模式筛选(用户「任务调度列表支持『提交模式』的筛选」需求)。
+const SUBMIT_MODE_FILTERS: { value: string; label: string }[] = [
+  { value: "", label: "全部模式" },
+  { value: "pr", label: "创建 PR" },
+  { value: "push", label: "直接推送" }
 ];
 
 // 批量管理动作清单与适用状态。与 /api/tasks/bulk 端点 BULK_ACTIONS 一一对应，
 // applicable 用于按选区状态过滤可用动作（无可执行对象时不渲染按钮）。
-type BulkAction = "publish" | "unpublish" | "cancel" | "accept" | "reactivate" | "retry" | "delete";
+// 「批量验收」(accept) 已随人工验收一并移除——success 由 Console 30s 轮询自动检测 PR 合并翻 merged。
+type BulkAction = "publish" | "unpublish" | "cancel" | "reactivate" | "retry" | "delete";
 
 const BULK_ACTION_META: {
   key: BulkAction;
@@ -125,14 +133,6 @@ const BULK_ACTION_META: {
     icon: <RotateCcw size={14} />,
     applicable: (s) => s === "pending",
     confirm: (n) => `确认把选中的 ${n} 个待处理任务退回草稿？`
-  },
-  {
-    key: "accept",
-    label: "验收通过",
-    icon: <CheckCheck size={14} />,
-    // 已完成（待验收）与已合并均可验收：合并落地后仍需人工签收，否则任务停留在 merged 不进终态。
-    applicable: (s) => s === "success" || s === "merged",
-    confirm: (n) => `确认通过选中的 ${n} 个任务的人工验收？`
   },
   {
     key: "cancel",
@@ -183,6 +183,8 @@ function TasksView({
   const [projectId, setProjectId] = useState("");
   // Worker 维度过滤：取已认领任务的 worker_id；不限即空字符串。
   const [workerId, setWorkerId] = useState("");
+  // 提交模式筛选(pr / push / 空 = 全部)。
+  const [submitMode, setSubmitMode] = useState("");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   // 列表固定按更新时间排序，方向由「更新」表头切换（默认降序）。
@@ -275,13 +277,13 @@ function TasksView({
   // 任一筛选条件变化都回到第 1 页
   useEffect(() => {
     setPage(1);
-  }, [status, projectId, workerId, debouncedQ, dir, pageSize]);
+  }, [status, projectId, workerId, submitMode, debouncedQ, dir, pageSize]);
 
   // 切换筛选 / 翻页 / 改排序 / 改页大小时清空选区——选中的任务可能不在新视图里，
   // 跨页保留会让用户误以为「未在表内」的任务也参与批量操作。
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [status, projectId, workerId, debouncedQ, dir, page, pageSize]);
+  }, [status, projectId, workerId, submitMode, debouncedQ, dir, page, pageSize]);
 
   // worker 下拉数据：取全集仅用于过滤展示，离线 worker 也保留（历史任务仍要可定位）。
   // worker 注册/离线属低频事件，挂载拉一次即可，不必因任意 relay 事件被动刷新（Infinity = 关闭所有自动刷新源）。
@@ -302,6 +304,7 @@ function TasksView({
       if (status) params.set("status", status);
       if (projectId) params.set("projectId", projectId);
       if (workerId) params.set("workerId", workerId);
+      if (submitMode) params.set("submitMode", submitMode);
       if (debouncedQ) params.set("q", debouncedQ);
       params.set("dir", dir);
       params.set("page", String(page));
@@ -320,7 +323,7 @@ function TasksView({
         if (isActive()) setLoading(false);
       }
     },
-    [status, projectId, workerId, debouncedQ, dir, page, pageSize, refreshKey, refreshSignal],
+    [status, projectId, workerId, submitMode, debouncedQ, dir, page, pageSize, refreshKey, refreshSignal],
     Infinity
   );
 
@@ -330,7 +333,7 @@ function TasksView({
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
 
-  const hasFilter = Boolean(status || projectId || workerId || debouncedQ);
+  const hasFilter = Boolean(status || projectId || workerId || submitMode || debouncedQ);
 
   // 当前页可被勾选的任务集合（与选区交集）。批量动作按可用性筛选各自适用 id。
   const selectedTasksOnPage = useMemo(
@@ -436,6 +439,13 @@ function TasksView({
                   ...workers.map((worker) => ({ value: worker.id, label: worker.name }))
                 ]}
                 ariaLabel="按 Worker 筛选"
+              />
+              <Select
+                className="tb-select"
+                value={submitMode}
+                onChange={setSubmitMode}
+                options={SUBMIT_MODE_FILTERS}
+                ariaLabel="按提交模式筛选"
               />
             </div>
 
@@ -797,9 +807,10 @@ function TasksSidebar({ stats }: { stats: TaskStatsPayload | null }) {
       return { status: row.key, label: meta.label, tone: meta.tone, value: row.n };
     });
 
-  const today = stats?.today ?? { created: 0, finished: 0, accepted: 0, rejected: 0, avgDurationMs: null };
+  const today = stats?.today ?? { created: 0, finished: 0, completed: 0, failed: 0, avgDurationMs: null };
+  // 完成率 = 进入 success/merged 终态的任务占今日完结(含 failed/cancelled)的比例。
   const completionRate = today.finished > 0
-    ? `${Math.round((today.accepted / today.finished) * 1000) / 10}%`
+    ? `${Math.round((today.completed / today.finished) * 1000) / 10}%`
     : "—";
 
   return (

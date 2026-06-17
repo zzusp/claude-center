@@ -394,21 +394,20 @@ function windowHtml(): string {
               '<div class="usage-track"><div class="usage-fill" data-tone="' + tone + '" style="width:' + pct + '%"></div></div>' + foot + '</div>';
           }
 
-          // —— 任务面板（Agent-View 式：仅本 worker，分组 + peek + 回复/打回/验收）——
+          // —— 任务面板（Agent-View 式：仅本 worker，分组 + peek + 回复/续接重试）——
+          // 状态机简化:accepted/rejected 已移除；Worker 终态只有 success/failed/waiting,
+          // merged 由 Console 30s 轮询检测 PR 合并自动翻;桌面端不再提供「验收 / 打回」入口。
           var TASK_STATUS_META = {
             waiting:   { group: "needs",   label: "需输入",   tone: "waiting" },
-            success:   { group: "review",  label: "待审",     tone: "success" },
+            success:   { group: "done",    label: "已完成",   tone: "success" },
             claimed:   { group: "working", label: "已认领",   tone: "running" },
             running:   { group: "working", label: "执行中",   tone: "running" },
-            rejected:  { group: "working", label: "打回重跑", tone: "pending" },
             merged:    { group: "done",    label: "已合并",   tone: "merged" },
-            accepted:  { group: "done",    label: "已验收",   tone: "success" },
             failed:    { group: "done",    label: "失败",     tone: "failed" },
             cancelled: { group: "done",    label: "已取消",   tone: "cancelled" }
           };
           var TASK_GROUPS = [
             { key: "needs",   title: "需输入" },
-            { key: "review",  title: "待审" },
             { key: "working", title: "进行中" },
             { key: "done",    title: "已完成" }
           ];
@@ -503,11 +502,6 @@ function windowHtml(): string {
               html += '<div class="detail-act"><textarea class="reply-input" id="reply-' + esc(taskId) + '" placeholder="回复以续接会话…"></textarea>' +
                 '<button class="btn btn-sm btn-primary" data-task-action="reply-send" data-task-id="' + esc(taskId) + '">发送</button></div>';
             }
-            if (t && t.status === "success") {
-              html += '<div class="detail-act"><textarea class="reply-input" id="reject-' + esc(taskId) + '" placeholder="打回意见（打回时必填）…"></textarea>' +
-                '<button class="btn btn-sm" data-task-action="accept" data-task-id="' + esc(taskId) + '">验收通过</button>' +
-                '<button class="btn btn-sm danger" data-task-action="reject-send" data-task-id="' + esc(taskId) + '">打回</button></div>';
-            }
             if (t && (t.status === "failed" || t.status === "cancelled")) {
               html += '<div class="detail-act"><button class="btn btn-sm btn-primary" data-task-action="retry" data-task-id="' + esc(taskId) + '">续接重试</button></div>';
             }
@@ -524,16 +518,6 @@ function windowHtml(): string {
               const ta = document.getElementById("reply-" + id); const body = ta && ta.value.trim();
               if (!body) return;
               el.disabled = true; await window.workerApi.replyToTask(id, body); expandedTaskId = null; await reloadTasks(); return;
-            }
-            if (action === "accept") {
-              el.disabled = true; const ok = await window.workerApi.acceptMyTask(id);
-              if (!ok) alert("任务已不在待审状态"); expandedTaskId = null; await reloadTasks(); return;
-            }
-            if (action === "reject-send") {
-              const ta = document.getElementById("reject-" + id); const fb = ta && ta.value.trim();
-              if (!fb) { alert("打回必须填写意见"); return; }
-              el.disabled = true; const ok = await window.workerApi.rejectMyTask(id, fb);
-              if (!ok) alert("任务已不在待审状态"); expandedTaskId = null; await reloadTasks(); return;
             }
             if (action === "retry") {
               el.disabled = true; const ok = await window.workerApi.retryMyTask(id);
@@ -808,16 +792,13 @@ app.whenReady().then(async () => {
   );
   ipcMain.handle("worker:cancelTask", (_event, taskId: string) => worker?.cancelTask(taskId) ?? false);
 
-  // 桌面端任务面板（仅本 worker）：总览 / peek 详情 / 本机回复 / 打回 / 验收。
+  // 桌面端任务面板（仅本 worker）：总览 / peek 详情 / 本机回复 / 续接重试。
+  // 人工验收(accept) / 打回(reject) 已随状态机简化移除——success 由 Console 检测 PR 合并自动翻 merged。
   ipcMain.handle("worker:listMyTasks", () => worker?.listMyTasks() ?? []);
   ipcMain.handle("worker:getTaskDetail", (_event, taskId: string) =>
     worker?.getTaskDetail(taskId) ?? { comments: [], events: [] }
   );
   ipcMain.handle("worker:replyToTask", (_event, taskId: string, body: string) => worker?.replyToTask(taskId, body));
-  ipcMain.handle("worker:rejectMyTask", (_event, taskId: string, feedback: string) =>
-    worker?.rejectMyTask(taskId, feedback) ?? false
-  );
-  ipcMain.handle("worker:acceptMyTask", (_event, taskId: string) => worker?.acceptMyTask(taskId) ?? false);
   ipcMain.handle("worker:retryMyTask", (_event, taskId: string) => worker?.retryMyTask(taskId) ?? false);
 
   // 桌面端对话面板（只读）：本 worker 承接的远程实时对话总览 + 消息线（含流式实时增量）。

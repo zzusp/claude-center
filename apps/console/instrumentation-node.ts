@@ -1,18 +1,21 @@
 // Console 后台调度逻辑的 nodejs-only 实现。被 instrumentation.ts 仅在 NEXT_RUNTIME==="nodejs" 的正向
 // 分支里动态 import，故整模块永不进入 Edge 编译图——这样用 node: 内置的 merge-check 才不会触发
 // Turbopack/webpack 的「node: not supported in Edge Runtime」。方案见 docs/spec/task-scheduled.md
-// 与 docs/spec/task-merge-status-check.md。
+// 与 docs/spec/drop-accepted-rejected.md。
 //
-// 起一个周期定时器把到点定时任务（scheduled → pending）提升进可认领队列，并跑合并检查兜底验收。
+// 起两条周期定时器:
+//   1) 调度器(30s):把到点定时任务 scheduled → pending,提升进可认领队列。
+//   2) 合并检查(30s):取一个 success 且有 PR 的任务,远程判定 PR 是否已合并;
+//      已合并 → 翻 merged(终态),不再清理 worktree(用户仍可在本地复用)。
+//      没有 PR 的 success 是终态,不参与本检查(用户的简化要求)。
 // 用 globalThis 标志位防 dev HMR 重复起定时器。
 
 import { detectBranchMerged } from "./app/lib/merge-check";
 import { recordSchedulerStart, recordSchedulerTick } from "./app/lib/scheduler-state";
 
 const DEFAULT_INTERVAL_MS = 30_000;
-// 合并检查独立间隔：默认 60s，刻意慢于 Worker 轮询（默认 10s），让在线 Worker 优先把已合并 PR
-// 转入 merged 并清理分支；Worker 离线时由 Console 兜底自动验收。方案见 docs/spec/task-merge-status-check.md。
-const DEFAULT_MERGE_CHECK_INTERVAL_MS = 60_000;
+// 合并检查间隔:30s 一次(spec drop-accepted-rejected.md §3「定时任务,30s 一次」)。
+const DEFAULT_MERGE_CHECK_INTERVAL_MS = 30_000;
 
 export async function registerNode(): Promise<void> {
   const globalKey = Symbol.for("claude-center.scheduler.started");
@@ -29,7 +32,7 @@ export async function registerNode(): Promise<void> {
     getPool,
     promoteDueScheduledTasks,
     claimNextMergeCheckCandidate,
-    markTaskMergeAccepted,
+    markTaskMerged,
     setTaskMergeUnmerged
   } = await import(/* webpackIgnore: true */ "@claude-center/db");
 
@@ -66,8 +69,9 @@ export async function registerNode(): Promise<void> {
   timer.unref?.();
   console.log(`[scheduler] 定时任务调度器已启动，每 ${intervalMs}ms 检查一次`);
 
-  // 合并检查循环：每轮取 1 个 success 待验收工作任务，远程判定 work_branch 是否已并入 target_branch，
-  // 已合并则自动转 accepted。独立间隔 + 非重入，慢网络调用不阻塞上面的定时发布提升。
+  // 合并检查循环:每轮取 1 个「success 且有 PR」的任务,远程判定 PR 是否已合并;
+  // 已合并即翻 merged(终态),不清理 worktree(spec drop-accepted-rejected.md)。
+  // 独立间隔 + 非重入,慢网络调用不阻塞上面的定时发布提升。
   const mergeParsed = Number(process.env.CLAUDE_CENTER_MERGE_CHECK_INTERVAL_MS);
   const mergeIntervalMs =
     Number.isFinite(mergeParsed) && mergeParsed >= 1000 ? mergeParsed : DEFAULT_MERGE_CHECK_INTERVAL_MS;
@@ -92,10 +96,10 @@ export async function registerNode(): Promise<void> {
         ghCommand
       });
       if (merged) {
-        const accepted = await markTaskMergeAccepted(getPool(), candidate.id);
-        if (accepted) {
+        const ok = await markTaskMerged(getPool(), candidate.id);
+        if (ok) {
           console.log(
-            `[merge-check] 任务 ${candidate.id}（${candidate.work_branch} → ${candidate.target_branch}）已合并，自动验收`
+            `[merge-check] 任务 ${candidate.id}（${candidate.work_branch} → ${candidate.target_branch}）PR 已合并，翻入 merged 终态`
           );
         }
       } else {
@@ -111,5 +115,5 @@ export async function registerNode(): Promise<void> {
   void mergeTick();
   const mergeTimer = setInterval(() => void mergeTick(), mergeIntervalMs);
   mergeTimer.unref?.();
-  console.log(`[merge-check] 合并检查循环已启动，每 ${mergeIntervalMs}ms 检查一个待验收任务`);
+  console.log(`[merge-check] 合并检查循环已启动，每 ${mergeIntervalMs}ms 检查一个 success 且有 PR 的任务`);
 }

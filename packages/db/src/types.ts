@@ -7,8 +7,6 @@ export type TaskStatus =
   | "waiting"
   | "success"
   | "merged"
-  | "accepted"
-  | "rejected"
   | "failed"
   | "cancelled";
 // 合并状态：Console 定时检查 work_branch 是否已并入 target_branch 的结果。unknown 未检查。

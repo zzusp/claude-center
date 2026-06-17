@@ -12,9 +12,7 @@ export type Tone =
   | "queued"
   | "waiting"
   | "draft"
-  | "scheduled"
-  | "review"
-  | "rejected";
+  | "scheduled";
 
 export const STATUS_META: Record<string, { glyph: string; label: string; tone: Tone }> = {
   draft: { glyph: "✎", label: "草稿", tone: "draft" },
@@ -23,10 +21,9 @@ export const STATUS_META: Record<string, { glyph: string; label: string; tone: T
   claimed: { glyph: "◻", label: "已认领", tone: "queued" },
   running: { glyph: "◐", label: "执行中", tone: "running" },
   waiting: { glyph: "⏸", label: "等待回复", tone: "waiting" },
-  success: { glyph: "◓", label: "待验收", tone: "review" },
+  // 取消「人工验收」后,success 即「已完成」终态(无 PR 时永远停在此处,有 PR 时由 Console 检测合并翻 merged)。
+  success: { glyph: "✓", label: "已完成", tone: "success" },
   merged: { glyph: "✔", label: "已合并", tone: "merged" },
-  accepted: { glyph: "✓", label: "已验收", tone: "success" },
-  rejected: { glyph: "↺", label: "已打回", tone: "rejected" },
   failed: { glyph: "✕", label: "失败", tone: "failed" },
   cancelled: { glyph: "—", label: "已取消", tone: "cancelled" },
   online: { glyph: "●", label: "在线", tone: "success" },

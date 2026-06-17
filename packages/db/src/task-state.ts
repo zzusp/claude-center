@@ -14,8 +14,6 @@ export const TASK_STATUSES = [
   "waiting",
   "success",
   "merged",
-  "accepted",
-  "rejected",
   "failed",
   "cancelled"
 ] as const satisfies readonly TaskStatus[];
@@ -26,8 +24,10 @@ export const ACTIVE_WORKER_STATUSES = ["claimed", "running"] as const satisfies 
 // 在途(已认领但未达终态,可被取消):claimed/running/waiting。取消护栏、worktree 持有判定用。
 export const IN_FLIGHT_STATUSES = ["claimed", "running", "waiting"] as const satisfies readonly TaskStatus[];
 
-// 「已完成」终态:依赖门控据此判定前置是否放行(accepted 人工验收 / merged 已落地)。
-export const COMPLETED_STATUSES = ["accepted", "merged"] as const satisfies readonly TaskStatus[];
+// 「已完成」终态:依赖门控据此判定前置是否放行。
+// 取消「人工验收」后:success(Worker 已交付,即视作完成)与 merged(PR 已合并落地)均算完成,
+// 后续任务可被领取。push 模式终态仍是 success(无 PR 可合)。
+export const COMPLETED_STATUSES = ["success", "merged"] as const satisfies readonly TaskStatus[];
 
 // 可重新激活回草稿的状态(reactivateTask)。
 export const REACTIVATABLE_STATUSES = ["failed", "cancelled"] as const satisfies readonly TaskStatus[];

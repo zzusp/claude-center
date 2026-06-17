@@ -70,8 +70,6 @@ function DashboardView({
       "claimed",
       "success",
       "merged",
-      "accepted",
-      "rejected",
       "failed",
       "cancelled"
     ] as const

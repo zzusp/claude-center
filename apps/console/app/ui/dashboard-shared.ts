@@ -69,9 +69,7 @@ const TONE_COLOR: Record<Tone, string> = {
   queued: "var(--queued)",
   waiting: "var(--waiting)",
   draft: "var(--draft)",
-  scheduled: "var(--scheduled)",
-  review: "var(--review)",
-  rejected: "var(--rejected)"
+  scheduled: "var(--scheduled)"
 };
 
 function fmtAgo(value: string | null): string {

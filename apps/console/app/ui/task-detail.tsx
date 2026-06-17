@@ -175,8 +175,6 @@ export default function TaskDetailPage({
 
   const isBlocked = task.status === "pending" && (task.blocked ?? false);
   const canPublish = (task.status === "draft" || task.status === "scheduled") && canCreateTask;
-  // 待验收 / 已合并均可走人工验收：success 是 Worker 交付待人工 review；merged 是 PR 已落地仍需签收终态。
-  const canReview = (task.status === "success" || task.status === "merged") && canCreateTask;
   // 在途态可取消（已认领 / 执行中 / 等待回复）。
   const isCancellable = task.status === "claimed" || task.status === "running" || task.status === "waiting";
   // 仅草稿/定时态可编辑（执行前）。
@@ -187,6 +185,8 @@ export default function TaskDetailPage({
   const canRetry = (task.status === "failed" || task.status === "cancelled") && canCreateTask;
   const canReactivate = canRetry;
 
+  // 生命周期:已完成节点根据终态显示「执行完成 / 已合并落地 / 执行失败 / 已取消」;
+  // 取消「人工验收」后,success/merged 都是终态,不再有「等人工签收」中间步骤。
   const lifecycle: { label: string; time: string | null; state: "done" | "active" | "idle" }[] = [
     { label: "已创建", time: task.created_at, state: "done" },
     { label: "已认领", time: task.claimed_at, state: task.claimed_at ? "done" : "idle" },
@@ -206,11 +206,6 @@ export default function TaskDetailPage({
               : "执行完成",
       time: task.finished_at,
       state: task.finished_at ? "done" : "idle"
-    },
-    {
-      label: task.status === "accepted" ? "已验收" : task.status === "rejected" ? "已打回" : "人工验收",
-      time: null,
-      state: task.status === "accepted" ? "done" : task.status === "success" ? "active" : "idle"
     }
   ];
 
@@ -338,8 +333,6 @@ export default function TaskDetailPage({
             modelLabel={modelLabel}
             depIds={depIds}
             preById={preById}
-            canReview={canReview}
-            onReviewed={loadTask}
           />
         ) : null}
 

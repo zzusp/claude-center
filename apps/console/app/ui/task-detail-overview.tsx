@@ -1,23 +1,19 @@
 "use client";
 
 import type { Task, TaskPredecessor, TaskRepo } from "@claude-center/db";
-import { Activity, Check, FileText, GitPullRequest, Info, ListChecks, RotateCcw } from "lucide-react";
-import { Empty, KvRow, StatusBadge, fmtTime, isPendingSubRepoPath, postJson } from "./shared";
+import { Activity, FileText, GitPullRequest, Info, ListChecks } from "lucide-react";
+import { KvRow, StatusBadge, fmtTime, isPendingSubRepoPath } from "./shared";
 import { Section, type LifecycleStep } from "./task-detail-shared";
-import { AttachmentList } from "./attachment-uploader";
-import { useAsyncAction } from "../lib/use-async-action";
-import { useState } from "react";
 
-// 概览 Tab：高亮验收行（success 态） + 描述/错误 + 信息 + 前置任务 + 多仓 PR 表。
+// 概览 Tab:描述/错误 + 信息 + 前置任务 + 多仓 PR 表。
+// 人工验收(accept/reject)已随状态机简化移除——success 由 Console 30s 轮询检测 PR 合并自动翻 merged。
 export function OverviewTab({
   task,
   taskRepos,
   lifecycle,
   modelLabel,
   depIds,
-  preById,
-  canReview,
-  onReviewed
+  preById
 }: {
   task: Task;
   taskRepos: TaskRepo[];
@@ -25,8 +21,6 @@ export function OverviewTab({
   modelLabel: string;
   depIds: string[];
   preById: Map<string, TaskPredecessor>;
-  canReview: boolean;
-  onReviewed: () => void | Promise<void>;
 }) {
   // 多仓：active 仓 > 1 时改用多仓 PR 表；单仓仍走老 KvRow PR 单条（向后兼容观感）。
   const activeRepos = taskRepos.filter((r) => r.sub_status !== "skipped");
@@ -34,14 +28,6 @@ export function OverviewTab({
   return (
     <div className="detail-grid">
       <div className="detail-main">
-        {canReview ? (
-          <section className="card detail-section">
-            <div className="section-body">
-              <TaskReviewActions task={task} onReviewed={onReviewed} />
-            </div>
-          </section>
-        ) : null}
-
         <Section icon={<FileText size={15} />} title="任务描述">
           <p className="detail-desc">{task.description || "（无描述）"}</p>
           {task.error_message ? <div className="error-box">{task.error_message}</div> : null}
@@ -204,73 +190,3 @@ function subStatusLabel(s: TaskRepo["sub_status"]): string {
   }
 }
 
-// 人工验收操作：accept / reject（打回需填意见，Worker 续接重跑）。
-function TaskReviewActions({ task, onReviewed }: { task: Task; onReviewed: () => void | Promise<void> }) {
-  const [rejecting, setRejecting] = useState(false);
-  const [feedback, setFeedback] = useState("");
-  const { busy, error, setError, run } = useAsyncAction();
-
-  async function review(action: "accept" | "reject") {
-    if (action === "reject" && !feedback.trim()) {
-      setError("打回必须填写意见");
-      return;
-    }
-    await run(async () => {
-      await postJson(`/api/tasks/${task.id}/review`, {
-        action,
-        feedback: action === "reject" ? feedback.trim() : undefined
-      });
-      setRejecting(false);
-      setFeedback("");
-      await onReviewed();
-    });
-  }
-
-  const isMerged = task.status === "merged";
-  return (
-    <div className="review-actions">
-      <div className="review-hint">
-        {isMerged ? "PR 已合并，签收后归入「已验收」终态。" : "该任务已执行完成，待人工验收。"}
-      </div>
-      {rejecting ? (
-        <>
-          <textarea
-            rows={3}
-            value={feedback}
-            onChange={(event) => setFeedback(event.target.value)}
-            placeholder="填写打回意见，Worker 将带着该意见续接重跑…"
-            disabled={busy}
-          />
-          <div className="review-btns">
-            <button className="btn btn-sm" type="button" onClick={() => setRejecting(false)} disabled={busy}>
-              取消
-            </button>
-            <button
-              className="btn btn-primary btn-sm"
-              type="button"
-              onClick={() => review("reject")}
-              disabled={busy || !feedback.trim()}
-            >
-              <RotateCcw size={15} />
-              确认打回
-            </button>
-          </div>
-        </>
-      ) : (
-        <div className="review-btns">
-          <button className="btn btn-primary btn-sm" type="button" onClick={() => review("accept")} disabled={busy}>
-            <Check size={15} />
-            验收通过
-          </button>
-          {isMerged ? null : (
-            <button className="btn btn-sm" type="button" onClick={() => setRejecting(true)} disabled={busy}>
-              <RotateCcw size={15} />
-              打回重跑
-            </button>
-          )}
-        </div>
-      )}
-      {error ? <div className="error-box">{error}</div> : null}
-    </div>
-  );
-}

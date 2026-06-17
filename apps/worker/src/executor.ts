@@ -1,7 +1,6 @@
 import {
   addTaskComment,
   addTaskEvent,
-  countConsecutiveCleanupRetries,
   failConversationTurn,
   finalizeConversationTurn,
   getAttachmentBlob,
@@ -18,11 +17,9 @@ import {
   markDirectCommandRunning,
   markDirectCommandSuccess,
   markTaskFailed,
-  markTaskMerged,
   markTaskRunning,
   markTaskSuccess,
   setTaskClaudeSession,
-  setTaskMergeChecked,
   setTaskWaiting,
   updateTaskRepoPrUrl,
   updateTaskRepoRelativePath,
@@ -54,7 +51,6 @@ import {
   conversationWorktreePathFor,
   ensureSubRepoCloned,
   ensureWorktree,
-  removeWorktree,
   resolveSubRepoRelativePath,
   worktreePathFor
 } from "./worktree.js";
@@ -365,19 +361,6 @@ function resumePrompt(task: Task, reply: string, attachments: AttachmentMeta[]):
   ].join("\n");
 }
 
-function rejectionPrompt(task: Task, feedback: string, attachments: AttachmentMeta[]): string {
-  return [
-    "Your previous implementation was reviewed by the user and sent back for revision. Reviewer feedback:",
-    "",
-    feedback,
-    "",
-    "Revise the implementation on the current branch to address this feedback. Your changes will update the existing PR.",
-    ...attachmentSection(attachments),
-    "",
-    ...replyDirective(task)
-  ].join("\n");
-}
-
 // 续接重试 prompt:failed 任务带上次失败原因(error_message);cancelled 任务无 error_message,
 // 用「此前被中断」措辞。让 Claude 带着「上次为什么没成」在当前分支接着干。
 function retryPrompt(task: Task, attachments: AttachmentMeta[]): string {
@@ -504,20 +487,6 @@ async function prepareAllRepoWorktrees(
     });
   }
   return ctxs;
-}
-
-// 任务所有参与仓的 worktree 拆除：submit_mode='push' 终态 或 cleanup 已合并清理时调用。
-async function removeAllRepoWorktrees(
-  ctxs: TaskRepoCtx[],
-  localPath: string,
-  taskId: string
-): Promise<void> {
-  for (const ctx of ctxs) {
-    if (ctx.sub_status === "skipped") continue;
-    const repoLocal = repoLocalFor(localPath, ctx);
-    const repoWt = repoWtFor(localPath, taskId, ctx);
-    await removeWorktree(repoLocal, repoWt);
-  }
 }
 
 // 处理一轮 Claude 输出：先记下续接所需 session；若请求确认则落评论 + 转入等待；
@@ -759,18 +728,25 @@ async function finalizeTaskMultiRepo(
     mainResult && mainResult.sub === "pr_created" ? mainResult.prUrl : null;
 
   if (task.submit_mode === "push") {
-    // submit_mode='push':所有参与仓 push 完落地即 merged(终态)。
-    await markTaskMerged(pool, task.id, config.workerId, {
-      workdir: wtPath,
-      submitMode: "push",
-      claudeResult: claudeOutput,
-      multiRepo: results.map(serializeRepoResult)
-    });
-    await removeAllRepoWorktrees(ctxs, localPath, task.id);
+    // submit_mode='push':所有参与仓 push 完即 success(终态,无 PR 可合)。
+    // 「不再清理 worktree」(spec drop-accepted-rejected.md):保留 worktree 供用户本地复用,
+    // 由 GC 兜底回收(GC keep 列表已含 success,真孤儿才被清)。
+    await markTaskSuccess(
+      pool,
+      task.id,
+      config.workerId,
+      {
+        workdir: wtPath,
+        submitMode: "push",
+        claudeResult: claudeOutput,
+        multiRepo: results.map(serializeRepoResult)
+      },
+      null
+    );
     return;
   }
 
-  // submit_mode='pr':标记 success(待人工验收 / 自动合并),保留所有 worktree。
+  // submit_mode='pr':标记 success(Console 30s 轮询若检测到 PR 合并会自动翻 merged),保留所有 worktree。
   await markTaskSuccess(
     pool,
     task.id,
@@ -983,53 +959,6 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
   }
 }
 
-// 打回重跑：用户验收不通过并填了打回意见。复用/重建任务工作树（不再切主仓分支），续接同一
-// Claude 会话带着打回意见修订。finalizeTask 会因 pr_url 已存在跳过建 PR、复用原 PR。
-export async function rerunRejectedTask(config: WorkerConfig, task: Task, hooks?: ExecHooks): Promise<void> {
-  const pool = getPool();
-
-  let localPath: string | null = null;
-  try {
-    ensureClaudeAvailable(hooks);
-    localPath = await getTaskLocalPath(pool, task.id, config.workerId);
-    if (!localPath) {
-      throw new Error(`No local path linked for task ${task.id}`);
-    }
-    if (!task.claude_session_id) {
-      throw new Error(`Task ${task.id} has no claude_session_id to rerun`);
-    }
-
-    const feedback = await getPendingReply(pool, task.id);
-    if (!feedback) {
-      throw new Error(`Task ${task.id} was rejected without feedback`);
-    }
-
-    const wtPath = worktreePathFor(localPath, task.id);
-    // 多仓打回重跑：所有参与仓的 worktree 复用；每仓独立判断 task_repos.pr_url 是否已存
-    // 决定 finalize 时是否跳过 gh pr create（见 finalizeTaskMultiRepo）。
-    const ctxs = await prepareAllRepoWorktrees(task, localPath, false, config.workerId);
-    // 落本轮反馈附件（user 在打回意见里贴的图）+ 任务原始附件（worktree 可能已 GC）。
-    const replyAtts = await loadReplyAttachments(task.id);
-    const taskAtts = await loadTaskAttachments(task.id);
-    await materializeAttachments(wtPath, [...taskAtts, ...replyAtts]);
-    await addTaskEvent(pool, task.id, config.workerId, "rerun_started", "打回重跑，续接执行", {});
-
-    const turn = await runTaskClaude(config, task.id, {
-      prompt: rejectionPrompt(task, feedback, replyAtts),
-      cwd: wtPath,
-      resumeSessionId: task.claude_session_id,
-      model: task.model,
-      onSpawn: hooks?.onClaudeSpawn
-    });
-    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn);
-  } catch (error) {
-    // 失败保留工作树(供续接重试),不删树。
-    await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
-      failedAt: new Date().toISOString()
-    });
-  }
-}
-
 // 失败/取消续接重试：用户对 failed/cancelled 任务点「重试」(claimNextRetryableTask 已翻 running)。
 // 失败/取消时保留了工作树,故默认复用(含未提交改动);仅当工作树确被 GC 清理且无会话可续时退化全新执行。
 // - 有 claude_session_id:resume 同一会话 + retryPrompt(带失败原因/中断点),复用工作树。
@@ -1070,144 +999,6 @@ export async function retryFailedTask(config: WorkerConfig, task: Task, hooks?: 
     });
   }
 }
-
-// 容错执行：清理里「可能本就不存在」的删分支操作，失败只回报、不抛，避免挡住 merged 迁移。
-async function runTolerant(args: string[]): Promise<{ ok: boolean; detail: string }> {
-  try {
-    const result = await runCommand("git", args, { timeoutMs: 5 * 60_000 });
-    return { ok: true, detail: result.stdout.trim() || result.stderr.trim() };
-  } catch (error) {
-    return { ok: false, detail: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-// periodic 清理（仅 PR 模式）：查所有参与仓的 PR 是否都已合并。
-// - 多仓任务：listTaskRepos 取每仓的 pr_url；任一仓未合并 → 仅打时间戳轮转。全部 MERGED → 拆所有
-//   worktree + 各仓本地 checkout default 拉新 + 删工作分支 + markTaskMerged。
-// - 单仓任务：task_repos 仅一行 main，循环只跑 1 次，行为等价于改造前。
-// checkout/pull 出错兜底为打时间戳重试，不丢「已合并」。
-export async function cleanupMergedTask(config: WorkerConfig, task: Task): Promise<void> {
-  const pool = getPool();
-  try {
-    const localPath = await getTaskLocalPath(pool, task.id, config.workerId);
-    if (!localPath || !task.pr_url) {
-      await setTaskMergeChecked(pool, task.id, config.workerId);
-      return;
-    }
-
-    const ctxs = await loadTaskRepoCtxs(task.id, task.project_id);
-    // 待查 PR 清单：仅有 pr_url 的仓；skipped/no_changes 仓不参与（它们本就没 PR）。
-    const prCtxs = ctxs.filter((c) => c.pr_url && c.sub_status !== "skipped");
-    if (prCtxs.length === 0) {
-      // 没有任何仓建过 PR（不太可能进到这里——claimNextCleanupCandidate 已筛 task.pr_url 非空），
-      // 兜底打时间戳退队尾。
-      await setTaskMergeChecked(pool, task.id, config.workerId);
-      return;
-    }
-
-    // 逐仓查 PR 状态（远程 API，串行避免触发 GitHub rate limit）。
-    const prStates: { ctx: TaskRepoCtx; state: string; mergedAt: string | null }[] = [];
-    for (const ctx of prCtxs) {
-      const view = await runCommand(config.ghCommand, ["pr", "view", ctx.pr_url!, "--json", "state,mergedAt"], {
-        cwd: localPath,
-        timeoutMs: 60_000
-      });
-      const pr = JSON.parse(view.stdout) as { state?: string; mergedAt?: string | null };
-      prStates.push({ ctx, state: pr.state ?? "", mergedAt: pr.mergedAt ?? null });
-    }
-
-    const unmerged = prStates.filter((s) => s.state !== "MERGED");
-    if (unmerged.length > 0) {
-      await setTaskMergeChecked(pool, task.id, config.workerId);
-      return;
-    }
-
-    // 全部 MERGED：拆所有 worktree → 每个本地仓 fetch + checkout default + pull + 删工作分支。
-    await removeAllRepoWorktrees(ctxs, localPath, task.id);
-
-    type RepoCleanup = {
-      relativePath: string;
-      role: ProjectRepoRoleStr;
-      baseSync: { ok: boolean; detail: string };
-      localBranchDeleted: { ok: boolean; detail: string };
-      remoteBranchDeleted: { ok: boolean; detail: string };
-    };
-    const cleanupResults: RepoCleanup[] = [];
-
-    for (const s of prStates) {
-      const ctx = s.ctx;
-      const repoLocal = repoLocalFor(localPath, ctx);
-      // 本地 base 同步只是把 HEAD 挪离已删工作分支 + 把合并后的改动顺手拉下来——后者纯属 cosmetic，
-      // 下次任务签出时会重新 fetch+pull。所以 fetch 仍硬要求（网络问题真转瞬即逝、5min 退避后会恢复），
-      // 但 checkout/merge 失败回退到 `checkout --detach origin/<base>`：本地 base 与远端发散（脏树 / 历史
-      // 分叉 / 残留本地 commit）也能离开 work_branch，不阻塞分支清理 + merged 终态推进，避免每 5min
-      // 一发的 cleanup_retry 噪声事件累积。
-      // 历史背景：`git pull --ff-only origin <base>` 在并发 fetch 残留多 for-merge 时会报 "Cannot
-      // fast-forward to multiple branches"；显式 ref `merge --ff-only origin/<base>` 决定单一 merge head。
-      await runCommand("git", ["-C", repoLocal, "fetch", "origin", "--prune"], { timeoutMs: 10 * 60_000 });
-      const checkoutResult = await runTolerant(["-C", repoLocal, "checkout", ctx.base_branch]);
-      let baseSync: { ok: boolean; detail: string };
-      if (checkoutResult.ok) {
-        const mergeResult = await runTolerant([
-          "-C",
-          repoLocal,
-          "merge",
-          "--ff-only",
-          `origin/${ctx.base_branch}`
-        ]);
-        baseSync = mergeResult.ok
-          ? { ok: true, detail: `checked out ${ctx.base_branch}, fast-forwarded to origin/${ctx.base_branch}` }
-          : { ok: false, detail: `checked out ${ctx.base_branch} but ff-merge failed: ${mergeResult.detail}` };
-      } else {
-        // 签出 base 失败回退 detach 到远端 ref：只要 HEAD 离开 work_branch，后续 branch -D 就能成功。
-        const detachResult = await runTolerant([
-          "-C",
-          repoLocal,
-          "checkout",
-          "--detach",
-          `origin/${ctx.base_branch}`
-        ]);
-        baseSync = detachResult.ok
-          ? { ok: false, detail: `checkout ${ctx.base_branch} failed, detached to origin/${ctx.base_branch}: ${checkoutResult.detail}` }
-          : { ok: false, detail: `checkout failed: ${checkoutResult.detail}; detach fallback failed: ${detachResult.detail}` };
-      }
-      // squash/rebase 合并时签出分支没有工作分支的提交，必须 -D 强删；远端可能已被 GitHub 自动删除。
-      const localBranchDeleted = await runTolerant(["-C", repoLocal, "branch", "-D", ctx.work_branch]);
-      const remoteBranchDeleted = await runTolerant(["-C", repoLocal, "push", "origin", "--delete", ctx.work_branch]);
-      await updateTaskRepoStatus(pool, ctx.id, "pr_merged");
-      cleanupResults.push({
-        relativePath: ctx.relative_path,
-        role: ctx.role,
-        baseSync,
-        localBranchDeleted,
-        remoteBranchDeleted
-      });
-    }
-
-    await markTaskMerged(pool, task.id, config.workerId, {
-      mergedAt: prStates.find((s) => s.ctx.role === "main")?.mergedAt ?? null,
-      cleanedUpAt: new Date().toISOString(),
-      multiRepoCleanup: cleanupResults
-    });
-  } catch (error) {
-    // PR 已合并但本地清理失败（多半是 `git fetch` 网络/凭据出错——checkout/merge 已在上面做了
-    // tolerant + detach 兜底）：按连续失败次数做指数退避，避免长时间网络断开 / 凭据失效场景下每 5min
-    // 一发的 cleanup_retry 噪声无限累积。5/10/20/40min，最长 60min；任务仍留在 success 不丢「已合并」。
-    const retries = await countConsecutiveCleanupRetries(pool, task.id);
-    const backoffSeconds = Math.min(60 * 60, 5 * 60 * Math.pow(2, retries));
-    await setTaskMergeChecked(pool, task.id, config.workerId, backoffSeconds);
-    await addTaskEvent(
-      pool,
-      task.id,
-      config.workerId,
-      "cleanup_retry",
-      error instanceof Error ? error.message : String(error),
-      { retries: retries + 1, nextBackoffSeconds: backoffSeconds }
-    );
-  }
-}
-
-type ProjectRepoRoleStr = "main" | "sub";
 
 function payloadText(command: DirectCommand): string {
   const value = command.payload.text;
