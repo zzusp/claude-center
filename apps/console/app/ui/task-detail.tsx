@@ -1,7 +1,10 @@
 "use client";
 
 import type { Task, TaskEvent, TaskPredecessor, TaskRepo, Worker } from "@claude-center/db";
-import { ChevronLeft, ExternalLink, Pencil, RefreshCw, RotateCcw, Send, Trash2, X } from "lucide-react";
+import {
+  ChevronLeft, Clock, Cpu, ExternalLink, FolderGit2, GitBranch, GitPullRequest, Hash,
+  Pencil, RefreshCw, RotateCcw, Send, Trash2, X
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { StatusBadge, fmtTime } from "./shared";
@@ -280,27 +283,33 @@ export default function TaskDetailPage({
 
       <div className="detail-summary-bar">
         <div className="ds-item">
+          <Hash size={13} className="ico" />
           <span className="ds-k">ID</span>
           <span className="ds-v mono">{task.id}</span>
         </div>
         <div className="ds-item">
+          <FolderGit2 size={13} className="ico" />
           <span className="ds-k">项目</span>
           <span className="ds-v">{task.project_name ?? task.project_id}</span>
         </div>
         <div className="ds-item">
+          <GitBranch size={13} className="ico" />
           <span className="ds-k">分支</span>
           <span className="ds-v mono">{task.base_branch} → {task.work_branch}</span>
         </div>
         <div className="ds-item">
+          <Cpu size={13} className="ico" />
           <span className="ds-k">Worker</span>
           <span className="ds-v">{task.worker_name ?? "—"}</span>
         </div>
         <div className="ds-item">
+          <Clock size={13} className="ico" />
           <span className="ds-k">创建时间</span>
           <span className="ds-v">{fmtTime(task.created_at)}</span>
         </div>
         {task.pr_url ? (
           <div className="ds-item">
+            <GitPullRequest size={13} className="ico" />
             <span className="ds-k">PR</span>
             <a className="ds-v" href={task.pr_url} target="_blank" rel="noreferrer">
               <ExternalLink size={13} className="ico" />

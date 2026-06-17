@@ -4417,6 +4417,10 @@ a.dep-item:hover {
   gap: 6px;
   min-width: 0;
 }
+.ds-item .ico {
+  color: var(--text-4);
+  flex-shrink: 0;
+}
 .ds-k {
   color: var(--text-4);
   font-weight: 500;
