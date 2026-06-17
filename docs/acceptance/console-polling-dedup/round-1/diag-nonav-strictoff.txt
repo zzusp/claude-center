@@ -1,0 +1,94 @@
++0.44s  [diag] usePolling EFFECT-RUN interval=15000
++0.44s  [diag] run interval=15000 why=mount active=true inflight=false
++0.44s  [diag] notif FETCH from instance #1
++0.44s  REQ /api/notifications
++0.44s  [diag] Notifications MOUNT #1
++0.64s  [diag] usePolling EFFECT-RUN interval=15000
++0.64s  [diag] run interval=15000 why=mount active=true inflight=false
++0.64s  REQ /api/dashboard
++2.82s  [diag] usePolling EFFECT-RUN interval=15000
++2.82s  [diag] run interval=15000 why=mount active=true inflight=false
++2.82s  [diag] notif FETCH from instance #1
++2.82s  REQ /api/notifications
++2.82s  [diag] Notifications MOUNT #1
++2.84s  [diag] usePolling EFFECT-RUN interval=Infinity
++2.84s  [diag] run interval=Infinity why=mount active=true inflight=false
++2.84s  REQ /api/workers
++2.85s  [diag] usePolling EFFECT-RUN interval=Infinity
++2.85s  [diag] run interval=Infinity why=mount active=true inflight=false
++2.85s  REQ /api/tasks?dir=desc&page=1&pageSize=20
++2.85s  [diag] usePolling EFFECT-RUN interval=Infinity
++2.85s  [diag] run interval=Infinity why=mount active=true inflight=false
++2.85s  REQ /api/projects
++5.13s  [diag] usePolling EFFECT-RUN interval=15000
++5.13s  [diag] run interval=15000 why=mount active=true inflight=false
++5.13s  [diag] notif FETCH from instance #1
++5.13s  REQ /api/notifications
++5.14s  [diag] Notifications MOUNT #1
++5.15s  REQ /api/projects
++5.15s  REQ /api/workers
++7.41s  [diag] usePolling EFFECT-RUN interval=15000
++7.41s  [diag] run interval=15000 why=mount active=true inflight=false
++7.41s  [diag] notif FETCH from instance #1
++7.41s  REQ /api/notifications
++7.41s  [diag] Notifications MOUNT #1
++7.42s  [diag] usePolling EFFECT-RUN interval=3000
++7.42s  [diag] run interval=3000 why=mount active=true inflight=false
++7.42s  REQ /api/workers
++8.78s  [diag] interval START id=2 every=3000ms live=[2]
++9.77s  [diag] usePolling EFFECT-RUN interval=15000
++9.77s  [diag] run interval=15000 why=mount active=true inflight=false
++9.77s  [diag] notif FETCH from instance #1
++9.77s  REQ /api/notifications
++9.77s  [diag] Notifications MOUNT #1
++9.78s  [diag] usePolling EFFECT-RUN interval=Infinity
++9.78s  [diag] run interval=Infinity why=mount active=true inflight=false
++9.78s  REQ /api/projects
++11.72s  === warmup done ===
++11.72s  === HARD goto / then dwell 50s (NO NAV) ===
++12.15s  [diag] usePolling EFFECT-RUN interval=15000
++12.15s  [diag] run interval=15000 why=mount active=true inflight=false
++12.15s  [diag] notif FETCH from instance #1
++12.15s  REQ /api/notifications
++12.15s  [diag] Notifications MOUNT #1
++12.16s  [diag] usePolling EFFECT-RUN interval=15000
++12.16s  [diag] run interval=15000 why=mount active=true inflight=false
++12.16s  REQ /api/dashboard
++14.29s  [diag] run interval=15000 why=relay active=true inflight=false
++14.29s  [diag] notif FETCH from instance #1
++14.30s  REQ /api/notifications
++14.30s  [diag] run interval=15000 why=relay active=true inflight=false
++14.30s  REQ /api/dashboard
++20.18s  [diag] interval START id=1 every=15000ms live=[1]
++20.91s  [diag] interval START id=2 every=15000ms live=[1,2]
++24.97s  [diag] run interval=15000 why=relay active=true inflight=false
++24.97s  [diag] notif FETCH from instance #1
++24.97s  REQ /api/notifications
++24.97s  [diag] run interval=15000 why=relay active=true inflight=false
++24.97s  REQ /api/dashboard
++29.30s  [diag] run interval=15000 why=relay active=true inflight=false
++29.30s  [diag] notif FETCH from instance #1
++29.30s  REQ /api/notifications
++29.30s  [diag] run interval=15000 why=relay active=true inflight=false
++29.30s  REQ /api/dashboard
++35.19s  [diag] run interval=15000 why=interval active=true inflight=false
++35.19s  [diag] notif FETCH from instance #1
++35.19s  REQ /api/notifications
++35.91s  [diag] run interval=15000 why=interval active=true inflight=false
++35.91s  REQ /api/dashboard
++44.31s  [diag] run interval=15000 why=relay active=true inflight=false
++44.31s  [diag] notif FETCH from instance #1
++44.31s  REQ /api/notifications
++44.31s  [diag] run interval=15000 why=relay active=true inflight=false
++44.31s  REQ /api/dashboard
++50.18s  [diag] run interval=15000 why=interval active=true inflight=false
++50.18s  [diag] notif FETCH from instance #1
++50.18s  REQ /api/notifications
++50.91s  [diag] run interval=15000 why=interval active=true inflight=false
++50.91s  REQ /api/dashboard
++59.31s  [diag] run interval=15000 why=relay active=true inflight=false
++59.31s  [diag] notif FETCH from instance #1
++59.31s  REQ /api/notifications
++59.31s  [diag] run interval=15000 why=relay active=true inflight=false
++59.31s  REQ /api/dashboard
+diag done

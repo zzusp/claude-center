@@ -142,8 +142,10 @@ export default function Notifications() {
     }
   }, []);
 
-  // 通知非高频写入，15s 轮询足够；relay 推送时会顺带触发额外刷新（usePolling 默认订阅）。
-  usePolling(refresh, [], 15000);
+  // 通知非高频写入，固定 15s 轮询即可，且要的就是「稳定 15s」节奏。这里显式不订阅 relay（relay:false）：
+  // relay 启用时项目频道每条事件（消息流 / worker 心跳 / 任务状态）都会触发 usePolling 快线刷新，
+  // 会把通知拉取打成亚秒~数秒的不规则高频；通知不需要亚秒级实时，下一轮 15s 轮询即可补齐。
+  usePolling(refresh, [], 15000, { relay: false });
 
 
   async function markRead(id?: string) {
