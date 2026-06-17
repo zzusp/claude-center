@@ -311,6 +311,31 @@ export type Conversation = {
   generating?: boolean;
 };
 
+// ===== 用户消息通知（029）。详见 packages/db/migrations/029_notifications.sql。 =====
+// 七种类型按 RBAC 范围 fanout 给收件人：task_* 给项目可见者（admin + 项目分配用户），
+// worker_* 给全部 admin。SSE / DB 中断不在此持久化（DB 断时也写不进），由前端瞬时合成展示。
+export type NotificationType =
+  | "task_claimed"
+  | "task_waiting"
+  | "task_success"
+  | "task_failed"
+  | "task_pr_created"
+  | "worker_online"
+  | "worker_offline";
+
+export type Notification = {
+  id: string;
+  user_id: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  link: string;
+  related_task_id: string | null;
+  related_worker_id: string | null;
+  read_at: string | null;
+  created_at: string;
+};
+
 export type ConversationMessage = {
   id: string;
   conversation_id: string;

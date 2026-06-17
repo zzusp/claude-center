@@ -17,6 +17,8 @@ import type {
   ConversationMessageRole,
   DirectCommand,
   DirectCommandName,
+  Notification,
+  NotificationType,
   Project,
   Role,
   Task,
@@ -683,6 +685,17 @@ export async function listWorkers(client: pg.Pool | pg.PoolClient): Promise<Work
 }
 
 export async function registerWorker(client: pg.Pool | pg.PoolClient, input: WorkerRegistration): Promise<Worker> {
+  // 通知判定：worker 首次注册或之前是 offline → online 翻转时落 worker_online 通知。
+  // 先看上一轮 last_seen_at 是否在 60s 内，再 upsert；窄查询无开销。
+  const prev = await client.query<{ last_seen_at: Date | null }>(
+    `SELECT last_seen_at FROM workers WHERE id = $1 LIMIT 1`,
+    [input.id]
+  );
+  const wasOnline = prev.rows[0]
+    ? prev.rows[0].last_seen_at !== null && Date.now() - new Date(prev.rows[0].last_seen_at).getTime() < 60_000
+    : false;
+  const isFirstSeen = prev.rows.length === 0;
+
   // working_state 不在这里写：只靠 INSERT 的表默认值（新 worker = idle）落初值，
   // ON CONFLICT 刻意不更新它，使本地/远程切换过的工作态在重连/重启后保留。
   const result = await client.query<Worker>(
@@ -717,7 +730,21 @@ export async function registerWorker(client: pg.Pool | pg.PoolClient, input: Wor
       input.claudePreCommand ?? ""
     ]
   );
-  return result.rows[0]!;
+  const worker = result.rows[0]!;
+  // offline→online 翻转或首次注册时给全部 admin 发一条上线通知。
+  // 单纯心跳保持在线（仍 online）不触发——避免每分钟一条。
+  if (isFirstSeen || !wasOnline) {
+    const displayName = worker.label || worker.name || worker.id.slice(0, 8);
+    await emitWorkerNotification(client, {
+      type: "worker_online",
+      workerId: worker.id,
+      title: isFirstSeen
+        ? `Worker「${displayName}」首次上线`
+        : `Worker「${displayName}」已重新上线`,
+      body: `主机：${worker.host_name}，版本：${worker.app_version}`
+    });
+  }
+  return worker;
 }
 
 export async function heartbeatWorker(client: pg.Pool | pg.PoolClient, workerId: string): Promise<void> {
@@ -727,6 +754,29 @@ export async function heartbeatWorker(client: pg.Pool | pg.PoolClient, workerId:
       WHERE id = $1`,
     [workerId]
   );
+}
+
+// Console 后台轮询用：把 status='online' 但 last_seen_at 已超过 60s 的 worker 翻为 offline 并发通知。
+// 用 status 字段做幂等门——同一 worker 仅在首次 stale 时翻一次，重启上线后由 registerWorker 翻回 online。
+// 返回本轮翻态的 worker 数量供日志。
+export async function sweepStaleWorkers(client: pg.Pool | pg.PoolClient): Promise<number> {
+  const result = await client.query<{ id: string; name: string; label: string | null; host_name: string }>(
+    `UPDATE workers
+        SET status = 'offline', updated_at = now()
+      WHERE status = 'online'
+        AND last_seen_at < now() - interval '60 seconds'
+      RETURNING id, name, label, host_name`
+  );
+  for (const row of result.rows) {
+    const displayName = row.label || row.name || row.id.slice(0, 8);
+    await emitWorkerNotification(client, {
+      type: "worker_offline",
+      workerId: row.id,
+      title: `Worker「${displayName}」已离线`,
+      body: `心跳超过 60 秒未更新，主机：${row.host_name}`
+    });
+  }
+  return result.rowCount ?? 0;
 }
 
 // 周期性刷新 worker 的动态信息（claude 版本 / 订阅 / 用量）与客户端策略。
@@ -967,7 +1017,29 @@ export async function claimNextTask(client: pg.Pool | pg.PoolClient, workerId: s
     return null;
   }
   await addTaskEvent(client, task.id, workerId, "claimed", "Worker 认领任务", {});
+  const workerName = await getWorkerDisplayName(client, workerId);
+  await emitTaskNotification(client, {
+    type: "task_claimed",
+    taskId: task.id,
+    projectId: task.project_id,
+    title: `任务「${task.title}」已被领取`,
+    body: `Worker ${workerName} 已认领该任务并开始执行。`
+  });
   return task;
+}
+
+// 仅供通知 fanout 用：取 worker 的显示名（label 优先 / 否则 name；都没有用 id 末段兜底）。
+async function getWorkerDisplayName(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<string> {
+  const result = await client.query<{ label: string | null; name: string }>(
+    `SELECT label, name FROM workers WHERE id = $1 LIMIT 1`,
+    [workerId]
+  );
+  const row = result.rows[0];
+  if (!row) return workerId.slice(0, 8);
+  return row.label || row.name || workerId.slice(0, 8);
 }
 
 export async function getTaskLocalPath(
@@ -1019,6 +1091,37 @@ export async function markTaskSuccess(
     [taskId, workerId, resultPayload, prUrl]
   );
   await addTaskEvent(client, taskId, workerId, "success", "Task completed", resultPayload);
+  const taskMeta = await getTaskMetaForNotify(client, taskId);
+  if (taskMeta) {
+    await emitTaskNotification(client, {
+      type: "task_success",
+      taskId,
+      projectId: taskMeta.project_id,
+      title: `任务「${taskMeta.title}」已完成`,
+      body: prUrl ? `Worker 已交付，PR 已建：${prUrl}` : `Worker 已完成执行。`
+    });
+    if (prUrl) {
+      await emitTaskNotification(client, {
+        type: "task_pr_created",
+        taskId,
+        projectId: taskMeta.project_id,
+        title: `任务「${taskMeta.title}」PR 已建`,
+        body: prUrl,
+        link: prUrl
+      });
+    }
+  }
+}
+
+async function getTaskMetaForNotify(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string
+): Promise<{ project_id: string; title: string } | null> {
+  const result = await client.query<{ project_id: string; title: string }>(
+    `SELECT project_id, title FROM tasks WHERE id = $1 LIMIT 1`,
+    [taskId]
+  );
+  return result.rows[0] ?? null;
 }
 
 export async function markTaskFailed(
@@ -1042,6 +1145,16 @@ export async function markTaskFailed(
     [taskId, workerId, errorMessage, resultPayload]
   );
   await addTaskEvent(client, taskId, workerId, "failed", errorMessage, resultPayload);
+  const taskMeta = await getTaskMetaForNotify(client, taskId);
+  if (taskMeta) {
+    await emitTaskNotification(client, {
+      type: "task_failed",
+      taskId,
+      projectId: taskMeta.project_id,
+      title: `任务「${taskMeta.title}」执行失败`,
+      body: errorMessage || "Worker 报告执行失败。"
+    });
+  }
 }
 
 // Console 请求取消在途任务:仅 claimed/running/waiting 可取消,打 cancel_requested_at 时间戳供 Worker 扫描。
@@ -1267,14 +1380,33 @@ export async function setTaskWaiting(
   workerId: string,
   sessionId: string | null
 ): Promise<void> {
-  await client.query(
-    `UPDATE tasks
+  // 仅当从非 waiting 转入 waiting 才发通知，避免 worker 周期续接里反复打 waiting 翻新触发轰炸。
+  // RETURNING 透出旧 status（FROM 子查询拿原值），调用方据此判断是否首次进入 waiting。
+  const result = await client.query<{ prev_status: string | null }>(
+    `WITH prev AS (
+       SELECT status AS prev_status FROM tasks WHERE id = $1 AND claimed_by = $2
+     )
+     UPDATE tasks
         SET status = 'waiting',
             claude_session_id = COALESCE($3, claude_session_id),
             updated_at = now()
-      WHERE id = $1 AND claimed_by = $2`,
+      WHERE id = $1 AND claimed_by = $2
+      RETURNING (SELECT prev_status FROM prev) AS prev_status`,
     [taskId, workerId, sessionId]
   );
+  const prevStatus = result.rows[0]?.prev_status ?? null;
+  if (prevStatus !== "waiting") {
+    const taskMeta = await getTaskMetaForNotify(client, taskId);
+    if (taskMeta) {
+      await emitTaskNotification(client, {
+        type: "task_waiting",
+        taskId,
+        projectId: taskMeta.project_id,
+        title: `任务「${taskMeta.title}」等待回复`,
+        body: "Worker 提出了一个问题，请到任务详情「对话」里回复。"
+      });
+    }
+  }
 }
 
 // 任务执行会话记录（Claude Code session transcript 全文）的同步落库。Worker 执行期间周期 + 终态调用，
@@ -2582,6 +2714,125 @@ export async function deleteOrphanedAttachments(
     [String(olderThanHours), limit]
   );
   return result.rowCount ?? 0;
+}
+
+// ===== 用户消息通知（029_notifications.sql）。详见 docs/spec 或建表迁移。 =====
+//
+// 写入策略：
+// - task_*：fanout 给「能看到该项目的用户」（admin 全部 + user_project_links 关联用户）。
+// - worker_*：fanout 给全部 admin（worker 是机群资源，非项目维度）。
+// 所有 insert 都用 INSERT...SELECT，避免在 worker / UI 调用方循环出 N 次 query。
+// 写入失败 / 表不存在不抛错——通知是辅助信号，不该把主路径拖崩；调用方一律忽略返回值。
+
+type EmitTaskNotificationInput = {
+  type: Extract<NotificationType, "task_claimed" | "task_waiting" | "task_success" | "task_failed" | "task_pr_created">;
+  taskId: string;
+  projectId: string;
+  title: string;
+  body?: string;
+  link?: string;
+};
+
+// 给「能看到该项目」的所有用户（admin + user_project_links 关联用户）落通知。
+// 重复 fanout 时（同 taskId+type）按时间顺序累积，UI 侧按 created_at 显示最新的即可。
+export async function emitTaskNotification(
+  client: pg.Pool | pg.PoolClient,
+  input: EmitTaskNotificationInput
+): Promise<void> {
+  try {
+    await client.query(
+      `INSERT INTO notifications (user_id, type, title, body, link, related_task_id)
+       SELECT u.id, $1, $2, $3, $4, $5
+         FROM users u
+        WHERE u.disabled = false
+          AND (
+            u.role = 'admin'
+            OR EXISTS (
+              SELECT 1 FROM user_project_links upl
+               WHERE upl.user_id = u.id AND upl.project_id = $6
+            )
+          )`,
+      [input.type, input.title, input.body ?? "", input.link ?? `/tasks/${input.taskId}`, input.taskId, input.projectId]
+    );
+  } catch (error) {
+    // 表不存在 / 临时连接问题：不阻塞主路径。worker 周期会反复触发，丢一两条无伤大雅。
+    console.warn(`[notifications] emitTaskNotification failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+// 给全部活跃 admin 落 worker 上下线通知。worker_* 不针对项目。
+export async function emitWorkerNotification(
+  client: pg.Pool | pg.PoolClient,
+  input: {
+    type: Extract<NotificationType, "worker_online" | "worker_offline">;
+    workerId: string;
+    title: string;
+    body?: string;
+    link?: string;
+  }
+): Promise<void> {
+  try {
+    await client.query(
+      `INSERT INTO notifications (user_id, type, title, body, link, related_worker_id)
+       SELECT u.id, $1, $2, $3, $4, $5
+         FROM users u
+        WHERE u.disabled = false AND u.role = 'admin'`,
+      [input.type, input.title, input.body ?? "", input.link ?? `/workers`, input.workerId]
+    );
+  } catch (error) {
+    console.warn(`[notifications] emitWorkerNotification failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+// 用户铃铛下拉用：按时间倒序列出该用户的最近通知（默认 30 条）。
+export async function listNotifications(
+  client: pg.Pool | pg.PoolClient,
+  userId: string,
+  limit = 30
+): Promise<Notification[]> {
+  const result = await client.query<Notification>(
+    `SELECT * FROM notifications
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [userId, limit]
+  );
+  return result.rows;
+}
+
+// 铃铛红点用：返回未读条数。
+export async function countUnreadNotifications(
+  client: pg.Pool | pg.PoolClient,
+  userId: string
+): Promise<number> {
+  const result = await client.query<{ count: number }>(
+    `SELECT count(*)::int AS count FROM notifications WHERE user_id = $1 AND read_at IS NULL`,
+    [userId]
+  );
+  return result.rows[0]?.count ?? 0;
+}
+
+// 单条标记已读：仅本人未读条目命中（已读再点幂等）。
+export async function markNotificationRead(
+  client: pg.Pool | pg.PoolClient,
+  userId: string,
+  notificationId: string
+): Promise<void> {
+  await client.query(
+    `UPDATE notifications SET read_at = now() WHERE id = $1 AND user_id = $2 AND read_at IS NULL`,
+    [notificationId, userId]
+  );
+}
+
+// 全部标记已读。
+export async function markAllNotificationsRead(
+  client: pg.Pool | pg.PoolClient,
+  userId: string
+): Promise<void> {
+  await client.query(
+    `UPDATE notifications SET read_at = now() WHERE user_id = $1 AND read_at IS NULL`,
+    [userId]
+  );
 }
 
 // Worker resume 路径用：聚合「上一次 resumed/rerun_started 事件之后」所有 user
