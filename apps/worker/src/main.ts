@@ -251,7 +251,7 @@ function windowHtml(): string {
             <span class="brand-mark">CC</span>
             <div>
               <h1 class="brand-title">ClaudeCenter Worker</h1>
-              <p class="brand-sub"><span class="live-dot" id="relayDot" title="SSE 实时中转连接状态"></span><span id="relay">连接中…</span> · <span id="meta">—</span></p>
+              <p class="brand-sub"><span class="live-dot" id="relayDot" title="SSE 连接状态"></span><span id="relay">连接中…</span> · <span id="meta">—</span></p>
             </div>
           </div>
         </header>

@@ -639,6 +639,108 @@ export async function listTaskStatsForUser(
   };
 }
 
+// 总览卡「今日新任务」与 7 天 sparkline：用 todayStartIso 反推 7 个 [start, start+1d) 桶，
+// 每桶 count 一次，缺失自然落 0。返回 number[]，长度 7，下标 0 = 6 天前，下标 6 = 今天。
+// RBAC 与 listTaskStatsForUser 一致：admin 全开；非 admin JOIN user_project_links 过滤。
+export async function listTaskCreationLast7ForUser(
+  client: pg.Pool | pg.PoolClient,
+  user: { id: string; role: Role },
+  todayStartIso: string
+): Promise<number[]> {
+  const isAdmin = user.role === "admin";
+  const scopeJoin = isAdmin
+    ? ""
+    : "JOIN user_project_links upl ON upl.project_id = tasks.project_id AND upl.user_id = $2";
+  const params: unknown[] = [todayStartIso];
+  if (!isAdmin) params.push(user.id);
+
+  const result = await client.query<{ cnt: number }>(
+    `SELECT (
+       SELECT count(*)::int
+         FROM tasks ${scopeJoin}
+        WHERE tasks.created_at >= gs
+          AND tasks.created_at < gs + interval '1 day'
+     ) AS cnt
+       FROM generate_series(
+         $1::timestamptz - interval '6 days',
+         $1::timestamptz,
+         interval '1 day'
+       ) AS gs
+      ORDER BY gs`,
+    params
+  );
+  return result.rows.map((row) => row.cnt);
+}
+
+// 总览卡「今日完成」7 天 sparkline：按 finished_at 切 7 桶，status IN ('success','merged') 视为完成。
+// 注意：tasks 没有独立 merged_at 字段，success → merged 状态翻转不重置 finished_at，所以
+// merged 任务的 finished_at = 首次进 success 的时刻；这里口径是「当日进入 success 且现在已合并」也算。
+// RBAC 与 listTaskCreationLast7ForUser 一致。
+export async function listTaskCompletionLast7ForUser(
+  client: pg.Pool | pg.PoolClient,
+  user: { id: string; role: Role },
+  todayStartIso: string
+): Promise<number[]> {
+  const isAdmin = user.role === "admin";
+  const scopeJoin = isAdmin
+    ? ""
+    : "JOIN user_project_links upl ON upl.project_id = tasks.project_id AND upl.user_id = $2";
+  const params: unknown[] = [todayStartIso];
+  if (!isAdmin) params.push(user.id);
+
+  const result = await client.query<{ cnt: number }>(
+    `SELECT (
+       SELECT count(*)::int
+         FROM tasks ${scopeJoin}
+        WHERE tasks.finished_at >= gs
+          AND tasks.finished_at < gs + interval '1 day'
+          AND tasks.status IN ('success', 'merged')
+     ) AS cnt
+       FROM generate_series(
+         $1::timestamptz - interval '6 days',
+         $1::timestamptz,
+         interval '1 day'
+       ) AS gs
+      ORDER BY gs`,
+    params
+  );
+  return result.rows.map((row) => row.cnt);
+}
+
+// 总览卡「今日合并」7 天 sparkline：按 finished_at 切 7 桶，status='merged' 视为合并。
+// 同上：finished_at 实际是首次完成时刻；语义为「当日完成的任务中现处于 merged 状态的数量」，
+// 不等于「当日 PR 被 merge 的数量」（需独立 merged_at 字段，未来若需可加 migration）。
+export async function listTaskMergedLast7ForUser(
+  client: pg.Pool | pg.PoolClient,
+  user: { id: string; role: Role },
+  todayStartIso: string
+): Promise<number[]> {
+  const isAdmin = user.role === "admin";
+  const scopeJoin = isAdmin
+    ? ""
+    : "JOIN user_project_links upl ON upl.project_id = tasks.project_id AND upl.user_id = $2";
+  const params: unknown[] = [todayStartIso];
+  if (!isAdmin) params.push(user.id);
+
+  const result = await client.query<{ cnt: number }>(
+    `SELECT (
+       SELECT count(*)::int
+         FROM tasks ${scopeJoin}
+        WHERE tasks.finished_at >= gs
+          AND tasks.finished_at < gs + interval '1 day'
+          AND tasks.status = 'merged'
+     ) AS cnt
+       FROM generate_series(
+         $1::timestamptz - interval '6 days',
+         $1::timestamptz,
+         interval '1 day'
+       ) AS gs
+      ORDER BY gs`,
+    params
+  );
+  return result.rows.map((row) => row.cnt);
+}
+
 export async function listTaskEvents(client: pg.Pool | pg.PoolClient, taskId: string): Promise<TaskEvent[]> {
   const result = await client.query<TaskEvent>(
     `SELECT * FROM task_events WHERE task_id = $1 ORDER BY created_at ASC`,

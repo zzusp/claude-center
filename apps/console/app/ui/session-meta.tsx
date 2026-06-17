@@ -18,13 +18,13 @@ const MODEL_LABEL: Record<TaskModel, string> = {
   haiku: "Haiku"
 };
 
-// 通道徽章配色 / 文案 / 图标：connected=SSE 实时通道；其余降级到 DB 轮询语义。
+// 通道徽章配色 / 文案 / 图标：connected=SSE 连接；其余降级到 DB 轮询语义。
 // disabled 与 connecting 都以「数据库轮询」展示——前者是未配置中转、后者是首连未通；
 // 用户视角都是「现在不是 SSE 在推」。reconnecting 单独显示「重连中」以解释偶发卡顿。
 function channelOf(status: RelayStatus): { icon: typeof Radio; label: string; tone: string; title: string } {
   switch (status) {
     case "connected":
-      return { icon: Radio, label: "SSE 实时", tone: "success", title: "通过中转 SSE 推送，亚秒级实时" };
+      return { icon: Radio, label: "SSE 连接", tone: "success", title: "通过中转 SSE 推送，亚秒级实时" };
     case "reconnecting":
       return { icon: RotateCw, label: "SSE 重连中", tone: "pending", title: "SSE 中转断开，正在重连；当前由数据库轮询兜底" };
     case "connecting":

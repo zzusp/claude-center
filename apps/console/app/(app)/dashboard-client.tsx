@@ -12,11 +12,10 @@ import { emptyOverview, SPARK_CAP, type Overview } from "../ui/dashboard-shared"
 export default function DashboardClient() {
   const router = useRouter();
   const [overview, setOverview] = useState<Overview>(emptyOverview);
-  const [history, setHistory] = useState<Record<"online" | "pending" | "running" | "failed", number[]>>({
-    online: [],
-    pending: [],
-    running: [],
-    failed: []
+  // 四张卡的 sparkline 现在分两类：在线 Worker 仍是浏览器侧 15s × 24 点的 6 分钟窗口累积；
+  // 今日新任务 / 今日完成 / 今日合并 都走后端 daily* 字段（真实 7 日历史）。
+  const [history, setHistory] = useState<Record<"online", number[]>>({
+    online: []
   });
   const [synced, setSynced] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
@@ -34,10 +33,7 @@ export default function DashboardClient() {
       if (!isActive()) return;
       setOverview(data);
       setHistory((prev) => ({
-        online: [...prev.online, data.summary.onlineWorkers].slice(-SPARK_CAP),
-        pending: [...prev.pending, data.summary.pendingTasks].slice(-SPARK_CAP),
-        running: [...prev.running, data.summary.runningTasks].slice(-SPARK_CAP),
-        failed: [...prev.failed, data.summary.failedTasks].slice(-SPARK_CAP)
+        online: [...prev.online, data.summary.onlineWorkers].slice(-SPARK_CAP)
       }));
       setSynced(true);
       setLastSyncAt(new Date().toISOString());

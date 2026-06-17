@@ -14,9 +14,9 @@ import type {
 } from "@claude-center/db";
 import {
   Activity, ArrowDown, ArrowUp, Boxes, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert,
-  Clock, Cpu, Database, ExternalLink, FolderGit2, GitBranch, Inbox, LayoutGrid, ListTodo, LogOut,
-  MessageSquare, Network, Pencil, Plus, Power, RadioTower, RotateCcw, Save, Search, Send, Server,
-  ShieldCheck, Tag, Trash2, UserRound, Users, X
+  Clock, Cpu, Database, ExternalLink, FolderGit2, GitBranch, GitMerge, Inbox, LayoutGrid, ListTodo,
+  LogOut, MessageSquare, Network, Pencil, Plus, Power, RadioTower, RotateCcw, Save, Search, Send,
+  Server, ShieldCheck, Tag, Trash2, UserRound, Users, X
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -26,13 +26,34 @@ import {
   fmtDateTime, fmtTime, metaOf, postJson, type Tone
 } from "./shared";
 import {
-  ROLE_LABEL, ROLE_OPTIONS, SPARK_CAP, TONE_COLOR, emptyOverview, fmtAgo, syncAgo,
+  ROLE_LABEL, ROLE_OPTIONS, SPARK_CAP, TONE_COLOR, emptyOverview, syncAgo,
   type CurrentUser, type Health, type Overview, type ViewKey
 } from "./dashboard-shared";
 import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
 import { Drawer, Select } from "./controls";
-import { Donut, RelayConnectionsCard, RuntimeHealth, StatCard } from "./overview-widgets";
+import { Donut, RuntimeHealth, StatCard } from "./overview-widgets";
+import { WorkingStateBadge } from "./worker-shared";
 
+
+// Worker 行内并发用量指示：active/max 的 mini bar + "x/y" 文案。
+// max<=0 不渲染（异常配置时不喧宾夺主）；active 被 clamp 到 [0, max] 防止越界。
+// tone 阈值：满载 failed，≥70% pending，其余 success——跟 sm-chip-usage 一致。
+function WorkerUsage({ active, max }: { active: number; max: number }) {
+  if (!Number.isFinite(max) || max <= 0) return null;
+  const safeActive = Math.max(0, Math.min(active, max));
+  const pct = Math.round((safeActive / max) * 100);
+  const tone = safeActive >= max ? "failed" : safeActive >= Math.max(1, Math.round(max * 0.7)) ? "pending" : "success";
+  return (
+    <span className="worker-usage" data-tone={tone} title={`并发 ${safeActive} / ${max}`}>
+      <span className="worker-usage-bar">
+        <span className="worker-usage-fill" style={{ width: `${pct}%` }} />
+      </span>
+      <span className="worker-usage-text">
+        {safeActive}/{max}
+      </span>
+    </span>
+  );
+}
 
 function DashboardView({
   overview,
@@ -44,7 +65,7 @@ function DashboardView({
   onOpenTask
 }: {
   overview: Overview;
-  history: Record<"online" | "pending" | "running" | "failed", number[]>;
+  history: Record<"online", number[]>;
   statusCounts: Record<string, number>;
   synced: boolean;
   lastSyncAt: string | null;
@@ -101,24 +122,24 @@ function DashboardView({
         />
         <StatCard
           icon={<ListTodo size={16} />}
-          label="待处理任务"
-          value={overview.summary.pendingTasks}
-          series={history.pending}
+          label="今日新任务"
+          value={overview.summary.todayNewTasks}
+          series={overview.dailyNewTasks}
           tone="pending"
         />
         <StatCard
-          icon={<Activity size={16} />}
-          label="执行中"
-          value={overview.summary.runningTasks}
-          series={history.running}
-          tone="running"
+          icon={<Check size={16} />}
+          label="今日完成"
+          value={overview.summary.todayCompletedTasks}
+          series={overview.dailyCompletedTasks}
+          tone="success"
         />
         <StatCard
-          icon={<CircleAlert size={16} />}
-          label="失败任务"
-          value={overview.summary.failedTasks}
-          series={history.failed}
-          tone="failed"
+          icon={<GitMerge size={16} />}
+          label="今日合并"
+          value={overview.summary.todayMergedTasks}
+          series={overview.dailyMergedTasks}
+          tone="merged"
         />
       </div>
 
@@ -231,14 +252,16 @@ function DashboardView({
               ) : (
                 <div className="worker-rows">
                   {overview.workers.slice(0, 6).map((worker) => (
-                    <div className="worker-row" key={worker.id}>
+                    <div className="worker-row" data-layout="split" key={worker.id}>
                       <StatusDot status={worker.status} pulse={worker.status === "online"} />
                       <span className="v" style={{ color: "var(--text-1)", fontWeight: 600 }}>
                         {worker.name}
                       </span>
-                      <span className="v mono" style={{ marginLeft: "auto" }}>
-                        {fmtAgo(worker.last_seen_at)}
+                      <span className="v mono" title={`claude ${worker.claude_version ?? "未知"}`}>
+                        claude {worker.claude_version ?? "—"}
                       </span>
+                      <WorkingStateBadge state={worker.working_state} />
+                      <WorkerUsage active={worker.active_task_count ?? 0} max={worker.max_parallel} />
                     </div>
                   ))}
                 </div>
@@ -247,8 +270,6 @@ function DashboardView({
           </section>
         </div>
       </div>
-
-      <RelayConnectionsCard />
     </>
   );
 }

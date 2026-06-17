@@ -100,7 +100,7 @@ function ephemeralFromRelay(status: RelayStatus): EphemeralItem | null {
     return {
       id: "ephemeral:sse",
       type: "sse_disconnect",
-      title: "SSE 实时通道中断",
+      title: "SSE 连接中断",
       body: "正在重连。数据同步已退回数据库轮询，功能不降级。"
     };
   }

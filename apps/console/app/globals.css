@@ -302,7 +302,7 @@ a:hover {
 }
 
 .view {
-  padding: 24px 32px 48px;
+  padding: 10px 32px 48px;
   display: flex;
   flex-direction: column;
   gap: 24px;
@@ -545,6 +545,34 @@ a:hover {
   box-shadow: var(--shadow-2);
 }
 
+/* 数据刷新时的一次性高光描边：React 端以 key 重建本元素触发 animation。 */
+.stat-pulse {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  animation: cc-card-pulse 700ms ease-out;
+}
+@keyframes cc-card-pulse {
+  0% {
+    box-shadow: inset 0 0 0 2px var(--pulse-color, currentColor);
+    opacity: 0.85;
+  }
+  60% {
+    opacity: 0.4;
+  }
+  100% {
+    box-shadow: inset 0 0 0 2px transparent;
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stat-pulse {
+    animation: none;
+    display: none;
+  }
+}
+
 .stat-head {
   display: flex;
   align-items: center;
@@ -593,6 +621,28 @@ a:hover {
   width: 96px;
   height: 28px;
   overflow: visible;
+}
+
+/* sparkline 末端圆点呼吸：让"数据还在跑"的体感不至于太冷。 */
+.spark-tip {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cc-spark-tip 1.8s ease-in-out infinite;
+}
+@keyframes cc-spark-tip {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(1.35);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spark-tip {
+    animation: none;
+  }
 }
 
 /* ---------------- Status badge / dot ---------------- */
@@ -1340,6 +1390,50 @@ table.table {
 }
 
 .worker-row .v.mono {
+  color: var(--text-3);
+}
+
+/* 总览页 Worker 概览专用：行内分 4 信息栏（dot | 名字 | claude 版本 | 工作状态 | bar），
+   4 个 1fr 等分剩余空间，所有行的分栏边界对齐，bar 起点也齐平；bar 在自己 cell 内左对齐。
+   只针对带 data-layout="split" 的 worker-row 生效，不影响 workers 详情页那种纯 icon+text 行。 */
+.worker-row[data-layout="split"] {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+.worker-row[data-layout="split"] .worker-usage,
+.worker-row[data-layout="split"] .badge {
+  justify-self: start;
+}
+
+/* Worker 行内并发用量 mini 条：active/max 比例 + tone 着色（满载红、≥70% 黄、其余绿）。
+   视觉对齐 session-meta 的 sm-usage-bar，但保持独立命名空间，避免互相侵入。 */
+.worker-usage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.worker-usage[data-tone="success"] { color: var(--success); }
+.worker-usage[data-tone="pending"] { color: var(--pending); }
+.worker-usage[data-tone="failed"]  { color: var(--failed); }
+.worker-usage-bar {
+  position: relative;
+  width: 80px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.worker-usage-fill {
+  display: block;
+  height: 100%;
+  background: currentColor;
+  opacity: 0.55;
+  transition: width 240ms ease;
+}
+.worker-usage-text {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
   color: var(--text-3);
 }
 
@@ -4404,78 +4498,6 @@ a.ds-v:hover {
   display: flex;
   flex-direction: column;
   gap: 20px;
-}
-
-/* ---------------- SSE 中转连接（总览页 admin 区块） ---------------- */
-
-.relay-conn-body {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.relay-conn-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.relay-conn-stat {
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md, 8px);
-  background: var(--surface-2, rgba(0, 0, 0, 0.02));
-}
-
-.relay-conn-stat-label {
-  font-size: 12px;
-  color: var(--text-3);
-  margin-bottom: 4px;
-}
-
-.relay-conn-stat-value {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-1);
-}
-
-.relay-conn-stat-sub {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--text-4);
-}
-
-.relay-conn-table th,
-.relay-conn-table td {
-  vertical-align: top;
-}
-
-.relay-conn-channels {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  max-width: 420px;
-}
-
-/* 行内代码风 chip：频道名等短标识。复用 .mono 拿等宽字体。 */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-2, rgba(0, 0, 0, 0.03));
-  font-size: 11.5px;
-  color: var(--text-2);
-  white-space: nowrap;
-}
-
-@media (max-width: 1024px) {
-  .relay-conn-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 /* 实时对话 / 任务详情·执行记录顶部元信息条：通道徽章 + 模型 + Worker + 套餐用量 + 上下文/累计 token。

@@ -1,18 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Clock, Database, Network, RadioTower } from "lucide-react";
-import { Empty, KvRow, type Tone } from "./shared";
+import { useEffect, useRef, useState } from "react";
+import { Clock, Database, RadioTower } from "lucide-react";
+import { KvRow, type Tone } from "./shared";
 import { TONE_COLOR, fmtAgo, syncAgo, type Health } from "./dashboard-shared";
-import { POLL_INTERVAL_MS } from "../lib/use-polling";
 import { useRelayStatus, type RelayStatus as RelayConnState } from "../lib/use-relay";
+import { useCountUp } from "../lib/use-count-up";
 
 // 总览页展示型小部件：同步/中转状态、运行健康卡、统计卡、迷你折线、状态环。
 // 从 overview.tsx 抽出（无业务状态，纯按 props 渲染）。
 
 // SSE 中转连接状态 → 展示元数据（label/tone/是否脉冲）。tone 复用 .dot[data-tone] 配色。
 const RELAY_META: Record<RelayConnState, { label: string; tone: string; live: boolean }> = {
-  connected: { label: "实时通道已连通", tone: "online", live: true },
+  connected: { label: "已连通", tone: "online", live: true },
   connecting: { label: "连接中", tone: "running", live: true },
   reconnecting: { label: "重连中", tone: "pending", live: true },
   disabled: { label: "未启用（纯轮询）", tone: "offline", live: false }
@@ -53,7 +53,7 @@ export function RelayStatus() {
   const status = useRelayStatus();
   const meta = RELAY_META[status];
   return (
-    <span className="sync" data-live={status === "connected" ? "on" : "off"} title="SSE 实时中转连接状态">
+    <span className="sync" data-live={status === "connected" ? "on" : "off"} title="SSE 连接状态">
       <span className={`dot${meta.live ? " pulse" : ""}`} data-tone={meta.tone} />
       <span className="sync-text">SSE {meta.label}</span>
     </span>
@@ -74,12 +74,59 @@ export function RuntimeHealth({
   const intervalSec = sched?.intervalMs ? Math.round(sched.intervalMs / 1000) : null;
   const relay = useRelayStatus();
   const relayMeta = RELAY_META[relay];
+  // SSE 中转摘要(admin only,API 自带 403 守卫):enabled=false 或 403 时 summary=null,几行 SSE KV 自动不渲染。
+  const summary = useRelaySummary();
+
+  const realtimeRows: { k: string; v: React.ReactNode; mono?: boolean }[] = [
+    {
+      k: "连接状态",
+      v: (
+        <span className="relay-inline">
+          <span className={`dot${relayMeta.live ? " pulse" : ""}`} data-tone={relayMeta.tone} />
+          {relayMeta.label}
+        </span>
+      )
+    }
+  ];
+  if (summary && summary.kind === "ok") {
+    realtimeRows.push(
+      {
+        k: "在线连接",
+        v: (
+          <span className="relay-inline">
+            <b style={{ color: "var(--text-1)", fontVariantNumeric: "tabular-nums" }}>{summary.clients}</b>
+            <span style={{ color: "var(--text-4)", fontSize: 11.5 }}>
+              · {summary.workers} worker · {summary.tickets} 浏览器
+            </span>
+          </span>
+        )
+      },
+      {
+        k: "实时事件",
+        v: (
+          <span className="relay-inline" style={{ fontVariantNumeric: "tabular-nums" }}>
+            <RelayEventsValue eventSeq={summary.eventSeq} rate={summary.rate} />
+          </span>
+        )
+      },
+      {
+        k: "占用频道",
+        v: (
+          <span className="relay-inline" style={{ fontVariantNumeric: "tabular-nums" }}>
+            <RelayChannelsValue count={summary.channels} />
+          </span>
+        )
+      }
+    );
+  } else if (summary && summary.kind === "error") {
+    realtimeRows.push({ k: "中转明细", v: <span style={{ color: "var(--failed)" }}>{summary.error}</span> });
+  }
 
   return (
     <section className="health-section">
       <div className="section-head">
         <h2 className="section-title">系统运行状态</h2>
-        <span className="section-sub">数据库 · 调度器 · 实时同步</span>
+        <span className="section-sub">数据库 · 调度器 · SSE 连接</span>
       </div>
       <div className="grid-3">
         <HealthCard
@@ -108,22 +155,10 @@ export function RuntimeHealth({
         />
         <HealthCard
           icon={<RadioTower size={16} />}
-          title="实时同步"
+          title="SSE 连接"
           ok={synced}
-          okLabel={synced ? "同步中" : "已断开"}
-          rows={[
-            { k: "轮询节奏", v: `每 ${Math.round(POLL_INTERVAL_MS / 1000)}s` },
-            { k: "上次同步", v: lastSyncAt ? fmtAgo(lastSyncAt) : "—" },
-            {
-              k: "SSE 中转",
-              v: (
-                <span className="relay-inline">
-                  <span className={`dot${relayMeta.live ? " pulse" : ""}`} data-tone={relayMeta.tone} />
-                  {relayMeta.label}
-                </span>
-              )
-            }
-          ]}
+          okLabel={synced ? (lastSyncAt ? `同步中 · ${fmtAgo(lastSyncAt)}` : "同步中") : "已断开"}
+          rows={realtimeRows}
         />
       </div>
     </section>
@@ -143,6 +178,7 @@ export function HealthCard({
   okLabel: string;
   rows: { k: string; v: React.ReactNode; mono?: boolean }[];
 }) {
+  // 健康时绿点呼吸（cc-breathe + cc-ring 复用），异常时红点静态——避免红色长时间闪烁喧宾夺主。
   return (
     <section className="card">
       <div className="card-head">
@@ -151,7 +187,7 @@ export function HealthCard({
           {title}
         </h2>
         <span className="badge" data-tone={ok ? "success" : "failed"}>
-          <span className="glyph">{ok ? "●" : "✕"}</span>
+          <span className={`dot${ok ? " pulse" : ""}`} data-tone={ok ? "online" : "failed"} />
           {okLabel}
         </span>
       </div>
@@ -184,8 +220,32 @@ export function StatCard({
   const prev = series.length >= 2 ? series[series.length - 2] ?? value : value;
   const delta = value - prev;
   const trend = delta === 0 ? "较昨日 持平" : `较昨日 ${delta > 0 ? "+" : "-"}${Math.abs(delta)}`;
+  const display = useCountUp(value);
+  // 数值变化时切换 pulseKey，触发 .stat-pulse 重建以再次跑一次性 cc-card-pulse 描边。
+  // 首次挂载不算"刷新"，跳过。
+  const [pulseKey, setPulseKey] = useState(0);
+  const firstRef = useRef(true);
+  const prevValueRef = useRef(value);
+  useEffect(() => {
+    if (firstRef.current) {
+      firstRef.current = false;
+      prevValueRef.current = value;
+      return;
+    }
+    if (prevValueRef.current !== value) {
+      prevValueRef.current = value;
+      setPulseKey((n) => n + 1);
+    }
+  }, [value]);
   return (
     <article className="stat-card">
+      {pulseKey > 0 ? (
+        <span
+          key={pulseKey}
+          className="stat-pulse"
+          style={{ ["--pulse-color" as never]: TONE_COLOR[tone] } as React.CSSProperties}
+        />
+      ) : null}
       <div className="stat-head">
         <span className="ico" style={{ color: TONE_COLOR[tone] }}>
           {icon}
@@ -193,7 +253,7 @@ export function StatCard({
         {label}
       </div>
       <div className="stat-value">
-        {value}
+        {display}
         {typeof total === "number" ? <span className="unit">/ {total}</span> : null}
       </div>
       <div className="stat-foot">
@@ -230,7 +290,7 @@ export function Sparkline({ data, tone }: { data: number[]; tone: Tone }) {
     <svg className="spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
       <path d={area} fill={color} opacity={0.08} />
       <path d={line} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={last[0]} cy={last[1]} r={2} fill={color} />
+      <circle className="spark-tip" cx={last[0]} cy={last[1]} r={2.5} fill={color} />
     </svg>
   );
 }
@@ -299,48 +359,48 @@ export function Donut({
   );
 }
 
-// SSE 中转连接明细卡片（admin only）：30s 轮询 /api/relay/connections。
-//   - 非 admin → API 返回 403，本卡不渲染（避免给非管理员暴露后端 channel 命名）
-//   - relay 未配 URL/PUBLISH_TOKEN → API 返回 { enabled:false }，不渲染
-//   - 其它错误 → 渲染卡片但 body 显示报错（便于发现 relay 不健康）
-const RELAY_CONN_POLL_MS = 30_000;
-
-type RelayConnection = {
-  id: number;
-  source: "worker" | "ticket";
-  channels: string[];
-  connectedAt: number;
-  lastEventId?: string;
-};
-
-type RelayConnectionsState =
-  | { kind: "error"; error: string }
-  | { kind: "ok"; uptimeMs: number; eventSeq: number; clients: RelayConnection[] };
-
-// 持续时长（ms）→ "12s" / "3m 20s" / "1h 14m"，KV / 表格列共用。
-function fmtDuration(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) {
-    return "—";
-  }
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) {
-    return `${sec}s`;
-  }
-  const min = Math.floor(sec / 60);
-  if (min < 60) {
-    const rest = sec % 60;
-    return rest ? `${min}m ${rest}s` : `${min}m`;
-  }
-  const hr = Math.floor(min / 60);
-  const restMin = min % 60;
-  return restMin ? `${hr}h ${restMin}m` : `${hr}h`;
+// 实时事件 KV 值：累计 CountUp + 每秒速率（rate 仅在第二次采样后才非 null）。
+function RelayEventsValue({ eventSeq, rate }: { eventSeq: number; rate: number | null }) {
+  const events = useCountUp(eventSeq);
+  const rateLabel = rate == null ? null : rate >= 10 ? rate.toFixed(0) : rate.toFixed(1);
+  return (
+    <>
+      <b style={{ color: "var(--text-1)" }}>{events.toLocaleString()}</b>
+      {rateLabel ? (
+        <span style={{ color: "var(--text-4)", fontSize: 11.5 }}>· {rateLabel}/s</span>
+      ) : null}
+    </>
+  );
 }
 
-export function RelayConnectionsCard() {
-  const [data, setData] = useState<RelayConnectionsState | null>(null);
-  const [hidden, setHidden] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
+function RelayChannelsValue({ count }: { count: number }) {
+  const channels = useCountUp(count);
+  return <b style={{ color: "var(--text-1)" }}>{channels}</b>;
+}
 
+// SSE 中转摘要（精简版）：并入 RuntimeHealth 的"SSE 连接"卡片。
+// - API 返回 403（非 admin）/ { enabled:false } → 返回 null，SSE 行不渲染（普通用户无感）。
+// - 错误 → kind:"error"，上层显示一条说明（便于发现 relay 不健康）。
+// - OK → kind:"ok"，上层渲染"在线连接 / 实时事件 / 占用频道"三行。
+type RelaySummaryState =
+  | {
+      kind: "ok";
+      clients: number;
+      workers: number;
+      tickets: number;
+      channels: number;
+      eventSeq: number;
+      rate: number | null;
+    }
+  | { kind: "error"; error: string };
+
+const RELAY_SUMMARY_POLL_MS = 30_000;
+
+type RelayConnectionShape = { source: "worker" | "ticket"; channels: string[] };
+
+function useRelaySummary(): RelaySummaryState | null {
+  const [state, setState] = useState<RelaySummaryState | null>(null);
+  const prevRef = useRef<{ seq: number; ts: number } | null>(null);
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -348,161 +408,56 @@ export function RelayConnectionsCard() {
         const res = await fetch("/api/relay/connections", { cache: "no-store" });
         if (cancelled) return;
         if (res.status === 403) {
-          setHidden(true);
+          setState(null);
           return;
         }
         const raw = (await res.json()) as
           | { enabled: false }
-          | { enabled: true; error?: string; uptimeMs?: number; eventSeq?: number; clients?: RelayConnection[] };
+          | { enabled: true; error?: string; eventSeq?: number; clients?: RelayConnectionShape[] };
         if (cancelled) return;
         if (!raw.enabled) {
-          setHidden(true);
+          setState(null);
           return;
         }
         if (typeof raw.error === "string") {
-          setData({ kind: "error", error: raw.error });
-        } else {
-          setData({
-            kind: "ok",
-            uptimeMs: raw.uptimeMs ?? 0,
-            eventSeq: raw.eventSeq ?? 0,
-            clients: raw.clients ?? []
-          });
+          setState({ kind: "error", error: raw.error });
+          return;
         }
-        setNow(Date.now());
+        const seq = raw.eventSeq ?? 0;
+        const tsNow = Date.now();
+        const prev = prevRef.current;
+        const rate =
+          prev && tsNow > prev.ts && seq >= prev.seq ? (seq - prev.seq) / ((tsNow - prev.ts) / 1000) : null;
+        prevRef.current = { seq, ts: tsNow };
+        const clients = raw.clients ?? [];
+        const channelSet = new Set<string>();
+        let workers = 0;
+        let tickets = 0;
+        for (const c of clients) {
+          for (const ch of c.channels) channelSet.add(ch);
+          if (c.source === "worker") workers += 1;
+          else tickets += 1;
+        }
+        setState({
+          kind: "ok",
+          clients: clients.length,
+          workers,
+          tickets,
+          channels: channelSet.size,
+          eventSeq: seq,
+          rate
+        });
       } catch {
-        // 网络错误：保留上一帧数据，下一轮再试。
+        // 网络瞬抖：保留上一帧数据，下一轮再试。
       }
     }
     load();
-    const timer = window.setInterval(load, RELAY_CONN_POLL_MS);
-    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    const timer = window.setInterval(load, RELAY_SUMMARY_POLL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
-      window.clearInterval(tick);
     };
   }, []);
-
-  if (hidden) {
-    return null;
-  }
-  if (!data) {
-    return null;
-  }
-  if (data.kind === "error") {
-    return (
-      <section className="card">
-        <div className="card-head">
-          <h2 className="card-title">
-            <Network size={16} className="ico" />
-            SSE 中转连接
-            <span className="badge" data-tone="review" style={{ marginLeft: 8 }}>
-              admin
-            </span>
-          </h2>
-        </div>
-        <div className="card-body">
-          <div className="error-box">{data.error}</div>
-        </div>
-      </section>
-    );
-  }
-
-  const { uptimeMs, eventSeq, clients } = data;
-  const channelSet = new Set<string>();
-  let workerCount = 0;
-  let ticketCount = 0;
-  for (const client of clients) {
-    for (const ch of client.channels) channelSet.add(ch);
-    if (client.source === "worker") workerCount += 1;
-    else ticketCount += 1;
-  }
-
-  return (
-    <section className="card">
-      <div className="card-head">
-        <h2 className="card-title">
-          <Network size={16} className="ico" />
-          SSE 中转连接
-          <span className="badge" data-tone="role-admin" style={{ marginLeft: 8 }}>
-            admin
-          </span>
-        </h2>
-        <span className="card-tools">每 {Math.round(RELAY_CONN_POLL_MS / 1000)}s 刷新</span>
-      </div>
-      <div className="card-body relay-conn-body">
-        <div className="relay-conn-summary">
-          <SummaryStat label="运行时长" value={fmtDuration(uptimeMs)} />
-          <SummaryStat
-            label="在线连接"
-            value={`${clients.length}`}
-            sub={`${workerCount} worker · ${ticketCount} 浏览器`}
-          />
-          <SummaryStat label="占用频道" value={`${channelSet.size}`} />
-          <SummaryStat label="累计事件" value={`${eventSeq}`} />
-        </div>
-        {clients.length === 0 ? (
-          <Empty icon={<RadioTower size={28} />} text="当前无活动连接" />
-        ) : (
-          <div className="table-wrap">
-            <table className="table relay-conn-table">
-              <thead>
-                <tr>
-                  <th>来源</th>
-                  <th>客户端 #</th>
-                  <th>已连时长</th>
-                  <th>频道</th>
-                  <th className="t-right">最近事件 ID</th>
-                </tr>
-              </thead>
-              <tbody>
-                {clients.map((client) => (
-                  <RelayConnRow key={client.id} client={client} now={now} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </section>
-  );
+  return state;
 }
 
-function SummaryStat({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="relay-conn-stat">
-      <div className="relay-conn-stat-label">{label}</div>
-      <div className="relay-conn-stat-value">{value}</div>
-      {sub ? <div className="relay-conn-stat-sub">{sub}</div> : null}
-    </div>
-  );
-}
-
-function RelayConnRow({ client, now }: { client: RelayConnection; now: number }) {
-  const sourceLabel = client.source === "worker" ? "Worker" : "浏览器";
-  const sourceTone = client.source === "worker" ? "success" : "running";
-  const sourceDotTone = client.source === "worker" ? "online" : "running";
-  return (
-    <tr>
-      <td>
-        <span className="badge" data-tone={sourceTone}>
-          <span className="dot" data-tone={sourceDotTone} />
-          {sourceLabel}
-        </span>
-      </td>
-      <td className="mono">#{client.id}</td>
-      <td className="mono">{fmtDuration(now - client.connectedAt)}</td>
-      <td>
-        <div className="relay-conn-channels">
-          {client.channels.map((channel) => (
-            <span key={channel} className="chip mono" title={channel}>
-              {channel}
-            </span>
-          ))}
-        </div>
-      </td>
-      <td className="t-right mono">{client.lastEventId ?? "—"}</td>
-    </tr>
-  );
-}

@@ -18,15 +18,20 @@ type Health = {
 
 // 总览页数据（/api/dashboard）：summary 卡片 + worker/任务流 + 运行健康。
 // projects / commands 已随菜单页拆分移除（各页自取所需）。
+// dailyNewTasks / dailyCompletedTasks / dailyMergedTasks：后端按 RBAC 算的最近 7 天每日数（长度 7，缺失补 0），
+// 下标 6 = 今天，分别作为「今日新任务 / 今日完成 / 今日合并」三张卡的 sparkline 数据源。
 type Overview = {
   workers: Worker[];
   tasks: Task[];
   summary: {
     onlineWorkers: number;
-    pendingTasks: number;
-    runningTasks: number;
-    failedTasks: number;
+    todayNewTasks: number;
+    todayCompletedTasks: number;
+    todayMergedTasks: number;
   };
+  dailyNewTasks: number[];
+  dailyCompletedTasks: number[];
+  dailyMergedTasks: number[];
   health: Health | null;
 };
 
@@ -53,7 +58,10 @@ const ROLE_OPTIONS: Role[] = ["viewer", "commenter", "publisher", "admin"];
 const emptyOverview: Overview = {
   workers: [],
   tasks: [],
-  summary: { onlineWorkers: 0, pendingTasks: 0, runningTasks: 0, failedTasks: 0 },
+  summary: { onlineWorkers: 0, todayNewTasks: 0, todayCompletedTasks: 0, todayMergedTasks: 0 },
+  dailyNewTasks: [],
+  dailyCompletedTasks: [],
+  dailyMergedTasks: [],
   health: null
 };
 
