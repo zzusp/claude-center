@@ -29,22 +29,29 @@
 
 1. `claimNextCleanupCandidate(workerId)`：选**本 worker** 的、`status='success'` 且
    `pr_url IS NOT NULL` 的任务，按 `merge_checked_at ASC NULLS FIRST` 轮转取一个（只读，不翻状态）。
+   **节流**：`merge_checked_at` 在 60s 内的任务不会再被领取——避免只有一个待清理任务时每 tick（默认
+   10s）都重复查 PR / 重试清理；新任务（`NULL`）不受节流，立即进入轮转。
 2. `cleanupMergedTask`：在该任务的 `localPath` 下 `gh pr view <pr_url> --json state,mergedAt,url`：
    - `state == 'MERGED'` → 本地清理 → `markTaskMerged`：
      - `git fetch origin --prune`
-     - `git checkout <base_branch>` + `git pull --ff-only origin <base_branch>`（拉进合并后的改动）
+     - `git checkout <base_branch>` + `git merge --ff-only origin/<base_branch>`（拉进合并后的改动；
+       不走 `git pull origin <base>` 是为避开 FETCH_HEAD 在并发 / 残留多 for-merge 时报
+       「Cannot fast-forward to multiple branches」——显式 ref merge 决定单一 head）
      - `git branch -D <work_branch>`（容错：squash/rebase 合并时签出分支无该分支提交，必须 `-D`；可能已不存在）
      - `git push origin --delete <work_branch>`（容错：GitHub 可能已自动删除）
-   - 其它（`OPEN` / `CLOSED` 未合并）→ `setTaskMergeChecked` 仅打时间戳，参与下一轮轮转。
-3. `merge_checked_at` 既是轮转游标也是节流：每 tick 最多查一个 PR（一次 `gh` 网络调用），
-   `NULLS FIRST` 保证新完成的任务优先被查、其余按最久未查轮转。
+   - 其它（`OPEN` / `CLOSED` 未合并）→ `setTaskMergeChecked` 仅打时间戳（不带 backoff），参与下一轮轮转
+     （受 60s 节流约束）。
+3. `merge_checked_at` 既是轮转游标也是节流游标：每 tick 最多查一个 PR（一次 `gh` 网络调用），
+   `NULLS FIRST` 保证新完成的任务优先被查、其余按最久未查轮转；列实际语义是「下次最早可检查时刻」
+   ——`setTaskMergeChecked(backoffSeconds)` 把游标推到未来即可延后下一轮领取。
 
 并发安全：`claimNextCleanupCandidate` 只读不加锁；`tick()` 的 `this.polling` 互斥保证同一 worker
 不并发 tick；`claimed_by = workerId` 保证只有持有本地工作树的 worker 才清理自己的任务。
 
-清理动作里 `git checkout` / `pull` 失败 → 抛出 → `cleanupMergedTask` 兜底 `setTaskMergeChecked` +
-落 `task_events`（`cleanup_retry`），任务留在 `success` 等下一轮重试（不丢「已合并」事实）。`branch -D` /
-`push --delete` 容错（不抛），删不掉只记录、不挡 `merged` 迁移。
+清理动作里 `git checkout` / `merge` 失败 → 抛出 → `cleanupMergedTask` 兜底
+`setTaskMergeChecked(backoffSeconds=300)`（5 分钟退避）+ 落 `task_events`（`cleanup_retry`），任务留在
+`success` 等下一轮重试（不丢「已合并」事实）；本地清理失败多半要人工介入，5 分钟退避避免 10s 级
+高频重试制造大量噪声事件。`branch -D` / `push --delete` 容错（不抛），删不掉只记录、不挡 `merged` 迁移。
 
 ## 数据库改动（`006_task_cleanup.sql`）
 
