@@ -6,17 +6,22 @@ import {
   Activity,
   Bot,
   ClipboardList,
+  FileCode,
   FileText,
   GitBranch,
   GitPullRequest,
   Info,
   Link2,
   ListChecks,
+  Maximize2,
+  Type,
   UserRound
 } from "lucide-react";
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { KvRow, StatusBadge, fmtDateTime, isPendingSubRepoPath } from "./shared";
-import { eventMeta } from "./task-detail-shared";
+import { FormModal } from "./controls";
 import { AttachmentList } from "./attachment-uploader";
 import { usePolling } from "../lib/use-polling";
 
@@ -81,7 +86,7 @@ export function OverviewTab({
         </OvCard>
 
         <OvCard icon={<Activity size={15} />} title="进度" scroll>
-          <ProgressPanel percent={progress.percent} nodes={progress.nodes} events={events} />
+          <ProgressPanel percent={progress.percent} nodes={progress.nodes} />
         </OvCard>
 
         <OvCard icon={<Link2 size={15} />} title="相关信息">
@@ -216,8 +221,8 @@ function OvCard({
 
 type ProgressNode = { label: string; time: string | null; done: boolean };
 
-// 进度面板:顶部百分比进度条 + 进度条下方的事件流(左节点名、右时间)。
-function ProgressPanel({ percent, nodes, events }: { percent: number; nodes: ProgressNode[]; events: TaskEvent[] }) {
+// 进度面板:顶部百分比进度条 + 里程碑节点(左节点名、右时间)。
+function ProgressPanel({ percent, nodes }: { percent: number; nodes: ProgressNode[] }) {
   return (
     <div className="ov-progress">
       <div className="ov-bar-head">
@@ -235,19 +240,6 @@ function ProgressPanel({ percent, nodes, events }: { percent: number; nodes: Pro
             <span className="ov-node-time">{n.time ? fmtDateTime(n.time) : "—"}</span>
           </div>
         ))}
-      </div>
-      <div className="ov-events">
-        <div className="ov-events-head">事件流</div>
-        {events.length > 0 ? (
-          events.map((e) => (
-            <div className="ov-event-row" key={e.id}>
-              <span className="ov-event-label">{eventMeta(e.event_type).label}</span>
-              <span className="ov-event-time">{fmtDateTime(e.created_at)}</span>
-            </div>
-          ))
-        ) : (
-          <div className="ov-event-empty">暂无事件</div>
-        )}
       </div>
     </div>
   );
@@ -271,14 +263,58 @@ function ResultPanel({ task }: { task: Task }) {
   const isDone = task.status === "success" || task.status === "merged";
   if (isDone) {
     const summary = typeof task.result?.claudeResult === "string" ? task.result.claudeResult : "";
-    return (
+    return summary ? (
+      <ResultSummary summary={summary} />
+    ) : (
       <div className="ov-result">
         <div className="ov-result-title">执行结果摘要</div>
-        {summary ? <div className="ov-result-text">{summary}</div> : <div className="ov-result-empty">无结果摘要</div>}
+        <div className="ov-result-empty">无结果摘要</div>
       </div>
     );
   }
   return <div className="ov-result-empty">任务尚未结束，暂无执行结果</div>;
+}
+
+// 执行结果摘要:支持 Markdown / 纯文本切换渲染,以及放大到弹窗内查看(卡内空间有限,长结果便于阅读)。
+function ResultSummary({ summary }: { summary: string }) {
+  const [asMarkdown, setAsMarkdown] = useState(true);
+  const [zoomed, setZoomed] = useState(false);
+
+  const body = (full: boolean) =>
+    asMarkdown ? (
+      <div className={`tx-text ov-result-md${full ? " is-full" : ""}`}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary}</ReactMarkdown>
+      </div>
+    ) : (
+      <div className={`ov-result-text${full ? " is-full" : ""}`}>{summary}</div>
+    );
+
+  return (
+    <div className="ov-result">
+      <div className="ov-result-head">
+        <div className="ov-result-title">执行结果摘要</div>
+        <div className="ov-result-tools">
+          <button
+            type="button"
+            className="ov-result-tool"
+            onClick={() => setAsMarkdown((v) => !v)}
+            title={asMarkdown ? "切换为纯文本" : "切换为 Markdown 渲染"}
+          >
+            {asMarkdown ? <Type size={13} /> : <FileCode size={13} />}
+            {asMarkdown ? "纯文本" : "Markdown"}
+          </button>
+          <button type="button" className="ov-result-tool" onClick={() => setZoomed(true)} title="放大展示">
+            <Maximize2 size={13} />
+            放大
+          </button>
+        </div>
+      </div>
+      {body(false)}
+      <FormModal open={zoomed} title="执行结果摘要" onClose={() => setZoomed(false)} size="xl">
+        {body(true)}
+      </FormModal>
+    </div>
+  );
 }
 
 // 进度里程碑:已创建 / 已认领 / 开始执行 / 执行结束 / 提交代码 /(PR 模式)已合并落地。

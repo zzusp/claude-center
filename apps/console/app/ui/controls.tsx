@@ -263,7 +263,7 @@ function useConfirm() {
 /* ============================== FormModal ==============================
    居中表单弹窗：替代 Drawer 用于"发布/编辑"类多字段表单——避免侧抽屉在宽屏下大量留白，
    且能并列两列字段。结构：backdrop（点击关）+ 居中卡片（head 标题 / 关闭 + scroll body）。
-   Esc 关闭；点击内容区不冒泡到 backdrop；size 决定最大宽度（md=560，lg=720）。 */
+   Esc 关闭；点击内容区不冒泡到 backdrop；size 决定最大宽度（md=560，lg=720，xl=1040）。 */
 function FormModal({
   open,
   title,
@@ -274,7 +274,7 @@ function FormModal({
   open: boolean;
   title: string;
   onClose: () => void;
-  size?: "md" | "lg";
+  size?: "md" | "lg" | "xl";
   children: React.ReactNode;
 }) {
   useEffect(() => {
