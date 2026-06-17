@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronRight, Wrench } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -114,6 +114,10 @@ export function parseTranscript(jsonl: string): TItem[] {
   return items;
 }
 
+// 首屏只挂载末尾 FIRST_BATCH 条消息（视口 + 一屏缓冲），剩下在浏览器 idle 时一次性挂上：
+// 长对话从「同步渲染 500+ 块」降到「同步渲染 30 块」，首屏可感秒出；往上滚有极短挂载延迟，绝大多数场景无感。
+const FIRST_BATCH = 30;
+
 export function TranscriptView({ items }: { items: TItem[] }) {
   // 配对：tool_use_id → 工具返回（claude 把 tool_result 放进下一条 user 消息）。配对后该 result 显示在调用下，
   // 该「纯 tool_result」的 user 消息整条不再渲染为气泡。
@@ -125,12 +129,39 @@ export function TranscriptView({ items }: { items: TItem[] }) {
       }
     }
   }
+
+  const [revealed, setRevealed] = useState(() => Math.min(FIRST_BATCH, items.length));
+
+  // items.length 增长时（轮询拉到新消息）也跟着抬高已揭示数量；避免 100 条对话首屏只显示 30 后
+  // 再增长到 130 时仍然停在 30。
+  useEffect(() => {
+    setRevealed((cur) => Math.max(cur, Math.min(FIRST_BATCH, items.length)));
+  }, [items.length]);
+
+  // 全量挂载：浏览器空闲时把剩余消息一次性补上。requestIdleCallback 不可用（Safari < 15.4 / 旧 Firefox）
+  // 时回退到 setTimeout(16)，无功能性降级。
+  useEffect(() => {
+    if (revealed >= items.length) return;
+    type IdleHandle = number;
+    type RIC = (cb: () => void) => IdleHandle;
+    type CIC = (h: IdleHandle) => void;
+    const w = window as unknown as { requestIdleCallback?: RIC; cancelIdleCallback?: CIC };
+    const ric: RIC = w.requestIdleCallback ?? ((cb) => window.setTimeout(cb, 16) as unknown as IdleHandle);
+    const cic: CIC = w.cancelIdleCallback ?? ((h) => window.clearTimeout(h as unknown as number));
+    const handle = ric(() => setRevealed(items.length));
+    return () => cic(handle);
+  }, [items.length, revealed]);
+
+  // items 按时间正序：末尾 revealed 条先挂，前面延后；保证首屏可见范围（底部）立即渲染。
+  const start = Math.max(0, items.length - revealed);
+  const visible = items.slice(start);
+
   return (
     <div className="tx">
-      {items.map((item, i) => {
+      {visible.map((item, i) => {
         const renderable = item.blocks.filter((b) => b.kind !== "tool_result");
         if (renderable.length === 0) return null;
-        return <MessageRow key={i} role={item.role} blocks={renderable} results={results} />;
+        return <MessageRow key={start + i} role={item.role} blocks={renderable} results={results} />;
       })}
     </div>
   );
@@ -149,11 +180,22 @@ function MessageRow({ role, blocks, results }: { role: "user" | "assistant"; blo
   );
 }
 
+// 命中任一 markdown 特征就走 ReactMarkdown；否则当纯文本展示，省掉 remark 解析 + JSX 树构建：
+// 反引号 / # / * / _ / ~ / [..](..)（链接） / 行首 - 或 > / 有序列表 / 空行段落 / 表格管道。
+// 误判方向安全：把 markdown 当纯文本会显示原 markdown 字符（不破坏内容），把纯文本当 markdown 多花 CPU 不影响显示。
+function hasMarkdownFeatures(text: string): boolean {
+  return /[`#*_~]|\[[^\]]+\]\(|^\s*[->]|^\s*\d+\.\s|\n\n|^\s*\|/m.test(text);
+}
+
 function BlockView({ block, results }: { block: TBlock; results: Map<string, ToolResult> }) {
   if (block.kind === "text") {
     return (
       <div className="tx-text">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown>
+        {hasMarkdownFeatures(block.text) ? (
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown>
+        ) : (
+          <span style={{ whiteSpace: "pre-wrap" }}>{block.text}</span>
+        )}
       </div>
     );
   }

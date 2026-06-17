@@ -8,7 +8,9 @@ export const dynamic = "force-dynamic";
 
 // 对话执行会话 transcript（Claude Code session .jsonl 全文 + 同步时间）。与任务 /api/tasks/[id]/session 同构：
 // Worker 周期 3s + 终态把 session .jsonl 同步到 conversation_sessions，前端按需轮询（active 3s、closed 取一次即停）取一次解析富展示。
-export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+// ETag = synced_at 时间戳 + jsonl 长度：synced_at 单调递增、length 防同秒不同内容；前端带 If-None-Match
+// 命中即 304 短路，省下大 blob 反序列化 + setJsonl 触发的整棵 reconcile。
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requireUser();
   if (gate instanceof NextResponse) {
     return gate;
@@ -28,7 +30,17 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       }
     }
     const session = await getConversationSession(getPool(), id);
-    return NextResponse.json({ jsonl: session?.jsonl ?? null, syncedAt: session?.synced_at ?? null });
+    if (!session) {
+      return NextResponse.json({ jsonl: null, syncedAt: null });
+    }
+    const etag = `"${new Date(session.synced_at).getTime()}-${session.jsonl.length}"`;
+    if (request.headers.get("if-none-match") === etag) {
+      return new NextResponse(null, { status: 304 });
+    }
+    return NextResponse.json(
+      { jsonl: session.jsonl, syncedAt: session.synced_at },
+      { headers: { ETag: etag } }
+    );
   } catch (error) {
     return errorResponse(error);
   }

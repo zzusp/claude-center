@@ -8,6 +8,11 @@ import { SessionMetaBar } from "./session-meta";
 import { TranscriptView, parseTranscript } from "./transcript";
 import { usePolling } from "../lib/use-polling";
 
+// 模块级 jsonl 缓存：跨 ChatThread 卸载/重挂保留，切换回老会话时立即出内容（无空白等待）。
+// 仅进程内有效（刷新页面重建）；不进 sessionStorage 是因为单 jsonl 可达 MB 级、storage 配额有限。
+// 不限制条数：典型一天打开 <50 个会话，单进程 MB 级可接受；如未来确实膨胀再加 LRU。
+const jsonlCache = new Map<string, { jsonl: string | null; etag: string | null }>();
+
 // 对话消息线（右侧）+ 新建对话面板（模态）。从 chat.tsx 抽出；ChatView 仍管会话列表与编排。
 export function ChatThread({
   conversation,
@@ -40,10 +45,12 @@ export function ChatThread({
     setEditingTitle(false);
   }, [conversation.title, id]);
 
-  // 切换会话：重置回放态 + 清空 worker 元信息（下个 polling 周期重新填充）。
+  // 切换会话：worker 元信息清空等下个 polling 周期重新填充；jsonl 优先从缓存预填，避免空白等待
+  // —— 后台轮询命中 304 / 内容未变即不动 UI，命中 200 + 新内容时再 setJsonl。
   useEffect(() => {
-    setJsonl(null);
-    setLoaded(false);
+    const cached = jsonlCache.get(id);
+    setJsonl(cached?.jsonl ?? null);
+    setLoaded(cached !== undefined);
     setPending([]);
     setWorker(null);
     doneRef.current = false;
@@ -70,14 +77,34 @@ export function ChatThread({
   );
 
   // 轮询对话 session transcript（active 持续；closed 取一次即停）。Worker 周期 3s + 终态把 jsonl 同步到库。
+  // 带 If-None-Match 条件请求：未变返 304，省下大 blob 反序列化 + setJsonl 触发的整棵 reconcile；
+  // 即便 200 回来内容字符串相等也保留旧引用，避免 useMemo(parseTranscript) 被无效化。
   usePolling(
     async (isActive) => {
       if (doneRef.current) return;
       try {
-        const r = await fetch(`/api/conversations/${id}/session`, { cache: "no-store" });
+        const cached = jsonlCache.get(id);
+        const r = await fetch(`/api/conversations/${id}/session`, {
+          cache: "no-store",
+          headers: cached?.etag ? { "If-None-Match": cached.etag } : {}
+        });
+        if (!isActive()) return;
+        if (r.status === 304) {
+          if (closed) doneRef.current = true;
+          return;
+        }
         if (!r.ok) return;
+        const etag = r.headers.get("ETag");
         const d = (await r.json()) as { jsonl: string | null };
         if (!isActive()) return;
+        // 字符串相等：保留旧引用，setJsonl 不调用 → useMemo(parseTranscript) 命中、TranscriptView 跳过 reconcile。
+        if (cached && cached.jsonl === d.jsonl) {
+          jsonlCache.set(id, { jsonl: cached.jsonl, etag });
+          setLoaded(true);
+          if (closed) doneRef.current = true;
+          return;
+        }
+        jsonlCache.set(id, { jsonl: d.jsonl, etag });
         setJsonl(d.jsonl);
         setLoaded(true);
         if (closed) doneRef.current = true;
