@@ -33,10 +33,12 @@
    10s）都重复查 PR / 重试清理；新任务（`NULL`）不受节流，立即进入轮转。
 2. `cleanupMergedTask`：在该任务的 `localPath` 下 `gh pr view <pr_url> --json state,mergedAt,url`：
    - `state == 'MERGED'` → 本地清理 → `markTaskMerged`：
-     - `git fetch origin --prune`
-     - `git checkout <base_branch>` + `git merge --ff-only origin/<base_branch>`（拉进合并后的改动；
-       不走 `git pull origin <base>` 是为避开 FETCH_HEAD 在并发 / 残留多 for-merge 时报
-       「Cannot fast-forward to multiple branches」——显式 ref merge 决定单一 head）
+     - `git fetch origin --prune`（硬要求；失败抛出，按指数退避重试）
+     - `git checkout <base_branch>` + `git merge --ff-only origin/<base_branch>`（**容错**：仅为顺手
+       拉新+让 HEAD 离开 work_branch，失败回退 `git checkout --detach origin/<base_branch>`——本地 base
+       与远端发散也能离开工作分支，下游 `branch -D` 不被阻挡；同步是 cosmetic 的，下个任务签出时会
+       重新 fetch+pull）。历史：`git pull origin <base>` 在并发 fetch 残留多 for-merge 时会报
+       「Cannot fast-forward to multiple branches」——显式 ref `merge --ff-only origin/<base>` 决定单一 head。
      - `git branch -D <work_branch>`（容错：squash/rebase 合并时签出分支无该分支提交，必须 `-D`；可能已不存在）
      - `git push origin --delete <work_branch>`（容错：GitHub 可能已自动删除）
    - 其它（`OPEN` / `CLOSED` 未合并）→ `setTaskMergeChecked` 仅打时间戳（不带 backoff），参与下一轮轮转
@@ -48,10 +50,14 @@
 并发安全：`claimNextCleanupCandidate` 只读不加锁；`tick()` 的 `this.polling` 互斥保证同一 worker
 不并发 tick；`claimed_by = workerId` 保证只有持有本地工作树的 worker 才清理自己的任务。
 
-清理动作里 `git checkout` / `merge` 失败 → 抛出 → `cleanupMergedTask` 兜底
-`setTaskMergeChecked(backoffSeconds=300)`（5 分钟退避）+ 落 `task_events`（`cleanup_retry`），任务留在
-`success` 等下一轮重试（不丢「已合并」事实）；本地清理失败多半要人工介入，5 分钟退避避免 10s 级
-高频重试制造大量噪声事件。`branch -D` / `push --delete` 容错（不抛），删不掉只记录、不挡 `merged` 迁移。
+清理动作里 `git checkout` / `merge` **容错处理**：失败回退 `git checkout --detach origin/<base>`，确保
+HEAD 离开 work_branch 后 `branch -D` 仍能成功；只有 `git fetch` 失败（网络/凭据）才抛出，进入下面的
+指数退避重试。`branch -D` / `push --delete` 容错（不抛），删不掉只记录、不挡 `merged` 迁移。
+
+清理整体抛出 → `cleanupMergedTask` 兜底 `setTaskMergeChecked(backoffSeconds)` + 落 `task_events`
+（`cleanup_retry`）。`backoffSeconds` 按本次失败前的「连续 cleanup_retry 数」做**指数退避**：
+`min(60min, 5min * 2^retries)` → 5/10/20/40/60min，避免长时间网络断 / 凭据失效场景下 5min 一发的
+noise event 长期累积。成功落 `merged` 事件后计数自动归零。任务留在 `success` 不丢「已合并」事实。
 
 ## 数据库改动（`006_task_cleanup.sql`）
 
