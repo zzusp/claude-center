@@ -250,6 +250,13 @@ function TasksView({
     return () => window.clearTimeout(timer);
   }, [q]);
 
+  // 批量操作结果 toast 自动消失（5 秒），避免长时间占据视口底部
+  useEffect(() => {
+    if (!bulkResult) return;
+    const timer = window.setTimeout(() => setBulkResult(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [bulkResult]);
+
   // 任一筛选条件变化都回到第 1 页
   useEffect(() => {
     setPage(1);
@@ -343,11 +350,13 @@ function TasksView({
     }
   }
 
+  // 始终展示全部批量动作，避免「只选单一状态时按钮消失被误以为缺失功能」。
+  // 选区内无适用任务的按钮置灰禁用，计数显示 (0)，可执行的按 ids 个数展示。
   const availableBulkActions = canCreateTask
     ? BULK_ACTION_META.map((meta) => ({
         meta,
         ids: selectedTasksOnPage.filter((task) => meta.applicable(task.status)).map((task) => task.id)
-      })).filter((entry) => entry.ids.length > 0)
+      }))
     : [];
 
   return (
@@ -414,59 +423,6 @@ function TasksView({
                 ariaLabel="按 Worker 筛选"
               />
             </div>
-
-            {canCreateTask && selectedTasksOnPage.length > 0 ? (
-              <div className="bulk-bar">
-                <span className="bulk-bar-info">
-                  已选 <strong>{selectedTasksOnPage.length}</strong> 个任务
-                </span>
-                <div className="bulk-bar-actions">
-                  {availableBulkActions.length === 0 ? (
-                    <span className="bulk-bar-hint">所选任务没有可执行的批量操作</span>
-                  ) : (
-                    availableBulkActions.map(({ meta, ids }) => (
-                      <button
-                        key={meta.key}
-                        type="button"
-                        className={`btn btn-sm${meta.danger ? " btn-danger" : ""}`}
-                        disabled={bulkBusy}
-                        onClick={() => void handleBulkAction(meta.key, ids)}
-                        title={`对所选中 ${ids.length} 个适用任务执行：${meta.label}`}
-                      >
-                        {meta.icon}
-                        {meta.label}
-                        <span className="bulk-count">({ids.length})</span>
-                      </button>
-                    ))
-                  )}
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => setSelectedIds(new Set())}
-                    disabled={bulkBusy}
-                    title="清空选区"
-                  >
-                    <X size={14} />
-                    取消选中
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {bulkResult ? (
-              <div className="bulk-result" data-tone={bulkResult.failed > 0 ? "warn" : "ok"}>
-                <Check size={14} />
-                {`${BULK_ACTION_META.find((m) => m.key === bulkResult.action)?.label ?? "批量操作"}：成功 ${bulkResult.ok} 个`}
-                {bulkResult.failed > 0 ? `，失败 ${bulkResult.failed} 个` : ""}
-                <button
-                  type="button"
-                  className="bulk-result-close"
-                  onClick={() => setBulkResult(null)}
-                  aria-label="关闭"
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            ) : null}
 
             <div className="card-body flush">
               {data.tasks.length === 0 ? (
@@ -661,6 +617,66 @@ function TasksView({
           <TasksSidebar stats={sidebarStats} />
         </aside>
       </div>
+
+      {/* 批量操作悬浮面板：fixed 在视口底部，不挤压表格布局。选区为空时不渲染。 */}
+      {canCreateTask && selectedTasksOnPage.length > 0 ? (
+        <div className="bulk-fab" role="region" aria-label="批量操作">
+          <span className="bulk-fab-info">
+            已选 <strong>{selectedTasksOnPage.length}</strong> 个任务
+          </span>
+          <div className="bulk-fab-actions">
+            {availableBulkActions.map(({ meta, ids }) => {
+              const disabled = bulkBusy || ids.length === 0;
+              return (
+                <button
+                  key={meta.key}
+                  type="button"
+                  className={`btn btn-sm${meta.danger ? " btn-danger" : ""}`}
+                  disabled={disabled}
+                  onClick={() => void handleBulkAction(meta.key, ids)}
+                  title={
+                    ids.length === 0
+                      ? `所选任务中没有可执行「${meta.label}」的对象`
+                      : `对所选中 ${ids.length} 个适用任务执行：${meta.label}`
+                  }
+                >
+                  {meta.icon}
+                  {meta.label}
+                  <span className="bulk-count">({ids.length})</span>
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setSelectedIds(new Set())}
+              disabled={bulkBusy}
+              title="清空选区"
+            >
+              <X size={14} />
+              取消选中
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {/* 批量动作结果 toast：同样 fixed 悬浮，不挤压表格。3 秒后或手动关闭。 */}
+      {bulkResult ? (
+        <div className="bulk-toast" data-tone={bulkResult.failed > 0 ? "warn" : "ok"} role="status">
+          <Check size={14} />
+          <span>
+            {`${BULK_ACTION_META.find((m) => m.key === bulkResult.action)?.label ?? "批量操作"}：成功 ${bulkResult.ok} 个`}
+            {bulkResult.failed > 0 ? `，失败 ${bulkResult.failed} 个` : ""}
+          </span>
+          <button
+            type="button"
+            className="bulk-toast-close"
+            onClick={() => setBulkResult(null)}
+            aria-label="关闭"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      ) : null}
 
       <FormModal
         open={editingTask !== null}
