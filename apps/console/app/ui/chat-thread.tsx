@@ -302,6 +302,7 @@ export function ChatThread({
       ) : canCommand ? (
         <div className="chat-composer">
           <textarea
+            className="chat-composer-input"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -310,12 +311,22 @@ export function ChatThread({
                 void send();
               }
             }}
-            placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+            placeholder="输入消息…"
             rows={2}
           />
-          <button className="btn-send" type="button" disabled={sending || !input.trim()} onClick={send}>
-            <Send size={16} />
-          </button>
+          <div className="chat-composer-bar">
+            <span className="chat-composer-hint">Enter 发送 · Shift+Enter 换行</span>
+            <button
+              className="chat-send"
+              type="button"
+              disabled={sending || !input.trim()}
+              onClick={send}
+              title="发送消息（Enter）"
+              aria-label="发送消息"
+            >
+              <Send size={16} />
+            </button>
+          </div>
         </div>
       ) : (
         <div className="chat-closed">无发送权限（需 command.create）</div>
