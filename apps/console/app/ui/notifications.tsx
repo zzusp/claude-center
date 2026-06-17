@@ -142,8 +142,8 @@ export default function Notifications() {
     }
   }, []);
 
-  // 通知非高频写入，5s 轮询足够；relay 推送时会顺带触发额外刷新（usePolling 默认订阅）。
-  usePolling(refresh, [], 5000);
+  // 通知非高频写入，15s 轮询足够；relay 推送时会顺带触发额外刷新（usePolling 默认订阅）。
+  usePolling(refresh, [], 15000);
 
 
   async function markRead(id?: string) {

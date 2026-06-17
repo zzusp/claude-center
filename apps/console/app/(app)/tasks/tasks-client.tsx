@@ -2,13 +2,13 @@
 
 import type { Project, Task } from "@claude-center/db";
 import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { postJson } from "../../ui/shared";
 import { usePolling } from "../../lib/use-polling";
 import { TasksView, TaskComposeModal } from "../../ui/tasks";
 
-// 任务调度页容器：列表由 TasksView 自轮询 /api/tasks（分页）；本容器另轮询 /api/projects（筛选/表单）
-// 与候选任务（依赖选择，取最近 100 条），并承载「发布任务」抽屉与创建逻辑（原 Dashboard.handleTaskSubmit）。
+// 任务调度页容器：列表由 TasksView 自轮询 /api/tasks（分页）；本容器另拉 /api/projects（筛选/表单），
+// 候选任务（依赖选择）在抽屉打开时才按需拉，避免与 TasksView 的主列表重复调 /api/tasks。
 export default function TasksClient({ canCreateTask }: { canCreateTask: boolean }) {
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -20,29 +20,31 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
   // 发布任务后立即触发 TasksView 列表重拉（列表 usePolling 间隔为 Infinity，需要外部信号）。
   const [refreshSignal, setRefreshSignal] = useState(0);
 
-  // 项目下拉 + 候选任务（"发布任务"抽屉里的依赖任务下拉）都是低频变化数据，
-  // 首屏拉一次即可、不需要因任意 relay 事件被动刷新（Infinity 间隔即「关闭所有自动刷新源」，
-  // 见 use-polling.ts 的拦截逻辑：既不挂 setInterval，也不订阅 relay listener）。
+  // 项目下拉：低频变化，挂载拉一次即可。
   usePolling(async (isActive) => {
     try {
-      const [pr, tr] = await Promise.all([
-        fetch("/api/projects", { cache: "no-store" }),
-        fetch("/api/tasks?pageSize=100", { cache: "no-store" })
-      ]);
+      const pr = await fetch("/api/projects", { cache: "no-store" });
       if (!isActive()) return;
       if (pr.ok) {
         const data = (await pr.json()) as { projects: Project[] };
         setProjects(data.projects);
         setSelectedProjectId((current) => current || data.projects[0]?.id || "");
       }
-      if (tr.ok) {
-        const data = (await tr.json()) as { tasks: Task[] };
-        setCandidateTasks(data.tasks);
-      }
     } catch {
-      // 轮询兜底，单次失败忽略
+      // 单次失败忽略
     }
   }, [], Infinity);
+
+  // 候选任务（"发布任务"抽屉里的依赖任务下拉）：仅在抽屉打开时才拉，避免与 TasksView 的主列表双调 /api/tasks。
+  useEffect(() => {
+    if (!drawerOpen) return;
+    let active = true;
+    void fetch("/api/tasks?pageSize=100", { cache: "no-store" })
+      .then((r) => (r.ok ? (r.json() as Promise<{ tasks: Task[] }>) : null))
+      .then((data) => { if (active && data) setCandidateTasks(data.tasks); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [drawerOpen]);
 
   async function handleTaskSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

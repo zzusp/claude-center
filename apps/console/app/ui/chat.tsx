@@ -61,11 +61,6 @@ export function ChatView({
     const handle = setTimeout(() => void loadList(filterQuery), 300);
     return () => clearTimeout(handle);
   }, [filterQuery]);
-  useEffect(() => {
-    const t = setInterval(() => void loadList(filterQuery), 5000);
-    return () => clearInterval(t);
-    // 轮询沿用当前 filterQuery 快照；依赖变化时 setInterval 会重建，不会用陈旧条件。
-  }, [filterQuery]);
   const filtersActive = Boolean(keyword.trim() || filterProjectId || filterWorkerId);
   function clearFilters(): void {
     setKeyword("");
