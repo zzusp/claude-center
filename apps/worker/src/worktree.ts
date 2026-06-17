@@ -269,8 +269,9 @@ export async function assertSubRepoPathIgnoredInMain(
 }
 
 // GC：清理该项目主仓 .claude/worktrees/ 下、本 worker 管理的任务工作树（worktree-<UUID>）中已进终态
-// （不在 keepTaskIds）的残留树。跨 waiting/resume/rejected 生命周期兜底 accepted/cancelled/merged/failed
-// 后的孤儿树。严格只碰 worktree-<UUID> 命名的任务树——同目录下 Claude Code dev 工作树（名为 slug）、
+// （不在 keepTaskIds）的残留树。跨生命周期兜底:listActiveTaskIdsForWorker 的 keep 集合包含
+// claimed/running/waiting/success/merged/failed/cancelled,仅清崩溃/异常退出留下的真孤儿。严格只碰
+// worktree-<UUID> 命名的任务树——同目录下 Claude Code dev 工作树（名为 slug）、
 // 会话树（worktree-conv-*）、主仓自身一律不动。
 export async function gcWorktrees(localPath: string, keepTaskIds: Set<string>): Promise<void> {
   const root = worktreesRoot(localPath);

@@ -1,0 +1,15 @@
+case,round-1
+typecheck-5pkg,PASS
+build-5pkg,PASS
+migration-028-apply,PASS
+verify-console-after-migration,PASS
+smoke-bulk-actions-publish,PASS
+smoke-bulk-actions-unpublish,PASS
+smoke-bulk-actions-cancel,PASS
+smoke-bulk-actions-reactivate,PASS
+smoke-bulk-actions-retry,PASS
+smoke-bulk-actions-delete,PASS
+smoke-bulk-actions-guards,PASS
+grep-no-residual-accepted-task,PASS
+grep-no-residual-rejected-task,PASS
+worker-cleanup-removed,PASS

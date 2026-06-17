@@ -1,5 +1,4 @@
 import {
-  acceptTask,
   deleteTask,
   getPool,
   getTaskProjectId,
@@ -18,15 +17,15 @@ import { projectChannel, publishRelay } from "../../../lib/relay-publish";
 
 export const dynamic = "force-dynamic";
 
-// 任务调度批量管理：单端点承接「批量发布 / 退回草稿 / 取消 / 验收通过 / 重新激活 / 续接重试 / 删除」。
+// 任务调度批量管理：单端点承接「批量发布 / 退回草稿 / 取消 / 重新激活 / 续接重试 / 删除」。
 // 入参 { action, ids[] }，逐条复用单任务 helper，按项目隔离守卫——失败逐条聚合（非整体回滚），
 // UI 据 { ok, failed[] } 提示部分成功。落库即时 best-effort 推 relay，与单任务端点一致。
+// 「批量验收」(accept) 已随人工验收一并移除——success 由 Console 30s 轮询检测 PR 合并自动翻 merged。
 
 type BulkAction =
   | "publish"
   | "unpublish"
   | "cancel"
-  | "accept"
   | "reactivate"
   | "retry"
   | "delete";
@@ -35,7 +34,6 @@ const BULK_ACTIONS: readonly BulkAction[] = [
   "publish",
   "unpublish",
   "cancel",
-  "accept",
   "reactivate",
   "retry",
   "delete"
@@ -66,26 +64,7 @@ async function runAction(
       : { ok: false, error: "已认领/执行中不可删除，或任务不存在" };
   }
 
-  if (action === "accept") {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const task = await acceptTask(client, id);
-      if (!task) {
-        await client.query("ROLLBACK");
-        return { ok: false, error: "仅已完成/已合并任务可验收通过" };
-      }
-      await client.query("COMMIT");
-      return { ok: true, task };
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  const map: Record<Exclude<BulkAction, "delete" | "accept">, {
+  const map: Record<Exclude<BulkAction, "delete">, {
     fn: typeof publishTask;
     error: string;
   }> = {

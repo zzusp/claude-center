@@ -1,11 +1,10 @@
-// 行为冒烟：批量管理 7 个动作（publish / unpublish / cancel / accept / reactivate / retry / delete）
+// 行为冒烟：批量管理 6 个动作（publish / unpublish / cancel / reactivate / retry / delete）
 // 与 apps/console/app/api/tasks/bulk/route.ts 的 runAction() 调用链一致——直接调 DB helpers 验证
-// 每个动作的状态机翻转是否真的生效（用户反馈：勾选后只能删除）。
+// 每个动作的状态机翻转是否真的生效（accept 已随人工验收一并移除,见 docs/spec/drop-accepted-rejected.md）。
 //
 // 由 run-smoke-against-ephemeral.mjs 触发：
 //   node scripts/run-smoke-against-ephemeral.mjs scripts/smoke-bulk-actions.mts
 import {
-  acceptTask,
   closePool,
   createTask,
   deleteTask,
@@ -98,54 +97,6 @@ async function main(): Promise<void> {
   if (!cancelRes) throw new Error("cancel: 返回 null");
   if (!cancelRes.cancel_requested_at) throw new Error("cancel: cancel_requested_at 未落");
   console.log("✓ cancel: claimed → cancel_requested_at 已落");
-
-  // 4) accept: success → accepted（bulk 路径用事务）
-  const acceptId = await mkTask("accept-case");
-  await forceStatus(acceptId, "success", { finished_at: new Date().toISOString() });
-  const client = await getPool().connect();
-  try {
-    await client.query("BEGIN");
-    const t = await acceptTask(client, acceptId);
-    if (!t) throw new Error("accept: 返回 null");
-    assertEq(t.status, "accepted", "accept.status");
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-  console.log("✓ accept: success → accepted（事务路径）");
-
-  // 4b) accept 幂等：已为 accepted 仍返回任务（避免 Console 自动验收与用户勾选验收的天然竞态被误报）
-  const idemClient = await getPool().connect();
-  try {
-    await idemClient.query("BEGIN");
-    const t2 = await acceptTask(idemClient, acceptId);
-    if (!t2) throw new Error("accept(幂等): 返回 null，应视作已验收成功");
-    assertEq(t2.status, "accepted", "accept(幂等).status");
-    await idemClient.query("COMMIT");
-  } catch (error) {
-    await idemClient.query("ROLLBACK");
-    throw error;
-  } finally {
-    idemClient.release();
-  }
-  console.log("✓ accept 幂等：accepted 仍返回任务（无重复事件）");
-
-  // 4c) accept 负例：非 success/merged/accepted 真不可验收（返回 null）
-  const acceptNegId = await mkTask("accept-neg-case");
-  await forceStatus(acceptNegId, "failed", { error_message: "boom" });
-  const negClient = await getPool().connect();
-  try {
-    await negClient.query("BEGIN");
-    const tNeg = await acceptTask(negClient, acceptNegId);
-    if (tNeg) throw new Error("accept 守卫失效：failed 不应可验收");
-    await negClient.query("ROLLBACK");
-  } finally {
-    negClient.release();
-  }
-  console.log("✓ guard: accept(failed) 返回 null");
 
   // 5) reactivate: failed → draft
   const reactId = await mkTask("reactivate-case");

@@ -1,11 +1,8 @@
 import type { ChildProcess } from "node:child_process";
 import {
-  acceptTask,
   addTaskComment,
-  claimNextCleanupCandidate,
   claimNextConversationTurn,
   claimNextDirectCommand,
-  claimNextRejectedTask,
   claimNextResumableTask,
   claimNextRetryableTask,
   claimNextTask,
@@ -28,7 +25,6 @@ import {
   markConversationTurnCancelled,
   markTaskCancelled,
   registerWorker,
-  rejectTask,
   removeWorkerProjectLink,
   requestTaskCancellation,
   requestTaskRetry,
@@ -52,11 +48,9 @@ import {
   type WorkerProjectConfig
 } from "./config.js";
 import {
-  cleanupMergedTask,
   executeConversationTurn,
   executeDirectCommand,
   executeTask,
-  rerunRejectedTask,
   resumeTask,
   retryFailedTask,
   type ExecHooks
@@ -89,7 +83,7 @@ const LOG_RING_CAPACITY = 200;
 export type ActiveTaskView = {
   key: string;
   taskId: string | null;
-  kind: "task" | "command" | "cleanup";
+  kind: "task" | "command";
   title: string;
   startedAt: string;
   cancelled: boolean;
@@ -101,7 +95,7 @@ export type LogLine = { ts: string; level: "info" | "error"; message: string };
 type ActiveEntry = {
   promise: Promise<void>;
   taskId: string | null;
-  kind: "task" | "command" | "cleanup";
+  kind: "task" | "command";
   title: string;
   startedAt: string;
   child: ChildProcess | null;
@@ -345,7 +339,7 @@ export class ClaudeCenterWorker {
     return Boolean(task);
   }
 
-  // —— 桌面端任务面板（Agent-View 式）：仅本 worker（claimed_by=workerId）的任务总览 + 本机回复/打回/验收 —— //
+  // —— 桌面端任务面板（Agent-View 式）：仅本 worker（claimed_by=workerId）的任务总览 + 本机回复/重试 —— //
 
   // 本 worker 认领过的全部任务，供桌面端按状态分组展示。
   async listMyTasks(): Promise<Task[]> {
@@ -369,32 +363,6 @@ export class ClaudeCenterWorker {
     void this.tick();
   }
 
-  // 打回待审（success）任务重跑：事务内落打回意见 + 翻 rejected（与 Console review 同路径），
-  // 下一轮 claimNextRejectedTask 续接重跑。返回 false = 任务已不在 success 态（被并发验收/合并）。
-  async rejectMyTask(taskId: string, feedback: string): Promise<boolean> {
-    const text = feedback.trim();
-    if (!text) {
-      return false;
-    }
-    const client = await getPool().connect();
-    try {
-      await client.query("BEGIN");
-      const task = await rejectTask(client, taskId, text);
-      if (!task) {
-        await client.query("ROLLBACK");
-        return false;
-      }
-      await client.query("COMMIT");
-      void this.tick();
-      return true;
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
   // 重试失败/取消任务:置 retry_requested_at,下一轮 claimNextRetryableTask 续接重跑。
   // 返回 false = 任务已不在 failed/cancelled 态（被并发激活/删除）。
   async retryMyTask(taskId: string): Promise<boolean> {
@@ -403,26 +371,6 @@ export class ClaudeCenterWorker {
       void this.tick();
     }
     return Boolean(task);
-  }
-
-  // 验收通过：success / merged 均可翻为终态 accepted（事务内）。返回 false = 状态不符。
-  async acceptMyTask(taskId: string): Promise<boolean> {
-    const client = await getPool().connect();
-    try {
-      await client.query("BEGIN");
-      const task = await acceptTask(client, taskId);
-      if (!task) {
-        await client.query("ROLLBACK");
-        return false;
-      }
-      await client.query("COMMIT");
-      return true;
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
   }
 
   // —— 桌面端「对话」面板（只读）：本 worker 承接的远程实时对话总览 + 消息线回放 —— //
@@ -819,7 +767,9 @@ export class ClaudeCenterWorker {
       return true;
     }
 
-    // 优先级:续接等待中任务 > 打回重跑 > 失败/取消续接重试 > 全新任务 > 合并清理。
+    // 优先级:续接等待中任务 > 失败/取消续接重试 > 全新任务。
+    // 「打回重跑」「合并清理」分支均已移除——前者随人工验收一起去掉,后者由 Console 30s 轮询 + 翻 merged
+    // 直接完成,Worker 不再做 worktree/分支清理(spec docs/spec/drop-accepted-rejected.md)。
     const resumable = await claimNextResumableTask(pool, this.config.workerId);
     if (resumable) {
       this.startActive(
@@ -827,16 +777,6 @@ export class ClaudeCenterWorker {
         (hooks) => resumeTask(this.config, resumable, hooks)
       );
       this.publishTask(resumable);
-      return true;
-    }
-
-    const rejected = await claimNextRejectedTask(pool, this.config.workerId);
-    if (rejected) {
-      this.startActive(
-        { key: `task:${rejected.id}`, taskId: rejected.id, kind: "task", title: rejected.title },
-        (hooks) => rerunRejectedTask(this.config, rejected, hooks)
-      );
-      this.publishTask(rejected);
       return true;
     }
 
@@ -858,17 +798,6 @@ export class ClaudeCenterWorker {
         (hooks) => executeTask(this.config, task, hooks)
       );
       this.publishTask(task);
-      return true;
-    }
-
-    // 最低优先级：轮转检查一个已建 PR 的 success 任务是否已合并，合并则清理工作树/分支并转 merged。
-    const cleanup = await claimNextCleanupCandidate(pool, this.config.workerId);
-    if (cleanup) {
-      this.startActive(
-        { key: `cleanup:${cleanup.id}`, taskId: cleanup.id, kind: "cleanup", title: cleanup.title },
-        () => cleanupMergedTask(this.config, cleanup)
-      );
-      this.publishTask(cleanup);
       return true;
     }
 

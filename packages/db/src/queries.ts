@@ -457,6 +457,8 @@ export type ListTasksFilters = {
   projectId?: string | null;
   // 已认领 worker id 过滤；右栏「Worker」下拉用。空/未传 = 不过滤。
   workerId?: string | null;
+  // 提交模式过滤(pr / push):任务调度列表筛选「提交模式」用。空/未传 = 不过滤。
+  submitMode?: TaskSubmitMode | null;
   // 项目级隔离：非 admin 传入其可访问项目 id 集合，约束只返回范围内任务（空集合 → 无结果）。
   projectIds?: string[] | null;
   q?: string | null;
@@ -488,6 +490,10 @@ export async function listTasks(
   if (filters.workerId) {
     params.push(filters.workerId);
     conditions.push(`tasks.claimed_by = $${params.length}`);
+  }
+  if (filters.submitMode) {
+    params.push(filters.submitMode);
+    conditions.push(`tasks.submit_mode = $${params.length}`);
   }
   // 项目范围约束（非 admin）：与上面的单项目筛选用 AND 叠加，无法越过自己的范围。
   if (filters.projectIds) {
@@ -538,8 +544,9 @@ export type TaskStatsResult = {
   today: {
     created: number;
     finished: number;
-    accepted: number;
-    rejected: number;
+    // 「完成」= 进入 success / merged 终态;「失败」= failed / cancelled。
+    completed: number;
+    failed: number;
     avgDurationMs: number | null;
   };
 };
@@ -582,14 +589,14 @@ export async function listTaskStatsForUser(
     today_window AS (
       SELECT
         (SELECT count(*) FROM scoped WHERE created_at >= $1::timestamptz)::int AS created,
-        count(*) FILTER (WHERE finished_at >= $1::timestamptz AND status IN ('accepted','merged','failed','cancelled'))::int AS finished,
-        count(*) FILTER (WHERE finished_at >= $1::timestamptz AND status IN ('accepted','merged'))::int AS accepted,
-        count(*) FILTER (WHERE finished_at >= $1::timestamptz AND status = 'rejected')::int AS rejected,
+        count(*) FILTER (WHERE finished_at >= $1::timestamptz AND status IN ('success','merged','failed','cancelled'))::int AS finished,
+        count(*) FILTER (WHERE finished_at >= $1::timestamptz AND status IN ('success','merged'))::int AS completed,
+        count(*) FILTER (WHERE finished_at >= $1::timestamptz AND status IN ('failed','cancelled'))::int AS failed,
         avg(EXTRACT(EPOCH FROM (finished_at - started_at))) FILTER (
           WHERE finished_at >= $1::timestamptz
             AND finished_at IS NOT NULL
             AND started_at IS NOT NULL
-            AND status IN ('accepted','merged','failed','cancelled')
+            AND status IN ('success','merged','failed','cancelled')
         ) AS avg_secs
       FROM scoped
     )
@@ -599,8 +606,8 @@ export async function listTaskStatsForUser(
       (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', project_id, 'name', project_name, 'n', n)), '[]'::jsonb) FROM by_project) AS by_project,
       (SELECT created FROM today_window) AS today_created,
       (SELECT finished FROM today_window) AS today_finished,
-      (SELECT accepted FROM today_window) AS today_accepted,
-      (SELECT rejected FROM today_window) AS today_rejected,
+      (SELECT completed FROM today_window) AS today_completed,
+      (SELECT failed FROM today_window) AS today_failed,
       (SELECT avg_secs FROM today_window) AS today_avg_secs
   `;
 
@@ -610,8 +617,8 @@ export async function listTaskStatsForUser(
     by_project: { id: string; name: string; n: number }[];
     today_created: number | null;
     today_finished: number | null;
-    today_accepted: number | null;
-    today_rejected: number | null;
+    today_completed: number | null;
+    today_failed: number | null;
     today_avg_secs: string | number | null;
   }>(sql, params);
   const row = result.rows[0];
@@ -623,8 +630,8 @@ export async function listTaskStatsForUser(
     today: {
       created: row?.today_created ?? 0,
       finished: row?.today_finished ?? 0,
-      accepted: row?.today_accepted ?? 0,
-      rejected: row?.today_rejected ?? 0,
+      completed: row?.today_completed ?? 0,
+      failed: row?.today_failed ?? 0,
       avgDurationMs: avgSecs == null || Number.isNaN(avgSecs) ? null : Math.round(avgSecs * 1000)
     }
   };
@@ -833,13 +840,14 @@ export async function listActiveTaskIdsForWorker(
   client: pg.Pool | pg.PoolClient,
   workerId: string
 ): Promise<string[]> {
-  // 保留工作树的状态:在途(claimed/running/waiting)、待验收/打回(success/rejected),
-  // 以及可续接重试的 failed/cancelled——后两者保留树是为了「重试」精确恢复未提交改动
-  // (见 docs/spec/task-event-timeline-retry.md §4.3)。accepted/merged/draft 不在此列,树由 GC 回收。
+  // 保留工作树的状态:在途(claimed/running/waiting)、Worker 已交付(success)、已合并(merged),
+  // 以及可续接重试的 failed/cancelled——保留 success/merged 是因为「不再清理 worktree」(取消人工验收后,
+  // 用户仍可用本地 worktree 继续手工排查/复用)；保留 failed/cancelled 是为了「重试」精确恢复未提交改动
+  // (见 docs/spec/task-event-timeline-retry.md §4.3)。draft 不在此列,树由 GC 回收。
   const result = await client.query<{ id: string }>(
     `SELECT id FROM tasks
       WHERE claimed_by = $1
-        AND status IN ('claimed', 'running', 'waiting', 'success', 'rejected', 'failed', 'cancelled')`,
+        AND status IN ('claimed', 'running', 'waiting', 'success', 'merged', 'failed', 'cancelled')`,
     [workerId]
   );
   return result.rows.map((row) => row.id);
@@ -931,8 +939,8 @@ export async function claimNextTask(client: pg.Pool | pg.PoolClient, workerId: s
           -- 旧串行模型下同项目共用一个工作树、新任务 git checkout 会清掉等待任务的未提交改动。
           -- 现在每个工作类任务用独立 git worktree 隔离（见 apps/worker/src/worktree.ts），
           -- 同项目可真并发，等待中任务的工作树独立持有改动、不被新任务触碰，故护栏不再需要。
-          -- 前置依赖门控：任一前置任务未到达「已完成」终态则不可领取。已完成 = accepted
-          -- （人工验收通过）或 merged（PR 已合并清理 / 直推已落地，工作已进目标分支）。
+          -- 前置依赖门控：任一前置任务未到达「已完成」终态则不可领取。已完成 = success
+          -- （Worker 已交付:PR 模式建好 PR / push 模式直推已落地）或 merged（PR 已被检测到合并）。
           AND NOT EXISTS (
             SELECT 1
               FROM task_dependencies dep
@@ -1117,152 +1125,17 @@ export async function markTaskCancelled(
   return cancelled;
 }
 
-// 人工验收通过：success / merged 均可翻为终态 accepted——success 是 PR 模式下「Worker 已交付，
-// 等人工 review」；merged 是「PR 已合并」（自动或人工合并），同样可作为人工签收的对象。
-// 已为 accepted 视作幂等成功（返回当前任务、不重复落事件）——Console 后台 markTaskMergeAccepted
-// 会把 success 自动翻为 accepted，与用户批量勾选验收存在天然竞态；不容忍幂等会让"明明在待验收里"
-// 的勾选莫名报「仅已完成/已合并任务可验收通过」。返回 null 表示任务真不在可验收态。
-// 在调用方事务内执行。
-export async function acceptTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
-  const result = await client.query<Task>(
-    `UPDATE tasks
-        SET status = 'accepted', updated_at = now()
-      WHERE id = $1 AND status IN ('success', 'merged')
-      RETURNING *`,
-    [taskId]
-  );
-  const task = result.rows[0];
-  if (task) {
-    await addTaskEvent(client, taskId, null, "accepted", "Task accepted by user", {});
-    return task;
-  }
-  const existing = await client.query<Task>(
-    `SELECT * FROM tasks WHERE id = $1 AND status = 'accepted'`,
-    [taskId]
-  );
-  return existing.rows[0] ?? null;
-}
-
-// 人工验收打回：仅 success 可打回。先落打回意见为 user 评论（供 Worker 续接读取），再翻
-// 为 rejected。必须与翻转同事务，避免 Worker 在「已 rejected 但评论未落」窗口领走空跑。
-export async function rejectTask(
-  client: pg.Pool | pg.PoolClient,
-  taskId: string,
-  feedback: string
-): Promise<Task | null> {
-  const guard = await client.query<{ id: string }>(
-    `SELECT id FROM tasks WHERE id = $1 AND status = 'success' FOR UPDATE`,
-    [taskId]
-  );
-  if (!guard.rows[0]) {
-    return null;
-  }
-  await addTaskComment(client, { taskId, author: "user", workerId: null, body: feedback });
-  const result = await client.query<Task>(
-    `UPDATE tasks
-        SET status = 'rejected', finished_at = NULL, updated_at = now()
-      WHERE id = $1
-      RETURNING *`,
-    [taskId]
-  );
-  await addTaskEvent(client, taskId, null, "rejected", "Task sent back by user", { feedback });
-  return result.rows[0]!;
-}
-
-// PR 已合并并完成本地清理 / 直推（submit_mode='push'）已落地：进入终态 merged。resultPayload
-// 合并进既有 result，不丢之前 success 阶段写入的内容；finished_at 只在首次设置（直推无 success 中间态）。
-export async function markTaskMerged(
-  client: pg.Pool | pg.PoolClient,
-  taskId: string,
-  workerId: string,
-  resultPayload: Record<string, unknown>
-): Promise<void> {
-  await client.query(
-    `UPDATE tasks
-        SET status = 'merged',
-            finished_at = COALESCE(finished_at, now()),
-            merge_checked_at = now(),
-            result = result || $3::jsonb,
-            updated_at = now()
-      WHERE id = $1 AND claimed_by = $2`,
-    [taskId, workerId, resultPayload]
-  );
-  await addTaskEvent(client, taskId, workerId, "merged", "Task merged and cleaned up", resultPayload);
-}
-
-// 单任务最小重查间隔（秒）：避免只有一个待清理任务时，每 tick（默认 10s）都重复查 PR/重试本地清理。
-// 60s 对人工合并的轮询足够及时；清理失败场景由 setTaskMergeChecked 的 backoffSeconds 进一步退避。
-const CLEANUP_MIN_CHECK_INTERVAL_SECONDS = 60;
-
-// 清理候选（PR 模式）：本 worker 的、已建 PR 的 success 任务，按 merge_checked_at 轮转取最久未查
-// 的一个（NULL 优先）。只读不翻状态——是否清理由 cleanupMergedTask 依据 PR 合并状态决定。
-// 节流：上次检查在 CLEANUP_MIN_CHECK_INTERVAL_SECONDS 内的任务不会再被领取，避免高频重试。
-export async function claimNextCleanupCandidate(
-  client: pg.Pool | pg.PoolClient,
-  workerId: string
-): Promise<Task | null> {
-  const result = await client.query<Task>(
-    `SELECT *
-       FROM tasks
-      WHERE status = 'success'
-        AND claimed_by = $1
-        AND pr_url IS NOT NULL
-        AND (merge_checked_at IS NULL
-             OR merge_checked_at < now() - ($2 || ' seconds')::interval)
-      ORDER BY merge_checked_at ASC NULLS FIRST
-      LIMIT 1`,
-    [workerId, CLEANUP_MIN_CHECK_INTERVAL_SECONDS]
-  );
-  return result.rows[0] ?? null;
-}
-
-// 打检查时间戳，让该任务退到轮转队尾。可选 backoffSeconds 把游标推到未来，专门用于清理失败的退避——
-// 比如本地 `git merge --ff-only` 撞冲突时，下一轮重试间隔应远大于 OPEN PR 的轮询间隔，避免噪声事件。
-export async function setTaskMergeChecked(
-  client: pg.Pool | pg.PoolClient,
-  taskId: string,
-  workerId: string,
-  backoffSeconds = 0
-): Promise<void> {
-  await client.query(
-    `UPDATE tasks
-        SET merge_checked_at = now() + ($3 || ' seconds')::interval
-      WHERE id = $1 AND claimed_by = $2`,
-    [taskId, workerId, backoffSeconds]
-  );
-}
-
-// 数最近一次非 cleanup_retry 事件之后累积的连续 cleanup_retry 条数。用于给清理失败做指数退避——
-// 连续失败越多说明越像不可自愈的问题（凭据失效 / 网络长时间断 / 仓库被外部人为搞乱），把退避拉长
-// 避免每 5min 一发的事件长期累积。成功清理会落 `merged` 事件，自动重置计数。
-export async function countConsecutiveCleanupRetries(
-  client: pg.Pool | pg.PoolClient,
-  taskId: string
-): Promise<number> {
-  const result = await client.query<{ count: string }>(
-    `SELECT count(*)::text AS count
-       FROM task_events
-      WHERE task_id = $1
-        AND event_type = 'cleanup_retry'
-        AND created_at > COALESCE(
-              (SELECT max(created_at) FROM task_events
-                 WHERE task_id = $1 AND event_type <> 'cleanup_retry'),
-              'epoch'::timestamptz)`,
-    [taskId]
-  );
-  return Number(result.rows[0]?.count ?? "0");
-}
-
-/* ===== Console 侧定时合并检查（独立于上面的 Worker 清理流程）=====
- * 方案见 docs/spec/task-merge-status-check.md。Console 不持有本地工作树，只读 repo_url 远程判定
- * work_branch 是否已并入 target_branch；检测到合并把 success 工作任务自动转 accepted。
+/* ===== Console 侧定时合并检查 =====
+ * 方案见 docs/spec/task-merge-status-check.md。取消「人工验收」后,「PR 已合并」是 success → merged 的
+ * 唯一通路:Console 每 30s 轮询所有 success 且有 PR 的任务,远程判定 PR 是否已合并;合并即翻 merged
+ * (终态),不再清理 worktree(用户仍可在本地复用)。没有 PR 的 success 是终态,不参与本检查。
  */
 
-// 候选附带项目 repo_url，供 Console 检测助手做 gh / git 远程判定。
+// 候选附带项目 repo_url,供 Console 检测助手做 gh / git 远程判定。
 export type MergeCheckCandidate = Task & { repo_url: string };
 
-// Console 合并检查候选：success 待验收且有 work/target 分支的任务，按 merge_status_checked_at
-// 轮转取最久未查的一个（NULL 优先）。只读，不翻状态——是否合并由检测助手判定后回写。
+// Console 合并检查候选:success 且有 PR 的任务,按 merge_status_checked_at 轮转取最久未查的一个
+// (NULL 优先)。只读,不翻状态——是否合并由检测助手判定后回写。无 PR 的 success 不参与(终态)。
 export async function claimNextMergeCheckCandidate(
   client: pg.Pool | pg.PoolClient
 ): Promise<MergeCheckCandidate | null> {
@@ -1271,6 +1144,7 @@ export async function claimNextMergeCheckCandidate(
        FROM tasks
        JOIN projects ON projects.id = tasks.project_id
       WHERE tasks.status = 'success'
+        AND tasks.pr_url IS NOT NULL
         AND tasks.work_branch <> ''
         AND tasks.target_branch <> ''
       ORDER BY tasks.merge_status_checked_at ASC NULLS FIRST
@@ -1279,14 +1153,16 @@ export async function claimNextMergeCheckCandidate(
   return result.rows[0] ?? null;
 }
 
-// 检测到已合并：仅 success 可自动验收，原子翻 accepted + merge_status=merged。返回 true 表示翻态成功。
-export async function markTaskMergeAccepted(
+// 检测到 PR 已合并:仅 success 可翻 merged(终态),原子打 merge_status=merged。
+// 不清理 worktree(取消人工验收后保留本地交付),不动 finished_at(沿用 success 时刻)。
+// 返回 true 表示翻态成功。
+export async function markTaskMerged(
   client: pg.Pool | pg.PoolClient,
   taskId: string
 ): Promise<boolean> {
   const result = await client.query(
     `UPDATE tasks
-        SET status = 'accepted',
+        SET status = 'merged',
             merge_status = 'merged',
             merge_status_checked_at = now(),
             updated_at = now()
@@ -1296,11 +1172,11 @@ export async function markTaskMergeAccepted(
   if ((result.rowCount ?? 0) === 0) {
     return false;
   }
-  await addTaskEvent(client, taskId, null, "merge_accepted", "检测到开发分支已合并进目标分支，自动验收", {});
+  await addTaskEvent(client, taskId, null, "merged", "检测到 PR 已合并，任务进入「已合并」终态", {});
   return true;
 }
 
-// 检测未合并：仅打合并状态 + 轮转游标，不动 updated_at（避免每轮把 success 任务顶到列表排序顶部）。
+// 检测未合并:仅打合并状态 + 轮转游标,不动 updated_at(避免每轮把 success 任务顶到列表排序顶部)。
 export async function setTaskMergeUnmerged(client: pg.Pool | pg.PoolClient, taskId: string): Promise<void> {
   await client.query(
     `UPDATE tasks
@@ -1339,33 +1215,6 @@ export async function claimNextResumableTask(
                      AND te.event_type IN ('resumed', 'rerun_started')),
                  'epoch'::timestamptz)
           )
-        ORDER BY tasks.updated_at ASC
-        FOR UPDATE SKIP LOCKED
-        LIMIT 1
-     )
-     UPDATE tasks
-        SET status = 'running',
-            updated_at = now()
-       FROM candidate
-      WHERE tasks.id = candidate.id
-      RETURNING tasks.*`,
-    [workerId]
-  );
-  return result.rows[0] ?? null;
-}
-
-// 打回重跑：认领本 Worker 自己的、被人工打回的任务（原子翻转为 running）。打回时已落
-// 打回意见评论，claimed_by 在首轮已锁定同机，保证同工作树 + 同机 Claude 会话磁盘。
-export async function claimNextRejectedTask(
-  client: pg.Pool | pg.PoolClient,
-  workerId: string
-): Promise<Task | null> {
-  const result = await client.query<Task>(
-    `WITH candidate AS (
-       SELECT tasks.id
-         FROM tasks
-        WHERE tasks.status = 'rejected'
-          AND tasks.claimed_by = $1
         ORDER BY tasks.updated_at ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
@@ -2735,7 +2584,7 @@ export async function deleteOrphanedAttachments(
   return result.rowCount ?? 0;
 }
 
-// Worker resume / rerun-rejected 路径用：聚合「上一次 resumed/rerun_started 事件之后」所有 user
+// Worker resume 路径用：聚合「上一次 resumed/rerun_started 事件之后」所有 user
 // 评论的附件。跟 getPendingReply 的文本逻辑配套：那边返回拼接 body，这边返回拼接 attachments。
 export async function listPendingReplyAttachments(
   client: pg.Pool | pg.PoolClient,

@@ -22,9 +22,9 @@ import { MAX_ATTACHMENTS_PER_OWNER } from "../../lib/attachment-config";
 
 export const dynamic = "force-dynamic";
 
-// 状态过滤白名单复用 TASK_STATUSES 单一出处(含 accepted/rejected/merged——曾因本地漏列导致
-// 「已合并」筛选被静默丢弃、返回全部)。
+// 状态过滤白名单复用 TASK_STATUSES 单一出处(曾因本地漏列导致「已合并」筛选被静默丢弃、返回全部)。
 const MERGE_STATUSES = ["unknown", "unmerged", "merged"];
+const SUBMIT_MODES = ["pr", "push"] as const;
 const PAGE_SIZES = [20, 50, 100];
 const TASK_MODELS = ["default", "opus", "sonnet", "haiku"];
 
@@ -49,6 +49,11 @@ export async function GET(request: NextRequest) {
 
     const projectId = params.get("projectId")?.trim() || null;
     const workerId = params.get("workerId")?.trim() || null;
+    const submitModeRaw = params.get("submitMode")?.trim();
+    const submitMode =
+      submitModeRaw && (SUBMIT_MODES as readonly string[]).includes(submitModeRaw)
+        ? (submitModeRaw as (typeof SUBMIT_MODES)[number])
+        : null;
     const q = params.get("q")?.trim() || null;
 
     // 排序方向：表头切换 updated_at 升/降序，白名单 asc/desc，默认 desc。
@@ -72,6 +77,7 @@ export async function GET(request: NextRequest) {
         mergeStatus,
         projectId,
         workerId,
+        submitMode,
         projectIds,
         q,
         dir,
