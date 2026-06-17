@@ -324,12 +324,12 @@ export default function TaskDetailPage({
         ))}
       </nav>
 
-      <div className="detail-tab-content">
+      <div className={`detail-tab-content${activeTab === "overview" ? " detail-tab-content--wide" : ""}`}>
         {activeTab === "overview" ? (
           <OverviewTab
             task={task}
             taskRepos={taskRepos}
-            lifecycle={lifecycle}
+            events={events}
             modelLabel={modelLabel}
             depIds={depIds}
             preById={preById}

@@ -4500,6 +4500,362 @@ a.ds-v:hover {
   gap: 20px;
 }
 
+/* ============================================================
+   概览 Tab：五卡三列两行
+   （基本信息 / 进度 / 任务描述[右列跨两行] · 相关信息 / 执行结果）
+   ============================================================ */
+
+/* 概览 Tab 内容区加宽：去掉 detail-tab-content 的 max-width 上限与左右内补白，
+   让五卡网格铺满 .view 内容宽度。 */
+.detail-tab-content--wide {
+  max-width: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 20px;
+  align-items: stretch;
+}
+
+/* 左区：基本信息 / 进度（行1）+ 相关信息 / 执行结果（行2）。 */
+.ov-left {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto;
+  gap: 20px;
+  min-width: 0;
+}
+
+/* 任务描述：右列，跨左区两行（由外层 grid stretch 自动等高）。 */
+.ov-card--desc {
+  min-height: 0;
+}
+
+/* 多仓 PR 表 / 前置任务：补充信息，占满整行（横跨左区 + 描述列）。 */
+.ov-card--full {
+  grid-column: 1 / -1;
+}
+
+/* 卡片：统一卡头 + 卡体；flex 列布局，scroll 卡的滚动区填充剩余高度。 */
+.ov-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+.ov-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.ov-ico {
+  display: inline-flex;
+  color: var(--text-3);
+}
+.ov-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.ov-body--static {
+  padding: 16px 18px;
+}
+
+/* 滚动卡体：外层 region 撑满卡身剩余高度；内层 body 绝对填充并内部滚动——
+   绝对定位使内容不反向撑高卡片，从而进度卡随基本信息卡等高、描述卡随左区等高，超出即滚动。 */
+.ov-scroll-region {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.ov-scroll-region .ov-body {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 16px 18px;
+}
+
+/* 进度面板：百分比进度条 + 里程碑节点 + 事件流。 */
+.ov-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ov-bar-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.ov-bar-label {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.ov-bar-pct {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+.ov-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.ov-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--success);
+  transition: width 240ms ease;
+}
+.ov-bar-nodes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ov-node-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.ov-node-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border-strong);
+  flex: none;
+}
+.ov-node-row.is-done .ov-node-dot {
+  background: var(--success);
+}
+.ov-node-label {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-4);
+}
+.ov-node-row.is-done .ov-node-label {
+  color: var(--text-1);
+}
+.ov-node-time {
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 进度卡内的事件流：左节点名、右时间。 */
+.ov-events {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ov-events-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  margin-bottom: 2px;
+}
+.ov-event-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+.ov-event-label {
+  color: var(--text-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-event-time {
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.ov-event-empty {
+  font-size: 12px;
+  color: var(--text-4);
+}
+
+/* 相关信息：PR 链接（分支 icon + 编号）。 */
+.ov-pr-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* 执行结果 */
+.ov-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ov-result-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.ov-result-text {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.ov-result-empty {
+  font-size: 13px;
+  color: var(--text-4);
+}
+
+/* 任务描述：对话记录（claude 提问 / 用户答复）。 */
+.ov-qa {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ov-qa-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.ov-qa-item {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  background: var(--surface-1);
+}
+.ov-qa-item.user {
+  background: var(--surface-2);
+}
+.ov-qa-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.ov-qa-who {
+  font-weight: 600;
+  color: var(--text-2);
+}
+.ov-qa-time {
+  margin-left: auto;
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+}
+.ov-qa-body {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 窄屏：三列退化为单列，scroll 卡取消绝对填充、恢复自然高度（带上限滚动）。 */
+@media (max-width: 900px) {
+  .overview-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ov-left {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ov-scroll-region {
+    flex: none;
+  }
+  .ov-scroll-region .ov-body {
+    position: static;
+    max-height: 360px;
+  }
+}
+
+/* ---------------- SSE 中转连接（总览页 admin 区块） ---------------- */
+
+.relay-conn-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.relay-conn-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.relay-conn-stat {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 8px);
+  background: var(--surface-2, rgba(0, 0, 0, 0.02));
+}
+
+.relay-conn-stat-label {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+
+.relay-conn-stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+}
+
+.relay-conn-stat-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-4);
+}
+
+.relay-conn-table th,
+.relay-conn-table td {
+  vertical-align: top;
+}
+
+.relay-conn-channels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 420px;
+}
+
+/* 行内代码风 chip：频道名等短标识。复用 .mono 拿等宽字体。 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.03));
+  font-size: 11.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+@media (max-width: 1024px) {
+  .relay-conn-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* 实时对话 / 任务详情·执行记录顶部元信息条：通道徽章 + 模型 + Worker + 套餐用量 + 上下文/累计 token。
    一行 chip 紧凑展示，过宽时整行可换行；颜色沿用 dashboard 的 STATUS_META tone 体系。 */
 .session-meta-bar {
