@@ -13,9 +13,9 @@ import type {
   Worker
 } from "@claude-center/db";
 import {
-  Activity, ArrowDown, ArrowUp, Boxes, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert,
+  Activity, ArrowDown, ArrowUp, Ban, Boxes, Bot, Check, CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleAlert,
   Clock, Cpu, Database, ExternalLink, Eye, FolderGit2, GitBranch, GitPullRequest, Inbox, LayoutGrid, ListTodo, LogOut,
-  MessageSquare, Network, Pencil, Plus, Power, RadioTower, RefreshCw, RotateCcw, Save, Search, Send, Server,
+  MessageSquare, Network, Pencil, Plus, Power, RadioTower, RefreshCw, RotateCcw, RotateCw, Save, Search, Send, Server,
   ShieldCheck, Tag, Trash2, UserRound, Users, X
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -86,6 +86,70 @@ const STATUS_ORDER: string[] = [
   "success", "merged", "accepted", "rejected", "failed", "cancelled"
 ];
 
+// 批量管理动作清单与适用状态。与 /api/tasks/bulk 端点 BULK_ACTIONS 一一对应，
+// applicable 用于按选区状态过滤可用动作（无可执行对象时不渲染按钮）。
+type BulkAction = "publish" | "unpublish" | "cancel" | "accept" | "reactivate" | "retry" | "delete";
+
+const BULK_ACTION_META: {
+  key: BulkAction;
+  label: string;
+  icon: ReactNode;
+  applicable: (status: string) => boolean;
+  danger?: boolean;
+  confirm: (n: number) => string;
+}[] = [
+  {
+    key: "publish",
+    label: "批量发布",
+    icon: <Send size={14} />,
+    applicable: (s) => s === "draft" || s === "scheduled",
+    confirm: (n) => `确认发布选中的 ${n} 个任务进入待处理队列？`
+  },
+  {
+    key: "unpublish",
+    label: "退回草稿",
+    icon: <RotateCcw size={14} />,
+    applicable: (s) => s === "pending",
+    confirm: (n) => `确认把选中的 ${n} 个待处理任务退回草稿？`
+  },
+  {
+    key: "accept",
+    label: "验收通过",
+    icon: <CheckCheck size={14} />,
+    applicable: (s) => s === "success",
+    confirm: (n) => `确认通过选中的 ${n} 个任务的人工验收？`
+  },
+  {
+    key: "cancel",
+    label: "批量取消",
+    icon: <Ban size={14} />,
+    applicable: (s) => s === "claimed" || s === "running" || s === "waiting",
+    confirm: (n) => `确认取消选中的 ${n} 个在途任务？将通知 Worker 中止执行。`
+  },
+  {
+    key: "reactivate",
+    label: "重新激活",
+    icon: <RotateCw size={14} />,
+    applicable: (s) => s === "failed" || s === "cancelled",
+    confirm: (n) => `确认把选中的 ${n} 个任务重新激活为草稿？执行现场将清空。`
+  },
+  {
+    key: "retry",
+    label: "续接重试",
+    icon: <RefreshCw size={14} />,
+    applicable: (s) => s === "failed" || s === "cancelled",
+    confirm: (n) => `确认续接重试选中的 ${n} 个任务？保留工作树带上下文重跑。`
+  },
+  {
+    key: "delete",
+    label: "批量删除",
+    icon: <Trash2 size={14} />,
+    applicable: (s) => s !== "claimed" && s !== "running",
+    danger: true,
+    confirm: (n) => `确认删除选中的 ${n} 个任务？此操作不可撤销。`
+  }
+];
+
 function TasksView({
   projects,
   onOpenTask,
@@ -118,6 +182,10 @@ function TasksView({
   // 右侧栏 worker 下拉与统计：上层共享下拉数据源。
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [sidebarStats, setSidebarStats] = useState<TaskStatsPayload | null>(null);
+  // 批量管理：跨当前页选中集合（id），切换筛选/翻页时清空；bulkBusy 防抖避免连点。
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{ action: BulkAction; ok: number; failed: number } | null>(null);
   const { confirm, dialog } = useConfirm();
 
   async function handleDelete(task: Task) {
@@ -142,6 +210,40 @@ function TasksView({
     if (response.ok) setRefreshKey((prev) => prev + 1);
   }
 
+  // 批量动作执行：POST /api/tasks/bulk，返回 { ok, failed[] }。失败逐条聚合，不整体回滚。
+  async function handleBulkAction(action: BulkAction, eligibleIds: string[]) {
+    const meta = BULK_ACTION_META.find((entry) => entry.key === action);
+    if (!meta) return;
+    const ok = await confirm({
+      title: meta.label,
+      message: meta.confirm(eligibleIds.length),
+      confirmText: meta.label,
+      danger: meta.danger
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    setBulkResult(null);
+    try {
+      const response = await fetch("/api/tasks/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ids: eligibleIds })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        setBulkResult({ action, ok: 0, failed: eligibleIds.length });
+        window.alert(payload.error ?? `批量操作失败：${response.status}`);
+        return;
+      }
+      const data = (await response.json()) as { ok: number; failed: { id: string; error: string }[] };
+      setBulkResult({ action, ok: data.ok, failed: data.failed.length });
+      setSelectedIds(new Set());
+      setRefreshKey((prev) => prev + 1);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   // 关键词 debounce，避免每敲一个字符就发一次请求
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQ(q.trim()), 300);
@@ -152,6 +254,12 @@ function TasksView({
   useEffect(() => {
     setPage(1);
   }, [status, projectId, workerId, debouncedQ, dir, pageSize]);
+
+  // 切换筛选 / 翻页 / 改排序 / 改页大小时清空选区——选中的任务可能不在新视图里，
+  // 跨页保留会让用户误以为「未在表内」的任务也参与批量操作。
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [status, projectId, workerId, debouncedQ, dir, page, pageSize]);
 
   // worker 下拉数据：取全集仅用于过滤展示，离线 worker 也保留（历史任务仍要可定位）。
   // worker 注册/离线属低频事件，挂载拉一次即可，不必因任意 relay 事件被动刷新（Infinity = 关闭所有自动刷新源）。
@@ -201,6 +309,46 @@ function TasksView({
   }, [page, totalPages]);
 
   const hasFilter = Boolean(status || projectId || workerId || debouncedQ);
+
+  // 当前页可被勾选的任务集合（与选区交集）。批量动作按可用性筛选各自适用 id。
+  const selectedTasksOnPage = useMemo(
+    () => data.tasks.filter((task) => selectedIds.has(task.id)),
+    [data.tasks, selectedIds]
+  );
+  const pageSelectableIds = data.tasks.map((task) => task.id);
+  const allSelectedOnPage = pageSelectableIds.length > 0 && pageSelectableIds.every((id) => selectedIds.has(id));
+  const someSelectedOnPage = pageSelectableIds.some((id) => selectedIds.has(id));
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function toggleSelectAllOnPage() {
+    if (allSelectedOnPage) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of pageSelectableIds) next.delete(id);
+        return next;
+      });
+    } else {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of pageSelectableIds) next.add(id);
+        return next;
+      });
+    }
+  }
+
+  const availableBulkActions = canCreateTask
+    ? BULK_ACTION_META.map((meta) => ({
+        meta,
+        ids: selectedTasksOnPage.filter((task) => meta.applicable(task.status)).map((task) => task.id)
+      })).filter((entry) => entry.ids.length > 0)
+    : [];
 
   return (
     <>
@@ -267,6 +415,59 @@ function TasksView({
               />
             </div>
 
+            {canCreateTask && selectedTasksOnPage.length > 0 ? (
+              <div className="bulk-bar">
+                <span className="bulk-bar-info">
+                  已选 <strong>{selectedTasksOnPage.length}</strong> 个任务
+                </span>
+                <div className="bulk-bar-actions">
+                  {availableBulkActions.length === 0 ? (
+                    <span className="bulk-bar-hint">所选任务没有可执行的批量操作</span>
+                  ) : (
+                    availableBulkActions.map(({ meta, ids }) => (
+                      <button
+                        key={meta.key}
+                        type="button"
+                        className={`btn btn-sm${meta.danger ? " btn-danger" : ""}`}
+                        disabled={bulkBusy}
+                        onClick={() => void handleBulkAction(meta.key, ids)}
+                        title={`对所选中 ${ids.length} 个适用任务执行：${meta.label}`}
+                      >
+                        {meta.icon}
+                        {meta.label}
+                        <span className="bulk-count">({ids.length})</span>
+                      </button>
+                    ))
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => setSelectedIds(new Set())}
+                    disabled={bulkBusy}
+                    title="清空选区"
+                  >
+                    <X size={14} />
+                    取消选中
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {bulkResult ? (
+              <div className="bulk-result" data-tone={bulkResult.failed > 0 ? "warn" : "ok"}>
+                <Check size={14} />
+                {`${BULK_ACTION_META.find((m) => m.key === bulkResult.action)?.label ?? "批量操作"}：成功 ${bulkResult.ok} 个`}
+                {bulkResult.failed > 0 ? `，失败 ${bulkResult.failed} 个` : ""}
+                <button
+                  type="button"
+                  className="bulk-result-close"
+                  onClick={() => setBulkResult(null)}
+                  aria-label="关闭"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ) : null}
+
             <div className="card-body flush">
               {data.tasks.length === 0 ? (
                 <Empty
@@ -278,6 +479,19 @@ function TasksView({
                   <table className="table table-static">
                     <thead>
                       <tr>
+                        {canCreateTask ? (
+                          <th style={{ width: 32 }}>
+                            <input
+                              type="checkbox"
+                              aria-label="全选当前页"
+                              checked={allSelectedOnPage}
+                              ref={(el) => {
+                                if (el) el.indeterminate = !allSelectedOnPage && someSelectedOnPage;
+                              }}
+                              onChange={toggleSelectAllOnPage}
+                            />
+                          </th>
+                        ) : null}
                         <th>任务</th>
                         <th>项目</th>
                         <th>分支</th>
@@ -303,8 +517,19 @@ function TasksView({
                         const rowCanDelete = canCreateTask && task.status !== "claimed" && task.status !== "running";
                         const rowCanUnpublish = canCreateTask && task.status === "pending";
                         const prNumber = parsePrNumber(task.pr_url);
+                        const checked = selectedIds.has(task.id);
                         return (
-                          <tr key={task.id}>
+                          <tr key={task.id} data-selected={checked || undefined}>
+                            {canCreateTask ? (
+                              <td onClick={(event) => event.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  aria-label={`选择任务 ${task.title}`}
+                                  checked={checked}
+                                  onChange={() => toggleSelect(task.id)}
+                                />
+                              </td>
+                            ) : null}
                             <td>
                               <span className="t-title">{task.title}</span>
                             </td>
