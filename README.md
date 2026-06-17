@@ -375,3 +375,27 @@ scheduled ──到点(自动) / 人工立即发布──▶ pending ──▶ c
 - 健康数据**搭总览页 `/api/dashboard` 既有 3s 轮询返回**（含 `health: { db, scheduler }` 块），不另开端点、不加定时器。`db` 走 `getPoolStats` + `pingDatabase`；`scheduler` 由 `apps/console/app/lib/scheduler-state.ts` 把调度器的启动 / tick 状态记在 `globalThis`（instrumentation 写、route 读）。
 - 全站客户端轮询统一到 `apps/console/app/lib/use-polling.ts` 的 `POLL_INTERVAL_MS` 常量 + `usePolling` hook，取代散落的 `setInterval(…, 3000)`。
 - 纯内存调度器状态在单 Console 进程下成立；多实例时为 per-instance 视图。详见 `docs/spec/runtime-health-overview.md`。
+
+## 消息通知中心
+
+Console 顶栏（侧边栏品牌区右侧）新增「铃铛」聚合 9 类消息通知：
+
+| 类型 | 触发点 | 接收人 |
+| --- | --- | --- |
+| `task_claimed`     | `claimNextTask`：Worker 认领任务 | 项目可见者（admin + `user_project_links`） |
+| `task_waiting`     | `setTaskWaiting`：任务首次进入等待回复 | 同上 |
+| `task_success`     | `markTaskSuccess`：任务执行完成 | 同上 |
+| `task_failed`      | `markTaskFailed`：任务执行失败 | 同上 |
+| `task_pr_created`  | `markTaskSuccess` 且带 `pr_url` | 同上 |
+| `worker_online`    | `registerWorker`：worker 首次注册 / `offline→online` 翻转 | 全部 admin |
+| `worker_offline`   | Console `sweepStaleWorkers`：心跳超 60s 翻 offline | 全部 admin |
+| `sse_disconnect`   | 浏览器 `useRelayStatus` 显示 `reconnecting` | 前端瞬时合成（不入库） |
+| `db_disconnect`    | 通知接口连续 ≥2 次拉取失败 | 前端瞬时合成（不入库） |
+
+实现要点：
+
+- **持久化通知（前 7 种）** 在 DB 唯一权威，按收件人单行存储；fanout 在写入侧用 `INSERT ... SELECT u.id ... FROM users` 一次完成。RBAC 范围（admin + 项目分配用户）= 已有的 `user_project_links`。
+- **瞬时通知（后 2 种）** 是「写不进 DB 时还需要看到」的健康状况（SSE 中断 / DB 中断），由前端按 `useRelayStatus` + 通知接口拉取健康度合成，**不计入未读红点**（无法被"已读"），仅在下拉里展示当前状态。
+- `worker_offline` 由 Console 后台调度器每 30s 顺带扫描一次（与现有定时发布提升共 tick）：`UPDATE workers SET status='offline' WHERE status='online' AND last_seen_at < now()-60s RETURNING ...` 用 `status` 字段做幂等门，避免反复发。重启上线再由 `registerWorker` 翻回 `online`。
+- `worker_online` 仅在 `offline→online` 翻转或首次注册时触发；纯心跳保持在线（仍 online）不发，避免每分钟一条。
+- 该能力依赖数据库迁移 `029_notifications.sql`（新增 `notifications` 表 + 收件箱 / 未读索引）。升级后务必先跑 `npm run db:migrate`。

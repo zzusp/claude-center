@@ -4530,3 +4530,227 @@ a.ds-v:hover {
 .session-meta-bar .sm-usage-pair {
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------------- Sidebar notification bell ---------------- */
+
+.brand {
+  /* 让铃铛贴最右；保留原 8px 内边距与对齐 */
+  justify-content: flex-start;
+}
+
+.brand .notif {
+  margin-left: auto;
+}
+
+.notif {
+  position: relative;
+  display: inline-block;
+}
+
+.notif-trigger {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-1);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.notif-trigger:hover {
+  color: var(--text-1);
+  border-color: var(--border-strong);
+}
+
+.notif-dot {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--failed, #dc2626);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.notif-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  width: 360px;
+  max-height: 480px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+
+.notif-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.notif-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.notif-mark-all {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.notif-mark-all:hover:not(:disabled) {
+  color: var(--text-1);
+  background: var(--surface-1);
+}
+
+.notif-mark-all:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.notif-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.notif-row {
+  display: grid;
+  grid-template-columns: 24px 1fr 8px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-2);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  font: inherit;
+}
+
+.notif-row:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+.notif-row:last-child {
+  border-bottom: 0;
+}
+
+.notif-row.unread {
+  background: rgba(37, 99, 235, 0.05);
+}
+
+.notif-ephem {
+  background: rgba(220, 38, 38, 0.06);
+}
+
+.notif-ico {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.notif-row[data-tone="success"] .notif-ico {
+  color: var(--success);
+}
+
+.notif-row[data-tone="failed"] .notif-ico {
+  color: var(--failed);
+}
+
+.notif-row[data-tone="merged"] .notif-ico {
+  color: var(--merged);
+}
+
+.notif-row[data-tone="waiting"] .notif-ico {
+  color: var(--waiting);
+}
+
+.notif-row[data-tone="running"] .notif-ico {
+  color: var(--running);
+}
+
+.notif-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.notif-row-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.notif-row-body {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.notif-row-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-4);
+}
+
+.notif-row-dot {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--running, #2563eb);
+  margin-top: 6px;
+}
+
+.notif-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 12px;
+  color: var(--text-3);
+  font-size: 13px;
+}

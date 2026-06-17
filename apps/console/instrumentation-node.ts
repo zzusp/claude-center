@@ -33,7 +33,8 @@ export async function registerNode(): Promise<void> {
     promoteDueScheduledTasks,
     claimNextMergeCheckCandidate,
     markTaskMerged,
-    setTaskMergeUnmerged
+    setTaskMergeUnmerged,
+    sweepStaleWorkers
   } = await import(/* webpackIgnore: true */ "@claude-center/db");
 
   const parsed = Number(process.env.CLAUDE_CENTER_SCHEDULER_INTERVAL_MS);
@@ -53,6 +54,16 @@ export async function registerNode(): Promise<void> {
       recordSchedulerTick(promoted, new Date().toISOString(), null);
       if (promoted > 0) {
         console.log(`[scheduler] 提升 ${promoted} 个到点定时任务进入待处理队列`);
+      }
+      // 同 tick 顺带扫描 stale worker：心跳超过 60s 的 online worker 翻 offline 并发 worker_offline 通知。
+      // 这两个动作各自独立 + 单条 UPDATE/INSERT，互不阻塞；失败仅 warn、不影响定时发布提升。
+      try {
+        const offlined = await sweepStaleWorkers(getPool());
+        if (offlined > 0) {
+          console.log(`[scheduler] ${offlined} 个 Worker 被翻为 offline 并发出离线通知`);
+        }
+      } catch (error) {
+        console.warn(`[scheduler] sweepStaleWorkers 失败：${error instanceof Error ? error.message : String(error)}`);
       }
     } catch (error) {
       recordSchedulerTick(0, new Date().toISOString(), error instanceof Error ? error.message : String(error));

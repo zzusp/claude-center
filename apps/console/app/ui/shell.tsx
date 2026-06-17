@@ -7,6 +7,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { ROLE_LABEL, type CurrentUser } from "./dashboard-shared";
+import Notifications from "./notifications";
 
 type NavItem = { href: string; label: string; icon: ReactNode; adminOnly?: boolean };
 
@@ -42,6 +43,7 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
             <Boxes size={18} />
           </span>
           <span className="brand-text">ClaudeCenter</span>
+          <Notifications />
         </div>
 
         <nav className="nav">
