@@ -175,7 +175,8 @@ export default function TaskDetailPage({
 
   const isBlocked = task.status === "pending" && (task.blocked ?? false);
   const canPublish = (task.status === "draft" || task.status === "scheduled") && canCreateTask;
-  const canReview = task.status === "success" && canCreateTask;
+  // 待验收 / 已合并均可走人工验收：success 是 Worker 交付待人工 review；merged 是 PR 已落地仍需签收终态。
+  const canReview = (task.status === "success" || task.status === "merged") && canCreateTask;
   // 在途态可取消（已认领 / 执行中 / 等待回复）。
   const isCancellable = task.status === "claimed" || task.status === "running" || task.status === "waiting";
   // 仅草稿/定时态可编辑（执行前）。

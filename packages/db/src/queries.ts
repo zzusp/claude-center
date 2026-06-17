@@ -1117,13 +1117,14 @@ export async function markTaskCancelled(
   return cancelled;
 }
 
-// 人工验收通过：仅 success 可验收，翻为终态 accepted。返回 null 表示任务不在待验收态。
-// 在调用方事务内执行。
+// 人工验收通过：success / merged 均可翻为终态 accepted——success 是 PR 模式下「Worker 已交付，
+// 等人工 review」；merged 是「PR 已合并」（自动或人工合并），同样可作为人工签收的对象。
+// 返回 null 表示任务不在可验收态。在调用方事务内执行。
 export async function acceptTask(client: pg.Pool | pg.PoolClient, taskId: string): Promise<Task | null> {
   const result = await client.query<Task>(
     `UPDATE tasks
         SET status = 'accepted', updated_at = now()
-      WHERE id = $1 AND status = 'success'
+      WHERE id = $1 AND status IN ('success', 'merged')
       RETURNING *`,
     [taskId]
   );

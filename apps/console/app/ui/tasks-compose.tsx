@@ -104,9 +104,14 @@ function ComposeTaskForm({
           ? `${branches.length} 个远程分支`
           : "可手动输入";
 
-  // 前置任务候选：同项目、未取消（取消的任务无法被验收，选它会导致后置永久阻塞）。
+  // 前置任务候选：同项目、未取消（取消的任务无法被验收，选它会导致后置永久阻塞），
+  // 且排除已合并 / 已验收（这两态已等同完成，加为前置只是干扰；选了也立刻解阻塞，无意义）。
   const dependencyCandidates = candidateTasks.filter(
-    (task) => task.project_id === selectedProjectId && task.status !== "cancelled"
+    (task) =>
+      task.project_id === selectedProjectId &&
+      task.status !== "cancelled" &&
+      task.status !== "merged" &&
+      task.status !== "accepted"
   );
 
   return (
