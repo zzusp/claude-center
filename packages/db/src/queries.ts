@@ -1182,8 +1182,13 @@ export async function markTaskMerged(
   await addTaskEvent(client, taskId, workerId, "merged", "Task merged and cleaned up", resultPayload);
 }
 
+// 单任务最小重查间隔（秒）：避免只有一个待清理任务时，每 tick（默认 10s）都重复查 PR/重试本地清理。
+// 60s 对人工合并的轮询足够及时；清理失败场景由 setTaskMergeChecked 的 backoffSeconds 进一步退避。
+const CLEANUP_MIN_CHECK_INTERVAL_SECONDS = 60;
+
 // 清理候选（PR 模式）：本 worker 的、已建 PR 的 success 任务，按 merge_checked_at 轮转取最久未查
 // 的一个（NULL 优先）。只读不翻状态——是否清理由 cleanupMergedTask 依据 PR 合并状态决定。
+// 节流：上次检查在 CLEANUP_MIN_CHECK_INTERVAL_SECONDS 内的任务不会再被领取，避免高频重试。
 export async function claimNextCleanupCandidate(
   client: pg.Pool | pg.PoolClient,
   workerId: string
@@ -1194,24 +1199,28 @@ export async function claimNextCleanupCandidate(
       WHERE status = 'success'
         AND claimed_by = $1
         AND pr_url IS NOT NULL
+        AND (merge_checked_at IS NULL
+             OR merge_checked_at < now() - ($2 || ' seconds')::interval)
       ORDER BY merge_checked_at ASC NULLS FIRST
       LIMIT 1`,
-    [workerId]
+    [workerId, CLEANUP_MIN_CHECK_INTERVAL_SECONDS]
   );
   return result.rows[0] ?? null;
 }
 
-// PR 尚未合并：仅打检查时间戳，让该任务退到轮转队尾，下次优先查更久未查的。
+// 打检查时间戳，让该任务退到轮转队尾。可选 backoffSeconds 把游标推到未来，专门用于清理失败的退避——
+// 比如本地 `git merge --ff-only` 撞冲突时，下一轮重试间隔应远大于 OPEN PR 的轮询间隔，避免噪声事件。
 export async function setTaskMergeChecked(
   client: pg.Pool | pg.PoolClient,
   taskId: string,
-  workerId: string
+  workerId: string,
+  backoffSeconds = 0
 ): Promise<void> {
   await client.query(
     `UPDATE tasks
-        SET merge_checked_at = now()
+        SET merge_checked_at = now() + ($3 || ' seconds')::interval
       WHERE id = $1 AND claimed_by = $2`,
-    [taskId, workerId]
+    [taskId, workerId, backoffSeconds]
   );
 }
 

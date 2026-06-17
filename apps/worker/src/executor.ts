@@ -1136,9 +1136,12 @@ export async function cleanupMergedTask(config: WorkerConfig, task: Task): Promi
       const ctx = s.ctx;
       const repoLocal = repoLocalFor(localPath, ctx);
       // base_branch 来自 task_repos（每仓独立）；签回 base 让本地 head 不停在已删工作分支上。
+      // 用 `git merge --ff-only origin/<base>` 而非 `git pull --ff-only origin <base>`：
+      // 前者直接合并已 fetch 的远端 ref，确定单一 merge head；后者经过 FETCH_HEAD，多 worker / 并发
+      // fetch 撞上残留多条 for-merge 时会报 "Cannot fast-forward to multiple branches"。
       await runCommand("git", ["-C", repoLocal, "fetch", "origin", "--prune"], { timeoutMs: 10 * 60_000 });
       await runCommand("git", ["-C", repoLocal, "checkout", ctx.base_branch], { timeoutMs: 5 * 60_000 });
-      await runCommand("git", ["-C", repoLocal, "pull", "--ff-only", "origin", ctx.base_branch], { timeoutMs: 10 * 60_000 });
+      await runCommand("git", ["-C", repoLocal, "merge", "--ff-only", `origin/${ctx.base_branch}`], { timeoutMs: 10 * 60_000 });
       // squash/rebase 合并时签出分支没有工作分支的提交，必须 -D 强删；远端可能已被 GitHub 自动删除。
       const localBranchDeleted = await runTolerant(["-C", repoLocal, "branch", "-D", ctx.work_branch]);
       const remoteBranchDeleted = await runTolerant(["-C", repoLocal, "push", "origin", "--delete", ctx.work_branch]);
@@ -1157,8 +1160,9 @@ export async function cleanupMergedTask(config: WorkerConfig, task: Task): Promi
       multiRepoCleanup: cleanupResults
     });
   } catch (error) {
-    // PR 已合并但本地清理失败（如签出分支切换/拉取出错）：打时间戳退到轮转队尾，下轮重试，不丢「已合并」。
-    await setTaskMergeChecked(pool, task.id, config.workerId);
+    // PR 已合并但本地清理失败（如签出分支切换/拉取出错）：把游标推后 5 分钟再重试——本地状态出问题
+    // 多半要人工介入，10 秒级重试只制造大量 cleanup_retry 噪声事件。任务仍留在 success 不丢「已合并」。
+    await setTaskMergeChecked(pool, task.id, config.workerId, 5 * 60);
     await addTaskEvent(
       pool,
       task.id,
