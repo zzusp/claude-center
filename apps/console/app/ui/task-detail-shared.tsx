@@ -45,12 +45,6 @@ export const EVENT_META: Record<string, EventMeta> = {
   cancel_requested: { label: "请求取消", tone: "cancelled" },
   cancelled: { label: "已取消", tone: "cancelled" },
   retry_requested: { label: "已请求续接重试", tone: "pending" },
-  // accepted/rejected/cleanup_retry/merge_accepted 事件类型在 028_drop_accepted_rejected.sql 后不再产生,
-  // 但历史 task_events 行仍可能存在;保留 label 让时间线能正确回显旧记录。
-  accepted: { label: "[历史] 人工验收通过", tone: "success" },
-  rejected: { label: "[历史] 人工验收打回", tone: "failed" },
-  merge_accepted: { label: "[历史] 检测合并·自动验收", tone: "merged" },
-  cleanup_retry: { label: "[历史] 合并清理重试", tone: "pending" },
   merged: { label: "已合并", tone: "merged" }
 };
 
