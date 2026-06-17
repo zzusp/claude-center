@@ -1,0 +1,37 @@
+{
+  "label": "after",
+  "notifCalls": 5,
+  "cadence": [
+    "16.25",
+    "15.00",
+    "15.01",
+    "14.99"
+  ],
+  "navReport": [
+    {
+      "route": "/tasks",
+      "dups": []
+    },
+    {
+      "route": "/chat",
+      "dups": []
+    },
+    {
+      "route": "/workers",
+      "dups": []
+    },
+    {
+      "route": "/projects",
+      "dups": []
+    },
+    {
+      "route": "/",
+      "dups": [
+        [
+          "GET /api/dashboard",
+          2
+        ]
+      ]
+    }
+  ]
+}

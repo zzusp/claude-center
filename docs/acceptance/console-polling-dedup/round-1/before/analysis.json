@@ -1,0 +1,68 @@
+{
+  "label": "before",
+  "notifCalls": 9,
+  "cadence": [
+    "2.56",
+    "12.45",
+    "2.56",
+    "11.72",
+    "1.02",
+    "2.25",
+    "12.45",
+    "5.04"
+  ],
+  "navReport": [
+    {
+      "route": "/tasks",
+      "dups": [
+        [
+          "GET /api/workers",
+          2
+        ],
+        [
+          "GET /api/tasks?dir=desc&page=1&pageSize=20",
+          2
+        ],
+        [
+          "GET /api/projects",
+          2
+        ]
+      ]
+    },
+    {
+      "route": "/chat",
+      "dups": [
+        [
+          "GET /api/projects",
+          2
+        ],
+        [
+          "GET /api/workers",
+          2
+        ]
+      ]
+    },
+    {
+      "route": "/workers",
+      "dups": [
+        [
+          "GET /api/workers",
+          2
+        ]
+      ]
+    },
+    {
+      "route": "/projects",
+      "dups": []
+    },
+    {
+      "route": "/",
+      "dups": [
+        [
+          "GET /api/relay/connections",
+          2
+        ]
+      ]
+    }
+  ]
+}

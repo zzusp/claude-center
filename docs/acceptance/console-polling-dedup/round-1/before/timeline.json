@@ -1,0 +1,674 @@
+{
+  "label": "before",
+  "baseUrl": "http://127.0.0.1:3010",
+  "t0": 1781690059406,
+  "dwellMark": 162252,
+  "navMarks": [
+    {
+      "route": "/tasks",
+      "at": 197260
+    },
+    {
+      "route": "/chat",
+      "at": 201491
+    },
+    {
+      "route": "/workers",
+      "at": 205622
+    },
+    {
+      "route": "/projects",
+      "at": 209698
+    },
+    {
+      "route": "/",
+      "at": 213782
+    }
+  ],
+  "timeline": [
+    {
+      "t": 8238,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/relay/ticket",
+      "search": ""
+    },
+    {
+      "t": 8240,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 8297,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "search": ""
+    },
+    {
+      "t": 11234,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/relay/connections",
+      "search": ""
+    },
+    {
+      "t": 11234,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/relay/connections",
+      "search": ""
+    },
+    {
+      "t": 14564,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/relay/ticket",
+      "search": ""
+    },
+    {
+      "t": 14564,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 14688,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 14691,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/tasks",
+      "search": "?dir=desc&page=1&pageSize=20"
+    },
+    {
+      "t": 14691,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/projects",
+      "search": ""
+    },
+    {
+      "t": 17964,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 32972,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 35113,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 42672,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/relay/ticket",
+      "search": ""
+    },
+    {
+      "t": 42672,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 42825,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/projects",
+      "search": ""
+    },
+    {
+      "t": 42825,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 43079,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/conversations",
+      "search": ""
+    },
+    {
+      "t": 47965,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 58473,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 62988,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 73174,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/relay/ticket",
+      "search": ""
+    },
+    {
+      "t": 73174,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 73181,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 74891,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 74891,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 77207,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 78034,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 78096,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 80210,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 83209,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 86207,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 89211,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 92209,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 92887,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 93011,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 94252,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 95208,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 98207,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 101207,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 104310,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/relay/ticket",
+      "search": ""
+    },
+    {
+      "t": 104314,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 104391,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/projects",
+      "search": ""
+    },
+    {
+      "t": 108024,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 122953,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 124233,
+      "phase": "warmup",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 134152,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/relay/ticket",
+      "search": ""
+    },
+    {
+      "t": 134156,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 134237,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "search": ""
+    },
+    {
+      "t": 136125,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/relay/connections",
+      "search": ""
+    },
+    {
+      "t": 136126,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/relay/connections",
+      "search": ""
+    },
+    {
+      "t": 138035,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 138036,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "search": ""
+    },
+    {
+      "t": 150508,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 153061,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 153061,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "search": ""
+    },
+    {
+      "t": 162675,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "search": ""
+    },
+    {
+      "t": 165501,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 166124,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/relay/connections",
+      "search": ""
+    },
+    {
+      "t": 168060,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 168061,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "search": ""
+    },
+    {
+      "t": 177677,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "search": ""
+    },
+    {
+      "t": 180507,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 183067,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 183067,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "search": ""
+    },
+    {
+      "t": 192678,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "search": ""
+    },
+    {
+      "t": 194789,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 194789,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "search": ""
+    },
+    {
+      "t": 195814,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 196128,
+      "phase": "home-dwell",
+      "method": "GET",
+      "path": "/api/relay/connections",
+      "search": ""
+    },
+    {
+      "t": 198064,
+      "phase": "nav:/tasks",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 198065,
+      "phase": "nav:/tasks",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "search": ""
+    },
+    {
+      "t": 199033,
+      "phase": "nav:/tasks",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 199038,
+      "phase": "nav:/tasks",
+      "method": "GET",
+      "path": "/api/tasks",
+      "search": "?dir=desc&page=1&pageSize=20"
+    },
+    {
+      "t": 199038,
+      "phase": "nav:/tasks",
+      "method": "GET",
+      "path": "/api/projects",
+      "search": ""
+    },
+    {
+      "t": 199038,
+      "phase": "nav:/tasks",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 199040,
+      "phase": "nav:/tasks",
+      "method": "GET",
+      "path": "/api/tasks",
+      "search": "?dir=desc&page=1&pageSize=20"
+    },
+    {
+      "t": 199040,
+      "phase": "nav:/tasks",
+      "method": "GET",
+      "path": "/api/projects",
+      "search": ""
+    },
+    {
+      "t": 202743,
+      "phase": "nav:/chat",
+      "method": "GET",
+      "path": "/api/projects",
+      "search": ""
+    },
+    {
+      "t": 202744,
+      "phase": "nav:/chat",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 202744,
+      "phase": "nav:/chat",
+      "method": "GET",
+      "path": "/api/projects",
+      "search": ""
+    },
+    {
+      "t": 202745,
+      "phase": "nav:/chat",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 203091,
+      "phase": "nav:/chat",
+      "method": "GET",
+      "path": "/api/conversations",
+      "search": ""
+    },
+    {
+      "t": 206367,
+      "phase": "nav:/workers",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 206368,
+      "phase": "nav:/workers",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 210510,
+      "phase": "nav:/projects",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 211061,
+      "phase": "nav:/projects",
+      "method": "GET",
+      "path": "/api/workers",
+      "search": ""
+    },
+    {
+      "t": 215544,
+      "phase": "nav:/",
+      "method": "GET",
+      "path": "/api/relay/ticket",
+      "search": ""
+    },
+    {
+      "t": 215545,
+      "phase": "nav:/",
+      "method": "GET",
+      "path": "/api/notifications",
+      "search": ""
+    },
+    {
+      "t": 215632,
+      "phase": "nav:/",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "search": ""
+    },
+    {
+      "t": 217305,
+      "phase": "nav:/",
+      "method": "GET",
+      "path": "/api/relay/connections",
+      "search": ""
+    },
+    {
+      "t": 217306,
+      "phase": "nav:/",
+      "method": "GET",
+      "path": "/api/relay/connections",
+      "search": ""
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+case,desc,round-1
+notif-cadence,/api/notifications 稳态相邻间隔 ∈ [13s,17s] 且无 <10s 密集调用,PASS
+nav-no-dup,每次软导航后窗口内任一初始化接口无 <300ms 重复(StrictMode 二重挂载特征),PASS
+app-boots,dev 起服务 Ready + 各路由可加载 + 接口 200(probe 全程无错),PASS
