@@ -1,0 +1,6 @@
+{
+  "name": "worker-ui-preview",
+  "private": true,
+  "description": "仅供 Worker 桌面 UI 离屏预览/截图验证：electron 把本目录当 app，main 指向 preview-main.cjs。非生产路径，不参与 worker 构建（tsconfig 仅含 src/）。",
+  "main": "preview-main.cjs"
+}
