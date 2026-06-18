@@ -329,13 +329,56 @@ export function windowHtml(): string {
           .conv-list-card .scroll-body { overflow-x: hidden; }
           .conv-detail-card { flex: 1; min-width: 0; }
           .conv-row.conv-active { background: var(--surface-3); }
-          .conv-msgs { display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; }
-          .cbub { max-width: 86%; padding: 7px 11px; border-radius: 10px; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
-          .cbub.user { align-self: flex-end; background: var(--running); color: #fff; border-bottom-right-radius: 3px; }
-          .cbub.asst { align-self: flex-start; background: var(--surface-2); color: var(--text-1); border-bottom-left-radius: 3px; }
-          .cbub.failed { align-self: flex-start; background: rgba(220,38,38,.08); color: var(--text-1); }
-          .cbub-caret { display: inline-block; width: 6px; height: 12px; margin-left: 2px; background: currentColor; vertical-align: -1px; opacity: .6; animation: cc-blink 1s steps(2,start) infinite; }
-          @keyframes cc-blink { to { visibility: hidden; } }
+          /* —— transcript 富展示（对齐 Console apps/console/app/ui/transcript.tsx）—— */
+          .tx { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+          .tx-row { display: flex; max-width: 100%; }
+          .tx-row.user { justify-content: flex-end; }
+          .tx-row.asst { justify-content: flex-start; }
+          .tx-msg { font-size: 12.5px; line-height: 1.6; min-width: 0; }
+          .tx-msg.user { max-width: 80%; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; border-bottom-right-radius: 3px; padding: 7px 11px; }
+          .tx-msg.asst { width: 100%; max-width: 100%; }
+          .tx-text { word-break: break-word; white-space: pre-wrap; }
+          .tx-text pre, .tx-text ul, .tx-text ol, .tx-text li, .tx-text h1, .tx-text h2, .tx-text h3, .tx-text blockquote, .tx-text table, .tx-text th, .tx-text td { white-space: normal; }
+          .tx-text > :first-child { margin-top: 0; }
+          .tx-text > :last-child { margin-bottom: 0; }
+          .tx-text p { margin: 0.4em 0; }
+          .tx-text h1,.tx-text h2,.tx-text h3 { margin: 0.6em 0 0.3em; font-size: 1.05em; font-weight: 600; }
+          .tx-text ul,.tx-text ol { margin: 0.4em 0; padding-left: 1.3em; }
+          .tx-text li { margin: 0.15em 0; }
+          .tx-text code { font-family: monospace; font-size: 11px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px; padding: 1px 4px; }
+          .tx-text pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 7px 9px; margin: 0.35em 0; overflow-x: auto; }
+          .tx-text pre code { background: none; border: none; padding: 0; }
+          .tx-text blockquote { margin: 0.4em 0; padding-left: 9px; border-left: 2px solid var(--border-strong); color: var(--text-2); }
+          .tx-text table { border-collapse: collapse; margin: 0.4em 0; font-size: 12px; }
+          .tx-text th, .tx-text td { border: 1px solid var(--border); padding: 3px 8px; }
+          .tx-text th { background: var(--surface-2); font-weight: 600; }
+          .tx-fold-head { display: flex; align-items: center; gap: 5px; width: 100%; padding: 3px 1px; background: none; border: none; cursor: pointer; color: var(--text-2); font-size: 12px; text-align: left; }
+          .tx-fold-head:hover { color: var(--text-1); }
+          .tx-caret { flex-shrink: 0; font-style: normal; display: inline-block; transition: transform 0.12s; color: var(--text-3); font-size: 10px; }
+          .tx-caret.open { transform: rotate(90deg); }
+          .tx-fold-body { margin: 1px 0 4px 14px; font-family: monospace; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; color: var(--text-2); }
+          .tx-tool { margin: 1px 0; }
+          .tx-tool-ico { flex-shrink: 0; color: var(--text-3); font-size: 11px; }
+          .tx-tool-name { font-weight: 600; color: var(--text-1); }
+          .tx-tool-sum { color: var(--text-3); font-family: monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+          .tx-tool-badge { margin-left: auto; flex-shrink: 0; color: var(--failed); font-size: 11px; }
+          .tx-tool[data-error="1"] .tx-tool-name { color: var(--failed); }
+          .tx-cmd,.tx-json { margin: 0 0 4px; padding: 6px 9px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
+          .tx-diff { margin: 0 0 4px; padding: 4px 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 11.5px; overflow-x: auto; }
+          .tx-diff-del,.tx-diff-add { padding: 0 9px; white-space: pre-wrap; word-break: break-word; }
+          .tx-diff-del { background: rgba(220,38,38,.08); color: #b91c1c; }
+          .tx-diff-add { background: rgba(22,163,74,.1); color: #15803d; }
+          .tx-result { margin-left: 14px; margin-bottom: 3px; border-left: 2px solid var(--border-strong); padding-left: 8px; }
+          .tx-result.err { border-left-color: var(--failed); }
+          .tx-result-head { font-size: 11px; color: var(--text-3); margin-bottom: 2px; }
+          .tx-result.err .tx-result-head { color: var(--failed); }
+          .tx-result-body { margin: 0; font-family: monospace; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; color: var(--text-2); max-height: 240px; overflow: auto; }
+          .tx-think-label { color: var(--text-3); }
+          .tx-streaming { padding: 4px 2px; display: flex; align-items: center; gap: 4px; }
+          .tx-streaming span { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--text-3); opacity: .45; animation: cc-dot-bounce 1.2s ease-in-out infinite; }
+          .tx-streaming span:nth-child(2) { animation-delay: .15s; }
+          .tx-streaming span:nth-child(3) { animation-delay: .3s; }
+          @keyframes cc-dot-bounce { 0%,60%,100% { transform: translateY(0); opacity: .45; } 30% { transform: translateY(-5px); opacity: .85; } }
 
           .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 999px; background: var(--success); position: relative; }
           .live-dot.pulse { animation: cc-breathe 1.8s ease-in-out infinite; }
@@ -816,6 +859,170 @@ export function windowHtml(): string {
             }
           }
 
+          // —— transcript 渲染（逻辑对齐 Console apps/console/app/ui/transcript.tsx）——
+          var txUid = 0;
+          function txId() { return 'tx' + (++txUid); }
+          function txToggle(uid) {
+            var body = document.getElementById(uid);
+            var caret = document.getElementById(uid + '-c');
+            if (!body) return;
+            var open = body.style.display !== 'none';
+            body.style.display = open ? 'none' : 'block';
+            if (caret) caret.classList.toggle('open', !open);
+          }
+          var TX_TRUNC = 4000;
+          function txClip(t) { return t.length > TX_TRUNC ? t.slice(0, TX_TRUNC) + '\\n… (已截断 ' + (t.length - TX_TRUNC) + ' 字)' : t; }
+          function txStr(v) { return typeof v === 'string' ? v : ''; }
+          function txStringify(input) {
+            if (input == null) return '';
+            if (typeof input === 'string') return input;
+            try { return JSON.stringify(input, null, 2); } catch (e) { return String(input); }
+          }
+          function txToolResultText(content) {
+            if (typeof content === 'string') return content;
+            if (Array.isArray(content)) return content.map(function(b) { return b && typeof b.text === 'string' ? b.text : ''; }).filter(Boolean).join('\\n');
+            return content == null ? '' : txStringify(content);
+          }
+          function txToolSummary(name, input) {
+            var o = (input && typeof input === 'object') ? input : {};
+            if (name === 'Bash' || name === 'PowerShell') return (txStr(o.command).split('\\n')[0] || '').slice(0, 140);
+            if (name === 'Read' || name === 'Write' || name === 'Edit' || name === 'MultiEdit' || name === 'NotebookEdit') {
+              var p = txStr(o.file_path) || txStr(o.notebook_path);
+              if (!p) return '';
+              var parts = p.split(/[/\\\\]/).filter(Boolean);
+              return parts.length <= 2 ? p : ('…/' + parts.slice(-2).join('/'));
+            }
+            if (name === 'Grep' || name === 'Glob') return txStr(o.pattern);
+            if (name === 'Task') return txStr(o.description);
+            return '';
+          }
+          function txHasMd(text) { return /[\x60#*_~]|\\[[^\\]]+\\]\\(|^\\s*[->]|^\\s*\\d+\\.\\s|\\n\\n|^\\s*\\|/m.test(text); }
+          function txMdToHtml(text) {
+            var result = '', rx = /\x60\x60\x60([^\\n]*)\\n([\\s\\S]*?)\x60\x60\x60/g, last = 0, m;
+            while ((m = rx.exec(text)) !== null) {
+              result += txInlineMd(text.slice(last, m.index));
+              result += '<pre class="tx-cmd"><code>' + esc(m[2].replace(/\\n$/, '')) + '</code></pre>';
+              last = m.index + m[0].length;
+            }
+            return result + txInlineMd(text.slice(last));
+          }
+          function txInlineMd(text) {
+            if (!text) return '';
+            var codes = [], h = esc(text);
+            h = h.replace(/\x60([^\x60\\n]+)\x60/g, function(_, c) { var id = '\\x00c' + codes.length + '\\x00'; codes.push('<code>' + c + '</code>'); return id; });
+            h = h.replace(/\\*\\*\\*([^\\n*]+?)\\*\\*\\*/g, '<strong><em>$1</em></strong>');
+            h = h.replace(/\\*\\*([^\\n*]+?)\\*\\*/g, '<strong>$1</strong>');
+            h = h.replace(/^### ([^\\n]+)$/gm, '<h3>$1</h3>');
+            h = h.replace(/^## ([^\\n]+)$/gm, '<h2>$1</h2>');
+            h = h.replace(/^# ([^\\n]+)$/gm, '<h1>$1</h1>');
+            h = h.replace(/((?:^[ ]*\\|[^\\n]+\\|[ ]*\\n)(?:^[ ]*\\|[ :|-]+\\|[ ]*\\n)(?:^[ ]*\\|[^\\n]+\\|[ ]*\\n?)*)/gm, function(tbl) {
+              var rows = tbl.trim().split('\\n').filter(function(r) { return r.trim(); });
+              if (rows.length < 2) return tbl;
+              var parseRow = function(row) { return row.split('|').slice(1, -1).map(function(c) { return c.trim(); }); };
+              var headers = parseRow(rows[0]);
+              var aligns = parseRow(rows[1]).map(function(c) {
+                if (/^:-+:$/.test(c)) return 'center';
+                if (/^-+:$/.test(c)) return 'right';
+                if (/^:-+$/.test(c)) return 'left';
+                return '';
+              });
+              var alignAttr = function(i) { return aligns[i] ? ' style="text-align:' + aligns[i] + '"' : ''; };
+              var thead = '<thead><tr>' + headers.map(function(hd, i) { return '<th' + alignAttr(i) + '>' + hd + '</th>'; }).join('') + '</tr></thead>';
+              var tbody = rows.slice(2).map(function(row) { return '<tr>' + parseRow(row).map(function(c, i) { return '<td' + alignAttr(i) + '>' + c + '</td>'; }).join('') + '</tr>'; }).join('');
+              return '<table class="tx-table">' + thead + (tbody ? '<tbody>' + tbody + '</tbody>' : '') + '</table>';
+            });
+            h = h.replace(/((?:^[ ]*[-*+] [^\\n]+\\n?)+)/gm, function(m2) { return '<ul>' + m2.replace(/^[ ]*[-*+] ([^\\n]+)\\n?/gm, '<li>$1</li>') + '</ul>'; });
+            h = h.replace(/((?:^[ ]*\\d+\\. [^\\n]+\\n?)+)/gm, function(m2) { return '<ol>' + m2.replace(/^[ ]*\\d+\\. ([^\\n]+)\\n?/gm, '<li>$1</li>') + '</ol>'; });
+            return h.replace(/\\x00c(\\d+)\\x00/g, function(_, i) { return codes[parseInt(i)] || ''; });
+          }
+          function txRenderDiff(oldText, newText) {
+            var rows = (oldText ? oldText.split('\\n').map(function(l) { return '<div class="tx-diff-del">- ' + esc(l) + '</div>'; }).join('') : '') +
+                       (newText ? newText.split('\\n').map(function(l) { return '<div class="tx-diff-add">+ ' + esc(l) + '</div>'; }).join('') : '');
+            return '<pre class="tx-diff">' + rows + '</pre>';
+          }
+          function txRenderToolInput(name, input) {
+            var o = (input && typeof input === 'object') ? input : {};
+            if (name === 'Edit' && typeof o.old_string === 'string' && typeof o.new_string === 'string') return txRenderDiff(o.old_string, o.new_string);
+            if (name === 'Write' && typeof o.content === 'string') return txRenderDiff('', o.content);
+            if (name === 'MultiEdit' && Array.isArray(o.edits)) return o.edits.map(function(e) { return txRenderDiff(txStr(e.old_string), txStr(e.new_string)); }).join('');
+            if ((name === 'Bash' || name === 'PowerShell') && typeof o.command === 'string') return '<pre class="tx-cmd">' + esc(txClip(o.command)) + '</pre>';
+            var s = txStringify(input);
+            return s ? '<pre class="tx-json">' + esc(txClip(s)) + '</pre>' : '';
+          }
+          function txRenderBlock(block, results) {
+            if (block.kind === 'text') {
+              var content = txHasMd(block.text) ? txMdToHtml(block.text) : '<span style="white-space:pre-wrap">' + esc(block.text) + '</span>';
+              return '<div class="tx-text">' + content + '</div>';
+            }
+            if (block.kind === 'thinking') {
+              var uid = txId();
+              return '<div class="tx-tool"><button class="tx-fold-head" onclick="txToggle(\\'' + uid + '\\')">' +
+                '<span class="tx-caret" id="' + uid + '-c">›</span><span class="tx-think-label">💭 思考</span>' +
+                '</button><pre class="tx-fold-body" id="' + uid + '" style="display:none">' + esc(txClip(block.text)) + '</pre></div>';
+            }
+            if (block.kind === 'tool_use') {
+              var res = block.id ? results[block.id] : undefined;
+              var summary = txToolSummary(block.name, block.input);
+              var hasErr = !!(res && res.isError);
+              var uid2 = txId();
+              return '<div class="tx-tool"' + (hasErr ? ' data-error="1"' : '') + '>' +
+                '<button class="tx-fold-head" onclick="txToggle(\\'' + uid2 + '\\')">' +
+                '<span class="tx-caret" id="' + uid2 + '-c">›</span><span class="tx-tool-ico">⚙</span>' +
+                '<span class="tx-tool-name">' + esc(block.name) + '</span>' +
+                (summary ? '<span class="tx-tool-sum">' + esc(summary) + '</span>' : '') +
+                (hasErr ? '<span class="tx-tool-badge">错误</span>' : '') +
+                '</button><div id="' + uid2 + '" style="display:none">' +
+                txRenderToolInput(block.name, block.input) +
+                (res ? '<div class="tx-result' + (res.isError ? ' err' : '') + '">' +
+                  '<div class="tx-result-head">' + (res.isError ? '⚠ 工具返回' : '↳ 工具返回') + '</div>' +
+                  (res.text ? '<pre class="tx-result-body">' + esc(txClip(res.text)) + '</pre>' : '') +
+                  '</div>' : '') + '</div></div>';
+            }
+            return '';
+          }
+          function parseTranscript(jsonl) {
+            var items = [], lines = jsonl.split(/\\r?\\n/);
+            for (var i = 0; i < lines.length; i++) {
+              var line = lines[i].trim();
+              if (!line) continue;
+              var obj; try { obj = JSON.parse(line); } catch (e) { continue; }
+              if ((obj.type !== 'user' && obj.type !== 'assistant') || !obj.message) continue;
+              var content = obj.message.content;
+              var raw = typeof content === 'string' ? [{type:'text',text:content}] : Array.isArray(content) ? content : [];
+              var blocks = [];
+              for (var j = 0; j < raw.length; j++) {
+                var b = raw[j];
+                if (!b || typeof b !== 'object') continue;
+                if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) blocks.push({kind:'text', text:b.text});
+                else if (b.type === 'thinking' && typeof b.thinking === 'string' && b.thinking.trim()) blocks.push({kind:'thinking', text:b.thinking});
+                else if (b.type === 'tool_use') blocks.push({kind:'tool_use', id:txStr(b.id), name:txStr(b.name)||'tool', input:b.input});
+                else if (b.type === 'tool_result') blocks.push({kind:'tool_result', toolUseId:typeof b.tool_use_id==='string'?b.tool_use_id:null, text:txToolResultText(b.content), isError:!!b.is_error});
+              }
+              if (blocks.length) items.push({role:obj.type, blocks:blocks});
+            }
+            return items;
+          }
+          function renderTranscriptHtml(items) {
+            var results = {};
+            for (var i = 0; i < items.length; i++) {
+              for (var j = 0; j < items[i].blocks.length; j++) {
+                var b = items[i].blocks[j];
+                if (b.kind === 'tool_result' && b.toolUseId) results[b.toolUseId] = {text:b.text, isError:b.isError};
+              }
+            }
+            var html = '<div class="tx">';
+            for (var i = 0; i < items.length; i++) {
+              var item = items[i];
+              var renderable = item.blocks.filter(function(b2) { return b2.kind !== 'tool_result'; });
+              if (!renderable.length) continue;
+              var isUser = item.role === 'user';
+              html += '<div class="tx-row ' + (isUser ? 'user' : 'asst') + '"><div class="tx-msg ' + (isUser ? 'user' : 'asst') + '">';
+              for (var j = 0; j < renderable.length; j++) html += txRenderBlock(renderable[j], results);
+              html += '</div></div>';
+            }
+            return html + '</div>';
+          }
+
           // —— 对话面板（只读：本 worker 承接的远程实时对话，展开见消息线 + 流式实时增量）——
           var expandedConvId = null;
           var convCache = [];
@@ -851,28 +1058,51 @@ export function windowHtml(): string {
             renderConversations(list);
           }
           async function loadConvDetail(convId) {
-            const box = document.getElementById("conv-detail-panel");
+            var box = document.getElementById("conv-detail-panel");
             if (!box) return;
-            const scrollEl = document.getElementById("conv-detail-body");
-            const prevTop = scrollEl ? scrollEl.scrollTop : null;
-            let d;
+            var scrollEl = document.getElementById("conv-detail-body");
+            var prevTop = scrollEl ? scrollEl.scrollTop : null;
+            // 从对话列表缓存取 generating 状态，不依赖 msgs（msgs 早期可能为空）
+            var convMeta = convCache.find(function(c) { return c.id === convId; });
+            var isGenerating = !!(convMeta && convMeta.generating);
+            var d;
             try { d = await window.workerApi.getConversationDetail(convId); }
             catch (e) { box.innerHTML = '<span class="empty">加载失败</span>'; return; }
-            const msgs = d.messages || [];
-            if (!msgs.length) { box.innerHTML = '<span class="empty">无消息</span>'; return; }
-            const hasStreaming = msgs.some((m) => m.role === "assistant" && m.status === "streaming");
-            const fp = msgs.map((m) => m.id + m.status + (m.body || "").length).join(",");
+            var msgs = d.messages || [];
+            var jsonl = d.jsonl || "";
+            // 若对话正在生成且内容还未就绪，只展示动画；否则无内容时显示占位文字
+            if (!msgs.length && !jsonl) {
+              if (isGenerating) {
+                var animFp = "generating|" + convId;
+                if (convDetailFpId === convId && convDetailFp === animFp) return;
+                convDetailFp = animFp; convDetailFpId = convId;
+                box.innerHTML = '<div class="tx-streaming"><span></span><span></span><span></span></div>';
+                if (scrollEl) scrollEl.scrollTo({ top: 0, behavior: 'instant' });
+              } else {
+                box.innerHTML = '<span class="empty">无消息</span>';
+              }
+              return;
+            }
+            var hasStreaming = isGenerating || msgs.some(function(m) { return m.role === "assistant" && (m.status === "streaming" || m.status === "pending"); });
+            var fp = msgs.map(function(m) { return m.id + m.status; }).join(",") + "|" + jsonl.length + "|" + (isGenerating ? "1" : "0");
             if (convDetailFpId === convId && convDetailFp === fp) return;
             convDetailFp = fp;
             convDetailFpId = convId;
-            box.innerHTML = '<div class="conv-msgs">' + msgs.map((m) => {
-              const cls = m.role === "user" ? "user" : "asst";
-              const streaming = m.role === "assistant" && m.status === "streaming";
-              const failed = m.status === "failed";
-              const body = failed ? "执行失败：" + esc(m.error_message || "") : esc(m.body || (streaming ? "…" : ""));
-              return '<div class="cbub ' + cls + (failed ? " failed" : "") + '">' + body +
-                (streaming ? '<span class="cbub-caret"></span>' : "") + '</div>';
-            }).join("") + '</div>';
+            var html = "";
+            if (jsonl) {
+              html = renderTranscriptHtml(parseTranscript(jsonl));
+            } else {
+              // JSONL 未就绪（对话启动头几秒）：降级为纯文本气泡
+              html = '<div class="tx">' + msgs.map(function(m) {
+                var isUser = m.role === "user";
+                var body = m.status === "failed" ? "执行失败：" + esc(m.error_message || "") : esc(m.body || "");
+                if (!body && !isUser) return "";
+                return '<div class="tx-row ' + (isUser ? "user" : "asst") + '"><div class="tx-msg ' + (isUser ? "user" : "asst") + '">' +
+                  '<div class="tx-text"><span style="white-space:pre-wrap">' + body + '</span></div></div></div>';
+              }).join("") + '</div>';
+            }
+            if (hasStreaming) html += '<div class="tx-streaming"><span></span><span></span><span></span></div>';
+            box.innerHTML = html;
             if (!scrollEl) return;
             if (hasStreaming || prevTop === null) {
               scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'instant' });
@@ -972,7 +1202,8 @@ export function windowHtml(): string {
             $("projects").innerHTML = (links && links.length) ? links.map((l) =>
               '<div class="list-item"><span class="li-main"><span class="li-title">' + esc(l.project_name) + '</span><span class="li-sub">' +
               esc(l.local_path) + "</span></span>" +
-              '<button class="btn btn-sm danger" data-unlink="' + esc(l.project_name) + "|||" + esc(l.local_path) + '">删除</button>' +
+              '<span class="task-actions"><button class="btn btn-sm" data-openpath="' + esc(l.local_path) + '">打开目录</button>' +
+              '<button class="btn btn-sm danger" data-unlink="' + esc(l.project_name) + "|||" + esc(l.local_path) + '">删除</button></span>' +
               "</div>").join("") : '<span class="empty">未关联任何项目</span>';
             const sel = $("cloudProject");
             sel.innerHTML = (cloud && cloud.length)
@@ -1057,6 +1288,11 @@ export function windowHtml(): string {
             if (actionEl) {
               await handleTaskAction(actionEl.getAttribute("data-task-action"),
                 actionEl.getAttribute("data-task-id"), actionEl);
+              return;
+            }
+            const openPathEl = e.target.closest && e.target.closest("[data-openpath]");
+            if (openPathEl) {
+              await window.workerApi.openPath(openPathEl.getAttribute("data-openpath"));
               return;
             }
             const unlinkEl = e.target.closest && e.target.closest("[data-unlink]");

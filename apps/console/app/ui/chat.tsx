@@ -2,10 +2,11 @@
 
 import type { Conversation, Project, Worker } from "@claude-center/db";
 import { GitBranch, MessageSquare, Plus, Search, Server, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Empty } from "./shared";
 import { Select, useConfirm } from "./controls";
 import { ChatThread, NewConversationPanel } from "./chat-thread";
+import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
 
 // 实时直连对话视图：左侧会话列表 + 新建（项目/分支/worker/模型），右侧消息线（SSE 流式打字机）+ 输入框。
 // 独立于任务流，独立数据通道。详见 docs/spec/worker-direct-chat.md
@@ -37,37 +38,45 @@ export function ChatView({
     if (cid) setActiveId(cid);
   }, []);
 
+  // 关键词输入做 300ms 防抖再进 filterQuery，避免每敲一字符发一次请求；项目/worker 切换立即生效。
+  const [debouncedKeyword, setDebouncedKeyword] = useState("");
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedKeyword(keyword.trim()), 300);
+    return () => clearTimeout(handle);
+  }, [keyword]);
+
   // 筛选条件聚成 query string；空字段省略，避免每次 ?keyword= 的脏 URL 触发 next 路由缓存击穿。
   const filterQuery = useMemo(() => {
     const params = new URLSearchParams();
-    const k = keyword.trim();
-    if (k) params.set("keyword", k);
+    if (debouncedKeyword) params.set("keyword", debouncedKeyword);
     if (filterProjectId) params.set("projectId", filterProjectId);
     if (filterWorkerId) params.set("workerId", filterWorkerId);
     const s = params.toString();
     return s ? `?${s}` : "";
-  }, [keyword, filterProjectId, filterWorkerId]);
+  }, [debouncedKeyword, filterProjectId, filterWorkerId]);
 
-  async function loadList(query: string): Promise<void> {
+  const loadList = useCallback(async (query: string, isActive: () => boolean = () => true): Promise<void> => {
     try {
       const r = await fetch(`/api/conversations${query}`, { cache: "no-store" });
       if (!r.ok) {
         throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "加载失败");
       }
       const d = (await r.json()) as { conversations: Conversation[] };
+      if (!isActive()) return;
       setConversations(d.conversations);
       // 筛选结果不含当前展示的会话时清空右侧（活跃会话被筛掉，右侧应回到「请选择会话」空态）
       setActiveId((prev) => (prev && d.conversations.some((c) => c.id === prev) ? prev : null));
       setError("");
     } catch (e) {
+      if (!isActive()) return;
       setError(e instanceof Error ? e.message : "加载失败");
     }
-  }
-  // 关键词输入做 300ms 防抖；项目/worker 切换立即生效。
-  useEffect(() => {
-    const handle = setTimeout(() => void loadList(filterQuery), 300);
-    return () => clearTimeout(handle);
-  }, [filterQuery]);
+  }, []);
+
+  // 会话列表实时同步：挂载即拉 + 每 POLL_INTERVAL_MS 周期轮询 + relay 快线，让列表项的「回复中」
+  // 标签（generating 派生）随 worker 应答实时亮起/熄灭，与桌面端「对话」面板一致（桌面端为 3s 轮询）。
+  // filterQuery 变化（含防抖后的关键词、项目/worker 切换）即重新拉取。
+  usePolling((isActive) => loadList(filterQuery, isActive), [filterQuery], POLL_INTERVAL_MS);
   const filtersActive = Boolean(keyword.trim() || filterProjectId || filterWorkerId);
   function clearFilters(): void {
     setKeyword("");

@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, Project, Worker } from "@claude-center/db";
-import { Check, GitBranch, MessageSquare, Pencil, Send, Server, Square, X } from "lucide-react";
+import { ArrowUp, Check, GitBranch, MessageSquare, Pencil, Server, Sparkles, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, postJson } from "./shared";
 import { SessionMetaBar } from "./session-meta";
@@ -270,22 +270,11 @@ export function ChatThread({
             ))}
             {busy ? (
               <div className="tx-row asst">
-                <div className="tx-msg asst">
-                  <span className="bubble-dots" aria-label="回复中">
-                    <i />
-                    <i />
-                    <i />
+                <div className="tx-thinking">
+                  <span className="tx-thinking-pill" role="status" aria-label="思考中">
+                    <Sparkles size={13} className="tx-thinking-ico" aria-hidden="true" />
+                    <span className="tx-thinking-label">思考中…</span>
                   </span>
-                  {canCommand ? (
-                    <button
-                      type="button"
-                      className="btn btn-sm chat-stop"
-                      title="终止本轮回答"
-                      onClick={() => void cancelTurn()}
-                    >
-                      <Square size={12} fill="currentColor" /> 终止
-                    </button>
-                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -316,16 +305,28 @@ export function ChatThread({
           />
           <div className="chat-composer-bar">
             <span className="chat-composer-hint">Enter 发送 · Shift+Enter 换行</span>
-            <button
-              className="chat-send"
-              type="button"
-              disabled={sending || !input.trim()}
-              onClick={send}
-              title="发送消息（Enter）"
-              aria-label="发送消息"
-            >
-              <Send size={16} />
-            </button>
+            {busy ? (
+              <button
+                className="chat-send chat-send-stop"
+                type="button"
+                onClick={() => void cancelTurn()}
+                title="终止本轮回答"
+                aria-label="终止本轮回答"
+              >
+                <Square size={13} fill="currentColor" />
+              </button>
+            ) : (
+              <button
+                className="chat-send"
+                type="button"
+                disabled={sending || !input.trim()}
+                onClick={send}
+                title="发送消息（Enter）"
+                aria-label="发送消息"
+              >
+                <ArrowUp size={18} strokeWidth={2.5} />
+              </button>
+            )}
           </div>
         </div>
       ) : (

@@ -3777,54 +3777,58 @@ a.dep-item:hover {
     visibility: hidden;
   }
 }
-.bubble-dots {
+/* 「思考中」指示：仅 ✦ 图标 + shimmer 文字（无边框/底色），生成中（busy）挂在消息线末尾。
+   ✦ 轻脉冲 + 「思考中…」文字渐变高光横扫（cc-shimmer），克制现代、贴合页面中性灰风格。 */
+.tx-thinking {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 0;
+  gap: 10px;
 }
-.chat-stop {
-  margin-left: 10px;
-  vertical-align: middle;
+.tx-thinking-pill {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  font-size: 11px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface-1);
-  color: var(--text-2);
-  cursor: pointer;
+  gap: 6px;
 }
-.chat-stop:hover {
-  color: var(--failed);
-  border-color: var(--failed);
+.tx-thinking-ico {
+  flex-shrink: 0;
+  color: var(--text-3);
+  animation: cc-spark 2.2s ease-in-out infinite;
 }
-.bubble-dots i {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--text-3);
-  display: inline-block;
-  animation: cc-dot 1.2s ease-in-out infinite;
+.tx-thinking-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  background: linear-gradient(
+    90deg,
+    var(--text-4) 0%,
+    var(--text-4) 40%,
+    var(--text-1) 50%,
+    var(--text-4) 60%,
+    var(--text-4) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: cc-shimmer 1.9s linear infinite;
 }
-.bubble-dots i:nth-child(2) {
-  animation-delay: 0.2s;
-}
-.bubble-dots i:nth-child(3) {
-  animation-delay: 0.4s;
-}
-@keyframes cc-dot {
-  0%,
-  60%,
-  100% {
-    opacity: 0.25;
-    transform: translateY(0);
+@keyframes cc-shimmer {
+  0% {
+    background-position: 150% 0;
   }
-  30% {
+  100% {
+    background-position: -50% 0;
+  }
+}
+@keyframes cc-spark {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.9) rotate(0deg);
+  }
+  50% {
     opacity: 1;
-    transform: translateY(-2px);
+    transform: scale(1.12) rotate(18deg);
   }
 }
 /* 实时对话输入框：textarea + 底部工具条整合进一张圆角卡片，focus-within 高亮边框。
@@ -3873,6 +3877,7 @@ a.dep-item:hover {
   color: var(--text-4);
   user-select: none;
 }
+/* 发送按钮：近黑圆底 + 加粗上箭头（ChatGPT 风格）。回复中时见 .chat-send-stop。 */
 .chat-send {
   flex-shrink: 0;
   display: inline-flex;
@@ -3882,20 +3887,44 @@ a.dep-item:hover {
   height: 34px;
   border-radius: 999px;
   border: none;
-  background: var(--running);
+  background: var(--text-1);
   color: #fff;
   cursor: pointer;
-  transition: background 120ms ease, opacity 120ms ease, transform 120ms ease;
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
 }
 .chat-send:hover:not(:disabled) {
-  background: #1d4ed8;
+  background: #000;
 }
 .chat-send:active:not(:disabled) {
   transform: scale(0.94);
 }
 .chat-send:disabled {
-  opacity: 0.4;
+  background: var(--surface-2);
+  color: var(--text-4);
   cursor: not-allowed;
+}
+/* 回复中：发送按钮原地变终止按钮（深色圆底 + 白色方块），点击 = cancelTurn。 */
+.chat-send-stop {
+  position: relative;
+}
+.chat-send-stop::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  border: 2px solid var(--text-1);
+  opacity: 0.25;
+  animation: cc-stop-ring 1.4s ease-out infinite;
+}
+@keyframes cc-stop-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.35;
+  }
+  100% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
 }
 .chat-closed {
   padding: 14px;

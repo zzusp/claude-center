@@ -7,6 +7,7 @@ import {
   claimNextRetryableTask,
   claimNextTask,
   failConversationTurn,
+  failOrphanedConversationTurns,
   getConversation,
   getTaskWithDeps,
   getPool,
@@ -15,6 +16,7 @@ import {
   listActiveTaskIdsForWorker,
   listCancelRequestedConversationMessages,
   listCancelRequestedTaskIds,
+  getConversationSession,
   listConversationMessages,
   listProjects,
   listTaskComments,
@@ -129,6 +131,7 @@ export type WorkerStatusSnapshot = {
 
 const UNKNOWN_CAPABILITY = { ok: false, version: null, path: null };
 
+
 export class ClaudeCenterWorker {
   private readonly config: WorkerConfig;
   private pollTimer: NodeJS.Timeout | null = null;
@@ -185,6 +188,9 @@ export class ClaudeCenterWorker {
     // 拉取本机关联项目 → 订阅 worker:<id> + 各 project:<id> 频道（relayUrl 为空则 no-op）。
     await this.refreshLinkedProjects();
     await this.refreshInfo();
+    // 启动自检：把上次崩溃/重启遗留、本机名下仍卡 in-flight 的对话轮判孤儿并落终态，否则该会话
+    // 「回复中/思考中」永不熄、且后续消息无法被认领。必须在首个 tickConversation 之前跑。
+    await this.recoverOrphanedConversationTurns();
     await this.tick();
     await this.tickConversation();
 
@@ -384,11 +390,11 @@ export class ClaudeCenterWorker {
     return listWorkerConversations(getPool(), this.config.workerId);
   }
 
-  // 某会话的消息线（桌面端只读回显）。回复中的 assistant body 尚空（终态才落最终全文），桌面端据 status 显示
-  // 「回复中」；富展示（工具调用/thinking）走 Console 的 conversation_sessions jsonl，本面板不重复实现。
-  async getConversationDetail(conversationId: string): Promise<{ messages: ConversationMessage[] }> {
+  // 某会话的消息线 + session JSONL（桌面端 transcript 富展示，对齐 Console 渲染方式）。
+  async getConversationDetail(conversationId: string): Promise<{ messages: ConversationMessage[]; jsonl: string }> {
     const messages = await listConversationMessages(getPool(), conversationId);
-    return { messages };
+    const session = await getConversationSession(getPool(), conversationId);
+    return { messages, jsonl: session?.jsonl ?? "" };
   }
 
   async getStatusSnapshot(): Promise<WorkerStatusSnapshot> {
@@ -755,6 +761,23 @@ export class ClaudeCenterWorker {
     } catch (error) {
       this.conversationBusy = false;
       this.log("error", `tickConversation: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // 启动自检：回收本机名下的孤儿对话轮（崩溃/重启遗留的 in-flight 行），落 failed 终态 + 推会话头让
+  // Console 秒级熄灭「回复中」。best-effort：失败仅记日志，不阻塞启动（下次重启再兜）。
+  private async recoverOrphanedConversationTurns(): Promise<void> {
+    try {
+      const convIds = await failOrphanedConversationTurns(getPool(), this.config.workerId);
+      if (!convIds.length) {
+        return;
+      }
+      this.log("info", `boot: 回收 ${convIds.length} 条孤儿对话轮（上次重启遗留）`);
+      for (const id of convIds) {
+        void this.publishConversationFinal(id);
+      }
+    } catch (error) {
+      this.log("error", `recoverOrphanedConversationTurns: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
