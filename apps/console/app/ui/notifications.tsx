@@ -25,10 +25,10 @@ import { FormModal } from "./controls";
 
 type Item = Notification;
 
-// 悬浮面板只显示最新 8 条；点「查看更多」打开弹窗，弹窗首屏 20 条，
-// 每点「加载更多」多查 20 条，累计上限 200 条（与后端钳制一致，防恶意大 limit）。
+// 悬浮面板只显示最新 8 条；点「查看更多」打开弹窗，弹窗首屏 10 条，
+// 每点「加载更多」多查 10 条，累计上限 200 条（与后端钳制一致，防恶意大 limit）。
 const HOVER_LIMIT = 8;
-const MODAL_PAGE = 20;
+const MODAL_PAGE = 10;
 const MODAL_MAX = 200;
 
 // 前端合成的瞬时类型——加在原 NotificationType 之外，仅在 UI 内部使用。
@@ -329,6 +329,16 @@ export default function Notifications() {
         </div>
 
       <FormModal open={modalOpen} title="消息通知" onClose={() => setModalOpen(false)} size="md">
+        <div className="notif-modal-bar">
+          <button
+            type="button"
+            className="notif-mark-all"
+            onClick={() => markRead()}
+            disabled={unread === 0}
+          >
+            全部已读
+          </button>
+        </div>
         <div className="notif-modal-list">
           {modalItems.length > 0 ? (
             modalItems.map(renderItem)
@@ -340,9 +350,13 @@ export default function Notifications() {
           )}
         </div>
         <div className="notif-modal-foot">
-          {modalHasMore ? (
-            <button type="button" className="btn btn-sm" onClick={loadMore} disabled={modalLoading}>
-              {modalLoading ? "加载中…" : "加载更多"}
+          {/* 加载中优先：点「加载更多」后 modalLimit 已增、modalItems 未更新，
+              modalHasMore 会瞬时变 false，故先判 loading 避免误显「没有更多了」。 */}
+          {modalLoading ? (
+            <span className="notif-modal-end">加载中…</span>
+          ) : modalHasMore ? (
+            <button type="button" className="btn btn-sm" onClick={loadMore}>
+              加载更多
             </button>
           ) : (
             modalItems.length > 0 && <span className="notif-modal-end">没有更多了</span>
