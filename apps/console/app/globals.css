@@ -1555,8 +1555,8 @@ table.table {
 .project-link-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 8px;
+  font-size: 14px;
 }
 
 .project-link-row .ico {
@@ -1576,6 +1576,31 @@ table.table {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+/* 能力标签组 */
+.cap-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.cap-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  background: var(--bg-2);
+  color: var(--text-2);
+  border: 1px solid var(--border-1);
+}
+
+/* 基本信息卡内嵌套用量区 */
+.ov-usage-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-1);
 }
 
 .remote-hint {

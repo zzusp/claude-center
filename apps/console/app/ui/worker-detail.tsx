@@ -2,7 +2,6 @@
 
 import type { Worker, WorkerProjectLinkView } from "@claude-center/db";
 import {
-  Activity,
   Bot,
   Check,
   ChevronLeft,
@@ -338,9 +337,50 @@ export default function WorkerDetailPage({
                   <KvRow k="机器名" v={worker.name} mono />
                   <KvRow k="主机" v={worker.host_name} mono />
                   <KvRow k="Worker 版本" v={`v${worker.app_version}`} mono />
+                  <KvRow k="Worker ID" v={worker.id} mono />
                   <KvRow k="Claude Code 版本" v={worker.claude_version ?? "—"} mono />
                   <KvRow k="订阅类型" v={subscriptionLabel(worker.subscription_type)} />
-                  <KvRow k="Worker ID" v={worker.id} mono />
+                </div>
+                {isPlanSubscription(worker.subscription_type) ? (
+                  <div className="ov-usage-section">
+                    {worker.usage.five_hour || worker.usage.seven_day ? (
+                      <div className="usage-grid">
+                        {worker.usage.five_hour ? <UsageBlock label="5 小时窗口" win={worker.usage.five_hour} /> : null}
+                        {worker.usage.seven_day ? <UsageBlock label="7 天窗口" win={worker.usage.seven_day} /> : null}
+                      </div>
+                    ) : (
+                      <div className="remote-hint">用量采集失败：{worker.usage.error ?? "Worker 暂未上报用量"}</div>
+                    )}
+                  </div>
+                ) : null}
+              </OvCard>
+
+              <OvCard icon={<Terminal size={15} />} title="运行配置">
+                <div className="kv">
+                  <KvRow k="并行上限" v={String(worker.max_parallel)} />
+                  <KvRow
+                    k="运行终端"
+                    v={worker.terminal_command || "（未配置，使用系统默认）"}
+                    mono={!!worker.terminal_command}
+                  />
+                  {worker.claude_pre_command ? <KvRow k="前置命令" v={worker.claude_pre_command} mono /> : null}
+                  <KvRow k="创建于" v={fmtDateTime(worker.created_at)} />
+                  <KvRow k="更新于" v={fmtDateTime(worker.updated_at)} />
+                  {Object.keys(worker.capabilities).length > 0 ? (
+                    <div className="kv-row">
+                      <span className="kv-k">能力</span>
+                      <div className="cap-tags">
+                        {Object.entries(worker.capabilities).map(([k, v]) => (
+                          <span key={k} className="cap-tag">
+                            {v === true ? k : `${k}: ${String(v)}`}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {Object.keys(worker.metadata).length > 0 ? (
+                    <KvRow k="元数据" v={JSON.stringify(worker.metadata)} mono />
+                  ) : null}
                 </div>
               </OvCard>
 
@@ -391,26 +431,6 @@ export default function WorkerDetailPage({
                   </button>
                 </div>
               </OvCard>
-
-              <OvCard icon={<Terminal size={15} />} title="运行配置">
-                <div className="kv">
-                  <KvRow k="并行上限" v={String(worker.max_parallel)} />
-                  <KvRow
-                    k="运行终端"
-                    v={worker.terminal_command || "（未配置，使用系统默认）"}
-                    mono={!!worker.terminal_command}
-                  />
-                  {worker.claude_pre_command ? <KvRow k="前置命令" v={worker.claude_pre_command} mono /> : null}
-                  <KvRow k="创建于" v={fmtDateTime(worker.created_at)} />
-                  <KvRow k="更新于" v={fmtDateTime(worker.updated_at)} />
-                  {Object.keys(worker.capabilities).length > 0 ? (
-                    <KvRow k="能力" v={JSON.stringify(worker.capabilities)} mono />
-                  ) : null}
-                  {Object.keys(worker.metadata).length > 0 ? (
-                    <KvRow k="元数据" v={JSON.stringify(worker.metadata)} mono />
-                  ) : null}
-                </div>
-              </OvCard>
             </div>
 
             <OvCard
@@ -427,7 +447,7 @@ export default function WorkerDetailPage({
                 <div className="project-links">
                   {projects.map((link) => (
                     <div className="project-link-row" key={`${link.project_id}-${link.local_path}`}>
-                      <FolderGit2 size={13} className="ico" />
+                      <FolderGit2 size={15} className="ico" />
                       <span className="project-link-name">{link.project_name}</span>
                       <span className="project-link-path mono">{link.local_path}</span>
                       {!link.enabled ? (
@@ -440,19 +460,6 @@ export default function WorkerDetailPage({
                 </div>
               )}
             </OvCard>
-
-            {isPlanSubscription(worker.subscription_type) ? (
-              <OvCard className="ov-card--full" icon={<Activity size={15} />} title="套餐用量">
-                {worker.usage.five_hour || worker.usage.seven_day ? (
-                  <div className="usage-grid">
-                    {worker.usage.five_hour ? <UsageBlock label="5 小时窗口" win={worker.usage.five_hour} /> : null}
-                    {worker.usage.seven_day ? <UsageBlock label="7 天窗口" win={worker.usage.seven_day} /> : null}
-                  </div>
-                ) : (
-                  <div className="remote-hint">用量采集失败：{worker.usage.error ?? "Worker 暂未上报用量"}</div>
-                )}
-              </OvCard>
-            ) : null}
 
             {canCommand ? (
               <OvCard className="ov-card--full" icon={<Trash2 size={15} />} title="危险操作">
