@@ -3835,44 +3835,74 @@ a.dep-item:hover {
     transform: translateY(-2px);
   }
 }
+/* 实时对话输入框：textarea + 底部工具条整合进一张圆角卡片，focus-within 高亮边框。
+   参考 docs/spec/demo 风格的统一输入卡（上方输入、下方操作行）。 */
 .chat-composer {
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  align-items: stretch;
-  padding: 12px 14px;
-  border-top: 1px solid var(--border);
+  margin: 12px 14px 14px;
+  padding: 10px 12px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-1);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
 }
-.chat-composer textarea {
-  flex: 1;
+.chat-composer:focus-within {
+  border-color: var(--running);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+.chat-composer-input {
+  width: 100%;
   resize: none;
-  padding: 9px 12px;
+  padding: 4px 4px 0;
   font: inherit;
   font-size: 13.5px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--surface-1);
-  color: var(--text-1);
   line-height: 1.5;
-}
-.chat-composer textarea:focus {
-  outline: none;
-  border-color: var(--running);
-}
-.btn-send {
-  flex-shrink: 0;
-  align-self: stretch;
-  width: 44px;
-  border-radius: var(--r-sm);
   border: none;
-  background: var(--running);
-  color: #fff;
+  background: transparent;
+  color: var(--text-1);
+}
+.chat-composer-input:focus {
+  outline: none;
+}
+.chat-composer-input::placeholder {
+  color: var(--text-4);
+}
+.chat-composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.chat-composer-hint {
+  font-size: 11.5px;
+  color: var(--text-4);
+  user-select: none;
+}
+.chat-send {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: none;
+  background: var(--running);
+  color: #fff;
   cursor: pointer;
+  transition: background 120ms ease, opacity 120ms ease, transform 120ms ease;
 }
-.btn-send:disabled {
-  opacity: 0.45;
+.chat-send:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+.chat-send:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.chat-send:disabled {
+  opacity: 0.4;
   cursor: not-allowed;
 }
 .chat-closed {
