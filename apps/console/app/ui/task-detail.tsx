@@ -307,16 +307,6 @@ export default function TaskDetailPage({
           <span className="ds-k">创建时间</span>
           <span className="ds-v">{fmtTime(task.created_at)}</span>
         </div>
-        {task.pr_url ? (
-          <div className="ds-item">
-            <GitPullRequest size={13} className="ico" />
-            <span className="ds-k">PR</span>
-            <a className="ds-v" href={task.pr_url} target="_blank" rel="noreferrer">
-              <ExternalLink size={13} className="ico" />
-              {task.pr_url}
-            </a>
-          </div>
-        ) : null}
       </div>
 
       <nav className="detail-tabs">
