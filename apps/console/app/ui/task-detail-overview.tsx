@@ -82,6 +82,8 @@ export function OverviewTab({
             ) : null}
             <KvRow k="自动回复" v={task.auto_reply ? "是 · 无人值守兜底（cap=2）" : "否"} />
             <KvRow k="执行模型" v={modelLabel} />
+            <KvRow k="定时任务" v={task.scheduled_at ? `${fmtDateTime(task.scheduled_at)} 发布` : "否"} />
+            <KvRow k="前置任务" v={depIds.length > 0 ? `${depIds.length} 个` : "无"} />
           </div>
         </OvCard>
 
