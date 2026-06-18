@@ -23,7 +23,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Empty, KvRow, STATUS_META, StatusBadge, StatusDot,
-  fmtDateTime, fmtTime, metaOf, postJson, type Tone
+  computeTaskDurationMs, fmtDateTime, fmtDurationMs, fmtTime, metaOf, parsePrNumber, postJson, type Tone
 } from "./shared";
 import {
   ROLE_LABEL, ROLE_OPTIONS, SPARK_CAP, TONE_COLOR, emptyOverview, fmtAgo, syncAgo,
@@ -44,39 +44,6 @@ type TaskStatsPayload = {
   byProject: { id: string; name: string; n: number }[];
   today: { created: number; finished: number; completed: number; failed: number; avgDurationMs: number | null };
 };
-
-// 从 GitHub PR URL 抽 PR 号；非标准格式（含手填）返回 null，UI 退回 ExternalLink。
-function parsePrNumber(url: string | null): number | null {
-  if (!url) return null;
-  const m = url.match(/\/pull\/(\d+)\b/);
-  return m ? Number(m[1]) : null;
-}
-
-// 平均耗时人读：右栏「今日统计」与列表「耗时」列共用，单位毫秒 → 自适应秒/分/时。
-function fmtDurationMs(ms: number | null): string {
-  if (ms == null || ms <= 0) return "—";
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s} 秒`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m} 分钟`;
-  const h = Math.floor(m / 60);
-  const rest = m % 60;
-  return rest === 0 ? `${h} 小时` : `${h}h ${rest}m`;
-}
-
-// 列表「耗时」列：起点优先 started_at（Worker 实际开工），无则退到 claimed_at（认领）；
-// 终点优先 finished_at，未结束则取 now（轮询周期内随刷新自然走动）。三者都缺即「—」。
-function computeTaskDurationMs(task: Task): number | null {
-  const startSrc = task.started_at ?? task.claimed_at;
-  if (!startSrc) return null;
-  const start = Date.parse(startSrc);
-  if (Number.isNaN(start)) return null;
-  const endSrc = task.finished_at;
-  const end = endSrc ? Date.parse(endSrc) : Date.now();
-  if (Number.isNaN(end)) return null;
-  const diff = end - start;
-  return diff > 0 ? diff : null;
-}
 
 const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: "", label: "全部状态" },

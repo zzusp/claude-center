@@ -95,7 +95,7 @@ function WorkersView({
                   <StatusDot status={worker.status} pulse={worker.status === "online"} />
                   <span className="worker-name">{displayName(worker)}</span>
                   <StatusBadge status={worker.status} />
-                  <WorkingStateBadge state={worker.working_state} />
+                  {worker.status === "online" ? <WorkingStateBadge state={worker.working_state} /> : null}
                   {canCommand && (
                     <button
                       type="button"
@@ -127,6 +127,10 @@ function WorkersView({
                     <span className="v">
                       在途 {worker.active_task_count ?? 0}/{worker.max_parallel}
                     </span>
+                  </div>
+                  <div className="worker-row">
+                    <Check size={13} className="ico" />
+                    <span className="v">完成 {worker.completed_task_count ?? 0}</span>
                   </div>
                 </div>
               </article>

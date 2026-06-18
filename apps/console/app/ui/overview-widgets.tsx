@@ -297,10 +297,12 @@ export function Sparkline({ data, tone }: { data: number[]; tone: Tone }) {
 
 export function Donut({
   segments,
-  total
+  total,
+  centerLabel = "任务"
 }: {
   segments: { label: string; tone: Tone; value: number; status: string }[];
   total: number;
+  centerLabel?: string;
 }) {
   const size = 128;
   const stroke = 16;
@@ -343,7 +345,7 @@ export function Donut({
         </svg>
         <div className="donut-total">
           <div className="n">{total}</div>
-          <div className="l">任务</div>
+          <div className="l">{centerLabel}</div>
         </div>
       </div>
       <div className="legend">

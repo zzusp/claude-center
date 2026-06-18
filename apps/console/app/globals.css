@@ -4535,6 +4535,39 @@ a.ds-v:hover {
   gap: 20px;
 }
 
+/* worker 详情「概览」Tab：复用任务详情概览的 .overview-grid（2fr/1fr + ov-left 2×2 + 右列大卡 + full 行）。
+   概览卡内的操作按钮行（任务统计卡「查看全部任务/对话」）。 */
+.ov-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* 套餐用量 full 卡：两个用量窗口并排（窄屏回退单列）。 */
+.usage-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 720px) {
+  .usage-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 任务状态快速筛选 chip 行（worker 详情「任务」tab 的 card toolbar 内）：复用 .btn .btn-sm，仅排版。 */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 整行可点击跳转的表格行（worker 详情任务/对话 list）。 */
+.table tr.row-clickable {
+  cursor: pointer;
+}
+
 /* ============================================================
    概览 Tab：五卡三列两行
    （基本信息 / 进度 / 任务描述[右列跨两行] · 相关信息 / 执行结果）

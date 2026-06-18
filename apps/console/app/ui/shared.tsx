@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { Task } from "@claude-center/db";
 
 // 跨 dashboard / 任务详情页复用的展示原子与格式化工具。无状态、可在任意 client 组件中使用。
 
@@ -128,4 +129,38 @@ export function basenameFromRepoUrl(repoUrl: string): string {
 // 见 docs/spec/project-repos-runtime-path.md。
 export function isPendingSubRepoPath(rel: string | null | undefined): boolean {
   return !!rel && rel.startsWith("*-");
+}
+
+// 从 GitHub PR URL 抽 PR 号；非标准格式（含手填）返回 null，UI 退回 ExternalLink。
+// 任务调度列表与 worker 详情「任务」list 的 PR 列共用。
+export function parsePrNumber(url: string | null): number | null {
+  if (!url) return null;
+  const m = url.match(/\/pull\/(\d+)\b/);
+  return m ? Number(m[1]) : null;
+}
+
+// 耗时人读：毫秒 → 自适应秒/分/时。任务列表「耗时」列与「今日统计」共用。
+export function fmtDurationMs(ms: number | null): string {
+  if (ms == null || ms <= 0) return "—";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} 秒`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} 分钟`;
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  return rest === 0 ? `${h} 小时` : `${h}h ${rest}m`;
+}
+
+// 列表「耗时」：起点优先 started_at（Worker 实际开工），无则退到 claimed_at；
+// 终点优先 finished_at，未结束则取 now（轮询周期内随刷新自然走动）。三者都缺即 null。
+export function computeTaskDurationMs(task: Task): number | null {
+  const startSrc = task.started_at ?? task.claimed_at;
+  if (!startSrc) return null;
+  const start = Date.parse(startSrc);
+  if (Number.isNaN(start)) return null;
+  const endSrc = task.finished_at;
+  const end = endSrc ? Date.parse(endSrc) : Date.now();
+  if (Number.isNaN(end)) return null;
+  const diff = end - start;
+  return diff > 0 ? diff : null;
 }

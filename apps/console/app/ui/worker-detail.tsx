@@ -4,16 +4,18 @@ import type { Worker, WorkerProjectLinkView } from "@claude-center/db";
 import {
   Activity,
   Bot,
+  Check,
   ChevronLeft,
   Clock,
   Cpu,
   FolderGit2,
+  Hash,
   Info,
+  ListTodo,
+  MessageSquare,
   Network,
   Pencil,
   Power,
-  Send,
-  Server,
   Terminal,
   Trash2,
   X
@@ -24,8 +26,10 @@ import { KvRow, StatusBadge, StatusDot, fmtDateTime, postJson } from "./shared";
 import { fmtAgo } from "./dashboard-shared";
 import { isPlanSubscription, subscriptionLabel, UsageBlock, WorkingStateBadge } from "./worker-shared";
 import { WorkerCommandPanel } from "./worker-command";
+import { WorkerConversationsTab, WorkerTasksTab } from "./worker-detail-tabs";
 import { usePolling } from "../lib/use-polling";
 
+// 通用区块卡（命令日志 tab 用）。
 function Section({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
     <section className="card detail-section">
@@ -38,6 +42,46 @@ function Section({ icon, title, children }: { icon: ReactNode; title: string; ch
   );
 }
 
+// 概览卡：统一卡头 + 卡体，复用任务详情概览的 .ov-card 样式（scroll=true 时卡体撑满并内部滚动）。
+function OvCard({
+  icon,
+  title,
+  scroll,
+  className,
+  children
+}: {
+  icon: ReactNode;
+  title: string;
+  scroll?: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className={`card ov-card${className ? ` ${className}` : ""}`}>
+      <div className="ov-head">
+        <span className="ov-ico">{icon}</span>
+        <h3 className="ov-title">{title}</h3>
+      </div>
+      {scroll ? (
+        <div className="ov-scroll-region">
+          <div className="ov-body">{children}</div>
+        </div>
+      ) : (
+        <div className="ov-body ov-body--static">{children}</div>
+      )}
+    </section>
+  );
+}
+
+type WorkerTabKey = "overview" | "tasks" | "conversations" | "commands";
+
+const WORKER_TABS: { key: WorkerTabKey; label: string; icon: ReactNode; adminOnly?: boolean }[] = [
+  { key: "overview", label: "概览", icon: <Info size={14} /> },
+  { key: "tasks", label: "任务", icon: <ListTodo size={14} /> },
+  { key: "conversations", label: "对话", icon: <MessageSquare size={14} /> },
+  { key: "commands", label: "命令日志", icon: <Terminal size={14} />, adminOnly: true }
+];
+
 export default function WorkerDetailPage({
   initialWorker,
   canCommand
@@ -48,6 +92,7 @@ export default function WorkerDetailPage({
   const router = useRouter();
   const workerId = initialWorker.id;
   const [worker, setWorker] = useState<Worker>(initialWorker);
+  const [activeTab, setActiveTab] = useState<WorkerTabKey>("overview");
 
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
@@ -78,12 +123,15 @@ export default function WorkerDetailPage({
   );
 
   useEffect(() => {
-    fetch(`/api/workers/${workerId}/projects`)
+    fetch(`/api/workers/${workerId}/projects`, { cache: "no-store" })
       .then((res) => res.json())
       .then((data: { links?: WorkerProjectLinkView[] }) => setProjects(data.links ?? []))
       .catch(() => setProjects([]))
       .finally(() => setLoadingProjects(false));
   }, [workerId]);
+
+  const tabs = WORKER_TABS.filter((tab) => !tab.adminOnly || canCommand);
+  const online = worker.status === "online";
 
   function displayName(w: Worker): string {
     return w.label || w.name;
@@ -179,234 +227,263 @@ export default function WorkerDetailPage({
           返回执行机群
         </button>
         <div className="detail-page-head">
-          <h1 className="detail-page-title">{displayName(worker)}</h1>
-          <div className="detail-tags">
-            <StatusDot status={worker.status} pulse={worker.status === "online"} />
+          <div className="detail-head-title">
+            <h1 className="detail-page-title">{displayName(worker)}</h1>
+            <StatusDot status={worker.status} pulse={online} />
             <StatusBadge status={worker.status} />
-            <WorkingStateBadge state={worker.working_state} />
-            <span className="tag">
-              <Bot size={13} className="ico" />
-              claude {worker.claude_version ?? "—"}
-            </span>
-            <span className="tag">
-              <Network size={13} className="ico" />
-              {worker.host_name}
-            </span>
+            {online ? <WorkingStateBadge state={worker.working_state} /> : null}
           </div>
         </div>
+        <div className="detail-summary-bar">
+          <div className="ds-item">
+            <Network size={13} className="ico" />
+            <span className="ds-k">主机</span>
+            <span className="ds-v mono">{worker.host_name}</span>
+          </div>
+          <div className="ds-item">
+            <Bot size={13} className="ico" />
+            <span className="ds-k">Claude</span>
+            <span className="ds-v">{worker.claude_version ?? "—"}</span>
+          </div>
+          <div className="ds-item">
+            <Clock size={13} className="ico" />
+            <span className="ds-k">心跳</span>
+            <span className="ds-v">{fmtAgo(worker.last_seen_at)}</span>
+          </div>
+          <div className="ds-item">
+            <Cpu size={13} className="ico" />
+            <span className="ds-k">在途</span>
+            <span className="ds-v">{worker.active_task_count ?? 0}/{worker.max_parallel}</span>
+          </div>
+          <div className="ds-item">
+            <Check size={13} className="ico" />
+            <span className="ds-k">完成</span>
+            <span className="ds-v">{worker.completed_task_count ?? 0}</span>
+          </div>
+          <div className="ds-item">
+            <Hash size={13} className="ico" />
+            <span className="ds-k">ID</span>
+            <span className="ds-v mono">{worker.id}</span>
+          </div>
+        </div>
+        <nav className="detail-tabs">
+          {tabs.map((tab) => (
+            <button
+              type="button"
+              key={tab.key}
+              className={`detail-tab-btn${activeTab === tab.key ? " is-active" : ""}`}
+              onClick={() => setActiveTab(tab.key)}
+            >
+              <span className="dt-ico">{tab.icon}</span>
+              {tab.label}
+            </button>
+          ))}
+        </nav>
       </header>
 
-      <div className="detail-page-body">
-        <Section icon={<Info size={15} />} title="基本信息">
-          <div className="kv">
-            <KvRow
-              k="显示名"
-              v={
-                renaming ? (
-                  <span className="rename-row">
-                    <input
-                      className="rename-input"
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") saveRename();
-                        if (e.key === "Escape") setRenaming(false);
-                      }}
-                      placeholder={worker.name}
-                      autoFocus
-                    />
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      disabled={renameSaving}
-                      onClick={saveRename}
-                    >
-                      保存
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => setRenaming(false)}
-                    >
-                      取消
-                    </button>
-                  </span>
-                ) : (
-                  <span className="rename-row">
-                    <span>{displayName(worker)}</span>
-                    {canCommand ? (
-                      <>
-                        <button
-                          type="button"
-                          className="btn-icon"
-                          title="重命名"
-                          onClick={startRename}
-                        >
-                          <Pencil size={13} />
-                        </button>
-                        {worker.label ? (
-                          <button
-                            type="button"
-                            className="btn-icon"
-                            title="清除自定义名，恢复机器名"
-                            onClick={clearLabel}
-                          >
-                            <X size={13} />
+      <div className={`detail-tab-content${activeTab === "overview" ? " detail-tab-content--wide" : ""}`}>
+        {activeTab === "overview" ? (
+          <div className="overview-grid">
+            <div className="ov-left">
+              <OvCard icon={<Info size={15} />} title="基本信息">
+                <div className="kv">
+                  <KvRow
+                    k="显示名"
+                    v={
+                      renaming ? (
+                        <span className="rename-row">
+                          <input
+                            className="rename-input"
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveRename();
+                              if (e.key === "Escape") setRenaming(false);
+                            }}
+                            placeholder={worker.name}
+                            autoFocus
+                          />
+                          <button type="button" className="btn btn-sm" disabled={renameSaving} onClick={saveRename}>
+                            保存
                           </button>
+                          <button type="button" className="btn btn-sm" onClick={() => setRenaming(false)}>
+                            取消
+                          </button>
+                        </span>
+                      ) : (
+                        <span className="rename-row">
+                          <span>{displayName(worker)}</span>
+                          {canCommand ? (
+                            <>
+                              <button type="button" className="btn-icon" title="重命名" onClick={startRename}>
+                                <Pencil size={13} />
+                              </button>
+                              {worker.label ? (
+                                <button
+                                  type="button"
+                                  className="btn-icon"
+                                  title="清除自定义名，恢复机器名"
+                                  onClick={clearLabel}
+                                >
+                                  <X size={13} />
+                                </button>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </span>
+                      )
+                    }
+                  />
+                  {renameError ? <KvRow k="" v={<span className="remote-hint">{renameError}</span>} /> : null}
+                  <KvRow k="机器名" v={worker.name} mono />
+                  <KvRow k="主机" v={worker.host_name} mono />
+                  <KvRow k="Worker 版本" v={`v${worker.app_version}`} mono />
+                  <KvRow k="Claude Code 版本" v={worker.claude_version ?? "—"} mono />
+                  <KvRow k="订阅类型" v={subscriptionLabel(worker.subscription_type)} />
+                  <KvRow k="Worker ID" v={worker.id} mono />
+                </div>
+              </OvCard>
+
+              <OvCard icon={<Power size={15} />} title="工作状态">
+                <div className="kv">
+                  <KvRow k="在线状态" v={<StatusBadge status={worker.status} />} />
+                  <KvRow
+                    k="工作状态"
+                    v={
+                      <span className="remote-toggle-row">
+                        {online ? (
+                          <WorkingStateBadge state={worker.working_state} />
+                        ) : (
+                          <span className="remote-hint">离线</span>
+                        )}
+                        {canCommand ? (
+                          worker.allow_remote_control ? (
+                            <button type="button" className="btn btn-sm" disabled={toggling} onClick={toggleWorking}>
+                              {worker.working_state === "working" ? "切到空闲" : "切到工作"}
+                            </button>
+                          ) : (
+                            <span className="remote-hint">该 Worker 未开启远程开关</span>
+                          )
                         ) : null}
-                      </>
-                    ) : null}
-                  </span>
-                )
-              }
-            />
-            {renameError ? <KvRow k="" v={<span className="remote-hint">{renameError}</span>} /> : null}
-            <KvRow k="机器名" v={worker.name} mono />
-            <KvRow k="主机" v={worker.host_name} mono />
-            <KvRow k="Worker 版本" v={`v${worker.app_version}`} mono />
-            <KvRow k="Claude Code 版本" v={worker.claude_version ?? "—"} mono />
-            <KvRow k="订阅类型" v={subscriptionLabel(worker.subscription_type)} />
-            <KvRow k="Worker ID" v={worker.id} mono />
-          </div>
-        </Section>
+                      </span>
+                    }
+                  />
+                  {toggleError ? <KvRow k="" v={<span className="remote-hint">{toggleError}</span>} /> : null}
+                  <KvRow k="远程开关" v={worker.allow_remote_control ? "已开启" : "未开启"} />
+                  <KvRow k="最后心跳" v={`${fmtDateTime(worker.last_seen_at)}（${fmtAgo(worker.last_seen_at)}）`} />
+                </div>
+              </OvCard>
 
-        <Section icon={<Power size={15} />} title="工作状态">
-          <div className="kv">
-            <KvRow k="在线状态" v={<StatusBadge status={worker.status} />} />
-            <KvRow
-              k="工作状态"
-              v={
-                <span className="remote-toggle-row">
-                  <WorkingStateBadge state={worker.working_state} />
-                  {canCommand ? (
-                    worker.allow_remote_control ? (
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        disabled={toggling}
-                        onClick={toggleWorking}
-                      >
-                        {worker.working_state === "working" ? "切到空闲" : "切到工作"}
-                      </button>
-                    ) : (
-                      <span className="remote-hint">该 Worker 未开启远程开关</span>
-                    )
+              <OvCard icon={<Cpu size={15} />} title="任务统计">
+                <div className="kv">
+                  <KvRow k="在途任务" v={`${worker.active_task_count ?? 0} / ${worker.max_parallel}`} />
+                  <KvRow k="累计完成" v={String(worker.completed_task_count ?? 0)} />
+                  <KvRow k="并行上限" v={String(worker.max_parallel)} />
+                </div>
+                <div className="ov-card-actions">
+                  <button type="button" className="btn btn-sm" onClick={() => setActiveTab("tasks")}>
+                    <ListTodo size={14} />
+                    查看全部任务
+                  </button>
+                  <button type="button" className="btn btn-sm" onClick={() => setActiveTab("conversations")}>
+                    <MessageSquare size={14} />
+                    查看对话
+                  </button>
+                </div>
+              </OvCard>
+
+              <OvCard icon={<Terminal size={15} />} title="运行配置">
+                <div className="kv">
+                  <KvRow k="并行上限" v={String(worker.max_parallel)} />
+                  <KvRow
+                    k="运行终端"
+                    v={worker.terminal_command || "（未配置，使用系统默认）"}
+                    mono={!!worker.terminal_command}
+                  />
+                  {worker.claude_pre_command ? <KvRow k="前置命令" v={worker.claude_pre_command} mono /> : null}
+                  <KvRow k="创建于" v={fmtDateTime(worker.created_at)} />
+                  <KvRow k="更新于" v={fmtDateTime(worker.updated_at)} />
+                  {Object.keys(worker.capabilities).length > 0 ? (
+                    <KvRow k="能力" v={JSON.stringify(worker.capabilities)} mono />
                   ) : null}
-                </span>
-              }
-            />
-            {toggleError ? <KvRow k="" v={<span className="remote-hint">{toggleError}</span>} /> : null}
-            <KvRow k="最后心跳" v={`${fmtDateTime(worker.last_seen_at)}（${fmtAgo(worker.last_seen_at)}）`} />
-          </div>
-        </Section>
-
-        {isPlanSubscription(worker.subscription_type) ? (
-          <Section icon={<Activity size={15} />} title="套餐用量">
-            {worker.usage.five_hour || worker.usage.seven_day ? (
-              <>
-                {worker.usage.five_hour ? (
-                  <UsageBlock label="5 小时窗口" win={worker.usage.five_hour} />
-                ) : null}
-                {worker.usage.seven_day ? (
-                  <UsageBlock label="7 天窗口" win={worker.usage.seven_day} />
-                ) : null}
-              </>
-            ) : (
-              <div className="remote-hint">
-                用量采集失败：{worker.usage.error ?? "Worker 暂未上报用量"}
-              </div>
-            )}
-          </Section>
-        ) : null}
-
-        <Section
-          icon={<Cpu size={15} />}
-          title={`并行任务（${worker.active_task_count ?? 0}/${worker.max_parallel}）`}
-        >
-          {(worker.active_task_count ?? 0) === 0 ? (
-            <div className="remote-hint">当前空闲，无在途任务</div>
-          ) : (
-            <div className="remote-hint">共 {worker.active_task_count} 个任务运行中</div>
-          )}
-        </Section>
-
-        <Section icon={<FolderGit2 size={15} />} title="关联项目">
-          {loadingProjects ? (
-            <div className="remote-hint">加载中…</div>
-          ) : projects.length === 0 ? (
-            <div className="remote-hint">暂无关联项目</div>
-          ) : (
-            <div className="project-links">
-              {projects.map((link) => (
-                <div
-                  className="project-link-row"
-                  key={`${link.project_id}-${link.local_path}`}
-                >
-                  <FolderGit2 size={13} className="ico" />
-                  <span className="project-link-name">{link.project_name}</span>
-                  <span className="project-link-path mono">{link.local_path}</span>
-                  {!link.enabled ? (
-                    <span className="badge" data-tone="pending">
-                      已停用
-                    </span>
+                  {Object.keys(worker.metadata).length > 0 ? (
+                    <KvRow k="元数据" v={JSON.stringify(worker.metadata)} mono />
                   ) : null}
                 </div>
-              ))}
+              </OvCard>
             </div>
-          )}
-        </Section>
 
-        <Section icon={<Terminal size={15} />} title="运行配置">
-          <div className="kv">
-            <KvRow k="并行上限" v={String(worker.max_parallel)} />
-            <KvRow
-              k="运行终端"
-              v={worker.terminal_command || "（未配置，使用系统默认）"}
-              mono={!!worker.terminal_command}
-            />
-            {worker.claude_pre_command ? (
-              <KvRow k="前置命令" v={worker.claude_pre_command} mono />
+            <OvCard
+              className="ov-card--desc"
+              icon={<FolderGit2 size={15} />}
+              title={`关联项目（${projects.length}）`}
+              scroll
+            >
+              {loadingProjects ? (
+                <div className="remote-hint">加载中…</div>
+              ) : projects.length === 0 ? (
+                <div className="remote-hint">暂无关联项目</div>
+              ) : (
+                <div className="project-links">
+                  {projects.map((link) => (
+                    <div className="project-link-row" key={`${link.project_id}-${link.local_path}`}>
+                      <FolderGit2 size={13} className="ico" />
+                      <span className="project-link-name">{link.project_name}</span>
+                      <span className="project-link-path mono">{link.local_path}</span>
+                      {!link.enabled ? (
+                        <span className="badge" data-tone="pending">
+                          已停用
+                        </span>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </OvCard>
+
+            {isPlanSubscription(worker.subscription_type) ? (
+              <OvCard className="ov-card--full" icon={<Activity size={15} />} title="套餐用量">
+                {worker.usage.five_hour || worker.usage.seven_day ? (
+                  <div className="usage-grid">
+                    {worker.usage.five_hour ? <UsageBlock label="5 小时窗口" win={worker.usage.five_hour} /> : null}
+                    {worker.usage.seven_day ? <UsageBlock label="7 天窗口" win={worker.usage.seven_day} /> : null}
+                  </div>
+                ) : (
+                  <div className="remote-hint">用量采集失败：{worker.usage.error ?? "Worker 暂未上报用量"}</div>
+                )}
+              </OvCard>
             ) : null}
-            <KvRow k="创建于" v={fmtDateTime(worker.created_at)} />
-            <KvRow k="更新于" v={fmtDateTime(worker.updated_at)} />
-            {Object.keys(worker.capabilities).length > 0 ? (
-              <KvRow k="能力" v={JSON.stringify(worker.capabilities)} mono />
-            ) : null}
-            {Object.keys(worker.metadata).length > 0 ? (
-              <KvRow k="元数据" v={JSON.stringify(worker.metadata)} mono />
+
+            {canCommand ? (
+              <OvCard className="ov-card--full" icon={<Trash2 size={15} />} title="危险操作">
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>
+                    删除后 Worker 记录从数据库移除，已关联的任务历史保留。Worker 重新连接后会自动重注册。
+                  </p>
+                  {deleteError ? <p style={{ margin: 0, fontSize: 13, color: "var(--tone-failed)" }}>{deleteError}</p> : null}
+                  <div>
+                    <button type="button" className="btn btn-danger" disabled={deleting} onClick={handleDelete}>
+                      <Trash2 size={13} />
+                      {deleting ? "删除中…" : "删除此 Worker"}
+                    </button>
+                  </div>
+                </div>
+              </OvCard>
             ) : null}
           </div>
-        </Section>
+        ) : null}
 
-        {canCommand ? (
-          <Section icon={<Send size={15} />} title="下发命令">
+        {activeTab === "tasks" ? <WorkerTasksTab workerId={workerId} /> : null}
+
+        {activeTab === "conversations" ? <WorkerConversationsTab workerId={workerId} /> : null}
+
+        {activeTab === "commands" && canCommand ? (
+          <Section icon={<Terminal size={15} />} title="命令日志">
             <WorkerCommandPanel
               workerId={workerId}
               terminalCommand={worker.terminal_command}
               preCommand={worker.claude_pre_command}
             />
-          </Section>
-        ) : null}
-
-        {canCommand ? (
-          <Section icon={<Trash2 size={15} />} title="危险操作">
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>
-                删除后 Worker 记录从数据库移除，已关联的任务历史保留。Worker 重新连接后会自动重注册。
-              </p>
-              {deleteError ? <p style={{ margin: 0, fontSize: 13, color: "var(--tone-failed)" }}>{deleteError}</p> : null}
-              <div>
-                <button
-                  type="button"
-                  className="btn btn-danger"
-                  disabled={deleting}
-                  onClick={handleDelete}
-                >
-                  <Trash2 size={13} />
-                  {deleting ? "删除中…" : "删除此 Worker"}
-                </button>
-              </div>
-            </div>
           </Section>
         ) : null}
       </div>

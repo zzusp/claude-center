@@ -773,7 +773,8 @@ export async function listWorkers(client: pg.Pool | pg.PoolClient): Promise<Work
   const result = await client.query<Worker>(
     `SELECT workers.*,
             CASE WHEN last_seen_at > now() - interval '60 seconds' THEN 'online' ELSE 'offline' END AS status,
-            COALESCE(act.active_task_count, 0) AS active_task_count
+            COALESCE(act.active_task_count, 0) AS active_task_count,
+            COALESCE(done.completed_task_count, 0) AS completed_task_count
        FROM workers
        LEFT JOIN (
          SELECT claimed_by, count(*)::int AS active_task_count
@@ -781,6 +782,12 @@ export async function listWorkers(client: pg.Pool | pg.PoolClient): Promise<Work
           WHERE status IN (${sqlInList(ACTIVE_WORKER_STATUSES)})
           GROUP BY claimed_by
        ) act ON act.claimed_by = workers.id
+       LEFT JOIN (
+         SELECT claimed_by, count(*)::int AS completed_task_count
+           FROM tasks
+          WHERE status IN (${sqlInList(COMPLETED_STATUSES)})
+          GROUP BY claimed_by
+       ) done ON done.claimed_by = workers.id
       ORDER BY last_seen_at DESC`
   );
   return result.rows;

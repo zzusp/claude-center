@@ -98,6 +98,8 @@ export type Worker = {
   updated_at: string;
   // listWorkers 派生：该 worker 当前在途（claimed/running）任务数。
   active_task_count?: number;
+  // listWorkers 派生：该 worker 累计完成（success/merged）的任务数。
+  completed_task_count?: number;
 };
 
 // 项目仓清单（多仓任务支持，见 docs/spec/task-multi-repo.md、docs/spec/project-repos-runtime-path.md）：

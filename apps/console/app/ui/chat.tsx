@@ -30,6 +30,13 @@ export function ChatView({
   const [filterWorkerId, setFilterWorkerId] = useState("");
   const { confirm, dialog } = useConfirm();
 
+  // deep-link：从 worker 详情页「对话」list（或他处）带 ?c=<id> 跳进来时，挂载后定位到该会话。
+  // 仅初始化一次；列表加载后由下方 loadList 的「筛选结果不含则清空」逻辑天然兜底。
+  useEffect(() => {
+    const cid = new URLSearchParams(window.location.search).get("c");
+    if (cid) setActiveId(cid);
+  }, []);
+
   // 筛选条件聚成 query string；空字段省略，避免每次 ?keyword= 的脏 URL 触发 next 路由缓存击穿。
   const filterQuery = useMemo(() => {
     const params = new URLSearchParams();
