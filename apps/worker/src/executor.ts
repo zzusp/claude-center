@@ -37,7 +37,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { WorkerConfig } from "./config.js";
-import { runCommand, type CommandResult } from "./shell.js";
+import { getProcessStartTime, runCommand, type CommandResult } from "./shell.js";
 import {
   buildClaudeScript,
   buildTerminalScript,
@@ -1230,8 +1230,13 @@ export async function executeConversationTurn(
         detached: true,
         onSpawn: (child) => {
           hooks?.onClaudeSpawn?.(child);
-          if (child.pid) {
-            void setConversationTurnProcess(pool, turn.id, child.pid, wtPath).catch(() => {});
+          const pid = child.pid;
+          if (pid) {
+            // 记 pid + worktree cwd + 进程创建时间（身份校验防 pid 复用）。创建时间异步取，取不到存 null
+            //（重启时无法校验身份 → 不重连，从 session 收尾）。
+            void getProcessStartTime(pid)
+              .then((startedAt) => setConversationTurnProcess(pool, turn.id, pid, wtPath, startedAt))
+              .catch(() => {});
           }
         }
       });

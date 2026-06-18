@@ -349,9 +349,11 @@ export type ConversationMessage = {
   error_message: string | null;
   // Console 点「终止本轮回答」打的时间戳；Worker 周期 + relay 信号扫描自己名下的取消请求 → 杀 Claude 进程树 → 翻终态。
   cancel_requested_at: string | null;
-  // 承接本轮的 detached claude 进程 pid + worktree cwd（迁移 030）：worker 重启后据此判活重连/收尾。仅 in-flight 轮有值。
+  // 承接本轮的 detached claude 进程 pid + worktree cwd + OS 创建时间（迁移 030）：worker 重启后据此做
+  // (pid,创建时间) 进程身份校验、重连/收尾。仅 in-flight 轮有值。
   claude_pid: number | null;
   claude_cwd: string | null;
+  claude_started_at: number | null;
   created_at: string;
   updated_at: string;
 };

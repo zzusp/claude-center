@@ -53,18 +53,53 @@ export function killByPid(pid: number): void {
   }
 }
 
-// 进程是否存活：process.kill(pid,0) 不真发信号，仅探测。抛 ESRCH=不存在；EPERM=存在但无权（视为存活）。
-// 注意 pid 复用：退出后的 pid 可能被别的进程占用，这里会误判存活——桌面端重启重连场景窗口短，概率低（见 spec）。
-export function isProcessAlive(pid: number): boolean {
-  if (!pid || pid <= 0) {
+// 取某 pid 的进程「创建时间」(epoch ms)，无该进程返回 null。pid 退出后会被 OS 复用，单看 pid 存活无法区分
+// 「还是原来那个进程」还是「pid 被别的进程占了」——创建时间对同一进程的整个生命周期恒定、复用的新进程则不同，
+// 故用 (pid, 创建时间) 做进程身份。Win32:Win32_Process.CreationDate；POSIX:ps -o lstart=。
+export function getProcessStartTime(pid: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    if (!pid || pid <= 0) {
+      resolve(null);
+      return;
+    }
+    const child =
+      process.platform === "win32"
+        ? spawn(
+            "powershell",
+            [
+              "-NoProfile",
+              "-NonInteractive",
+              "-Command",
+              `$p=Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction SilentlyContinue; if($p){([DateTimeOffset]$p.CreationDate).ToUnixTimeMilliseconds()}`
+            ],
+            { windowsHide: true }
+          )
+        : spawn("ps", ["-o", "lstart=", "-p", String(pid)]);
+    let out = "";
+    child.stdout?.on("data", (d: Buffer) => {
+      out += d.toString("utf8");
+    });
+    child.on("error", () => resolve(null));
+    child.on("close", () => {
+      const text = out.trim();
+      if (!text) {
+        resolve(null);
+        return;
+      }
+      const value = process.platform === "win32" ? Number(text) : Date.parse(text);
+      resolve(Number.isFinite(value) ? value : null);
+    });
+  });
+}
+
+// 「pid 当前指向的，仍是我们当初记录的那个进程」：pid 存活 + 创建时间与 startedAt 精确相等。
+// startedAt 为 null（未记录到创建时间）时一律返回 false——宁可不重连，也不冒误连/误杀复用 pid 的风险。
+export async function isSameProcessAlive(pid: number | null, startedAt: number | null): Promise<boolean> {
+  if (pid == null || startedAt == null) {
     return false;
   }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
+  const now = await getProcessStartTime(pid);
+  return now != null && now === startedAt;
 }
 
 const outputLimit = 80_000;
