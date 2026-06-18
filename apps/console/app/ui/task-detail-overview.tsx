@@ -21,6 +21,7 @@ import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { KvRow, StatusBadge, fmtDateTime, isPendingSubRepoPath } from "./shared";
+import { fmtAgo } from "./dashboard-shared";
 import { FormModal } from "./controls";
 import { AttachmentList } from "./attachment-uploader";
 import { usePolling } from "../lib/use-polling";
@@ -89,6 +90,7 @@ export function OverviewTab({
 
         <OvCard icon={<Activity size={15} />} title="进度" scroll>
           <ProgressPanel percent={progress.percent} nodes={progress.nodes} />
+          <ExecLiveness task={task} />
         </OvCard>
 
         <OvCard icon={<Link2 size={15} />} title="相关信息">
@@ -243,6 +245,46 @@ function ProgressPanel({ percent, nodes }: { percent: number; nodes: ProgressNod
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// 执行存活信号：里程碑在 claude 整轮跑完前会冻结在「开始执行」（worker 单次阻塞调用 claude，期间不发事件），
+// 光看里程碑分不清「在跑」与「卡死」。running 态下 5s 轮询 /session/progress，把 transcript 的最近活动 /
+// 步数 / 当前步显示在进度卡，最近活动时间持续推进即在跑（docs/spec/worktree-exec-observability.md §1）。
+function ExecLiveness({ task }: { task: Task }) {
+  const live = task.status === "running";
+  const [info, setInfo] = useState<{ syncedAt: string | null; toolCount: number; lastStep: string | null } | null>(null);
+
+  usePolling(
+    async (isActive) => {
+      if (!live) return;
+      try {
+        const response = await fetch(`/api/tasks/${task.id}/session/progress`, { cache: "no-store" });
+        if (!response.ok) return;
+        const data = (await response.json()) as { syncedAt: string | null; toolCount: number; lastStep: string | null };
+        if (isActive()) setInfo(data);
+      } catch {
+        /* 轮询失败静默，下次重试 */
+      }
+    },
+    [task.id, live],
+    5000
+  );
+
+  if (!live) return null;
+  return (
+    <div className="ov-liveness">
+      <div className="ov-liveness-head">
+        <span className="ov-liveness-dot" aria-hidden />
+        <span className="ov-liveness-text">
+          执行中{info?.syncedAt ? ` · 最近活动 ${fmtAgo(info.syncedAt)}` : " · 准备中…"}
+          {info && info.toolCount > 0 ? ` · 已 ${info.toolCount} 步` : ""}
+        </span>
+      </div>
+      {info?.lastStep ? (
+        <div className="ov-liveness-step" title={info.lastStep}>{info.lastStep}</div>
+      ) : null}
     </div>
   );
 }

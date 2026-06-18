@@ -334,22 +334,37 @@ function fmtAttachSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function taskPrompt(task: Task, attachments: AttachmentMeta[]): string {
+// 把 Claude 钉死在任务 worktree 内。Claude 的 cwd 已是 wtPath,但它(及其派生的子代理)解析路径时容易
+// 落到物理上作为祖先目录的主检出同名文件——worktree 嵌套在 <主仓>/.claude/worktrees/ 下(worktree.ts),
+// 主仓根是 cwd 的祖先,宽搜索/绝对路径解析易命中主检出那份拷贝。曾因此空转 ~5min 读主检出才自纠
+// (docs/spec/worktree-exec-observability.md §2)。显式声明唯一工作目录 + 禁止越界来兜住。
+function worktreeAnchor(wtPath: string): string[] {
   return [
+    `You are running inside a dedicated git worktree at: ${wtPath}`,
+    "This worktree is your ONLY working directory. The surrounding/parent checkout is OFF-LIMITS: do NOT read, search, or edit any file outside this worktree.",
+    "Even if a tool or sub-agent reports an absolute path pointing elsewhere (e.g. the parent checkout), re-resolve it under this worktree before reading or editing. Prefer paths relative to this directory.",
+    ""
+  ];
+}
+
+function taskPrompt(task: Task, attachments: AttachmentMeta[], wtPath: string): string {
+  return [
+    ...worktreeAnchor(wtPath),
     `ClaudeCenter task: ${task.title}`,
     "",
     "Goal:",
     task.description,
     "",
-    "Work directly in the current repository. Implement the requested code changes, keep edits scoped, and run the most relevant local verification command when possible.",
+    "Work directly in this worktree. Implement the requested code changes, keep edits scoped, and run the most relevant local verification command when possible.",
     ...attachmentSection(attachments),
     "",
     ...replyDirective(task)
   ].join("\n");
 }
 
-function resumePrompt(task: Task, reply: string, attachments: AttachmentMeta[]): string {
+function resumePrompt(task: Task, reply: string, attachments: AttachmentMeta[], wtPath: string): string {
   return [
+    ...worktreeAnchor(wtPath),
     "The user replied to your question:",
     "",
     reply,
@@ -363,11 +378,11 @@ function resumePrompt(task: Task, reply: string, attachments: AttachmentMeta[]):
 
 // 续接重试 prompt:failed 任务带上次失败原因(error_message);cancelled 任务无 error_message,
 // 用「此前被中断」措辞。让 Claude 带着「上次为什么没成」在当前分支接着干。
-function retryPrompt(task: Task, attachments: AttachmentMeta[]): string {
+function retryPrompt(task: Task, attachments: AttachmentMeta[], wtPath: string): string {
   const head = task.error_message?.trim()
     ? ["Your previous run failed with this error:", "", task.error_message.trim(), "", "Fix the cause and complete the task on the current branch."]
     : ["Your previous run was interrupted before completing.", "", "Continue and complete the task on the current branch."];
-  return [...head, ...attachmentSection(attachments), "", ...replyDirective(task)].join("\n");
+  return [...worktreeAnchor(wtPath), ...head, ...attachmentSection(attachments), "", ...replyDirective(task)].join("\n");
 }
 
 function prBody(task: Task, claudeOutput: string): string {
@@ -478,15 +493,50 @@ async function prepareAllRepoWorktrees(
     if (ctx.sub_status === "skipped") {
       continue;
     }
-    await prepareRepoWorktree(localPath, task.id, ctx, fresh);
+    const { repoWt } = await prepareRepoWorktree(localPath, task.id, ctx, fresh);
     await addTaskEvent(pool, task.id, workerId, "worktree_prepared", `${ctx.role === "main" ? "主仓" : ctx.relative_path} 工作树就绪`, {
       repoRole: ctx.role,
       relativePath: ctx.relative_path,
       workBranch: ctx.work_branch,
       fresh
     });
+    await primeRepoDeps(task.id, workerId, ctx, repoWt);
   }
   return ctxs;
+}
+
+// worktree 不继承主检出的 node_modules(gitignore)。有 package.json 且无 node_modules 时 best-effort 预装,
+// 让 Claude 启动即有依赖,省掉它「执行中才发现缺依赖、现学现装」的空转(docs/spec/worktree-exec-observability.md §3)。
+// 通用判定:不写死某项目的 setup 脚本(worker 跑任意项目)。失败不阻塞任务(Claude 仍可自行处理),
+// 一律记 deps_primed 事件(outcome: installed/skipped-exists/skipped-no-pkg/failed)便于在时间线排查。
+// resume/retry 复用 worktree 时 node_modules 多已在 → skipped-exists 自动跳过。
+async function primeRepoDeps(taskId: string, workerId: string, ctx: TaskRepoCtx, repoWt: string): Promise<void> {
+  const pool = getPool();
+  const repoLabel = ctx.role === "main" ? "主仓" : ctx.relative_path;
+  const ev = (outcome: string, msg: string, extra: Record<string, unknown> = {}) =>
+    addTaskEvent(pool, taskId, workerId, "deps_primed", msg, { repoRole: ctx.role, relativePath: ctx.relative_path, outcome, ...extra });
+
+  if (!existsSync(path.join(repoWt, "package.json"))) {
+    await ev("skipped-no-pkg", `${repoLabel} 无 package.json，跳过依赖预热`);
+    return;
+  }
+  if (existsSync(path.join(repoWt, "node_modules"))) {
+    await ev("skipped-exists", `${repoLabel} node_modules 已存在，跳过依赖预热`);
+    return;
+  }
+  try {
+    // npm 在 Windows 是 npm.cmd → shell:true（CVE-2024-27980 后无 shell 拒绝 spawn .cmd）；windowsHide 由 runCommand 兜。
+    const res = await runCommand("npm", ["install", "--prefer-offline", "--no-audit", "--no-fund"], {
+      cwd: repoWt,
+      shell: true,
+      timeoutMs: 10 * 60_000
+    });
+    await ev("installed", `${repoLabel} 依赖已预热（npm install）`, { exitCode: res.exitCode });
+  } catch (error) {
+    await ev("failed", `${repoLabel} 依赖预热失败（忽略，继续执行）`, {
+      error: (error instanceof Error ? error.message : String(error)).slice(0, 500)
+    });
+  }
 }
 
 // 处理 Claude 输出：先记下续接所需 session；若请求确认则落评论 + 转入等待；否则按各仓 git 改动收尾。
@@ -576,7 +626,7 @@ async function handleClaudeTurn(
       await materializeAttachments(wtPath, replyAtts);
       await addTaskEvent(pool, task.id, config.workerId, "resumed", "用户执行中留言，直接注入续接", { injected: true });
       current = await runTaskClaude(config, task.id, {
-        prompt: resumePrompt(task, reply, replyAtts),
+        prompt: resumePrompt(task, reply, replyAtts, wtPath),
         cwd: wtPath,
         resumeSessionId: current.sessionId ?? undefined,
         model: task.model,
@@ -925,7 +975,7 @@ export async function executeTask(config: WorkerConfig, task: Task, hooks?: Exec
     await materializeAttachments(wtPath, taskAtts);
 
     const turn = await runTaskClaude(config, task.id, {
-      prompt: taskPrompt(task, taskAtts),
+      prompt: taskPrompt(task, taskAtts, wtPath),
       cwd: wtPath,
       model: task.model,
       onSpawn: hooks?.onClaudeSpawn
@@ -971,7 +1021,7 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
     await materializeAttachments(wtPath, [...taskAtts, ...replyAtts]);
     await addTaskEvent(pool, task.id, config.workerId, "resumed", "用户回复，续接执行", {});
     const turn = await runTaskClaude(config, task.id, {
-      prompt: resumePrompt(task, reply, replyAtts),
+      prompt: resumePrompt(task, reply, replyAtts, wtPath),
       cwd: wtPath,
       resumeSessionId: task.claude_session_id,
       model: task.model,
@@ -1013,7 +1063,7 @@ export async function retryFailedTask(config: WorkerConfig, task: Task, hooks?: 
     });
 
     const turn = await runTaskClaude(config, task.id, {
-      prompt: resume ? retryPrompt(task, taskAtts) : taskPrompt(task, taskAtts),
+      prompt: resume ? retryPrompt(task, taskAtts, wtPath) : taskPrompt(task, taskAtts, wtPath),
       cwd: wtPath,
       resumeSessionId: task.claude_session_id ?? undefined,
       model: task.model,
