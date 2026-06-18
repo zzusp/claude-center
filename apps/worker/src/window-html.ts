@@ -1080,6 +1080,25 @@ export function windowHtml(): string {
             try { list = await window.workerApi.listMyConversations(); } catch (e) { return; }
             renderConversations(list);
           }
+          // 本轮(最后一条 done assistant 之后)、jsonl 尚未收录的 user 消息 → 「思考中」阶段先本地可见。
+          // 多轮续接时 web 刚发来的新问题已落 conversation_messages，但 jsonl 还停在上几轮（claude 本轮未同步），
+          // 若只渲染 jsonl 会把新问题吞掉；这里把它补成 user 气泡（与 Web 端 pending/jsonl.includes 同思路）。
+          function pendingTurnUserBubbles(msgs, jsonl) {
+            var lastDone = -1;
+            for (var i = 0; i < msgs.length; i++) {
+              if (msgs[i].role === "assistant" && msgs[i].status === "done") lastDone = i;
+            }
+            var out = "";
+            for (var i = lastDone + 1; i < msgs.length; i++) {
+              var m = msgs[i];
+              if (m.role !== "user") continue;
+              var body = m.body || "";
+              if (!body) continue;
+              if (jsonl && jsonl.indexOf(body) >= 0) continue;
+              out += '<div class="tx-row user"><div class="tx-msg user"><div class="tx-text"><span style="white-space:pre-wrap">' + esc(body) + '</span></div></div></div>';
+            }
+            return out;
+          }
           var convDetailLoadingId = null;
           async function loadConvDetail(convId) {
             // 单飞：同一对话已在途加载则跳过，避免 400ms 轮询叠加大 jsonl 慢取堆成请求风暴（卡顿主因）。
@@ -1130,6 +1149,9 @@ export function windowHtml(): string {
               var html = "";
               if (jsonl) {
                 html = renderTranscriptHtml(parseTranscript(jsonl));
+                // 本轮已发出但 jsonl 尚未收录的 user 消息（多轮续接的新问题在「思考中」阶段也立即可见）。
+                var pendingHtml = pendingTurnUserBubbles(msgs, jsonl);
+                if (pendingHtml) html += '<div class="tx">' + pendingHtml + '</div>';
               } else {
                 // JSONL 未就绪（对话启动头几秒）：降级为纯文本气泡
                 html = '<div class="tx">' + msgs.map(function(m) {
