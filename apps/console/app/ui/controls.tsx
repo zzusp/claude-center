@@ -663,4 +663,4 @@ function DateTimePicker({
   );
 }
 
-export { Drawer, FormModal, Select, DateTimePicker, ConfirmDialog, useConfirm };
+export { Drawer, FormModal, Select, DateTimePicker, ConfirmDialog, useConfirm, formatLocal };

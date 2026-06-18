@@ -4,7 +4,7 @@ import type { Task } from "@claude-center/db";
 import { Check, Send } from "lucide-react";
 import { FormEvent, useRef, useState } from "react";
 import { useAsyncAction } from "../lib/use-async-action";
-import { DateTimePicker, Select } from "./controls";
+import { DateTimePicker, formatLocal, Select } from "./controls";
 
 // 任务编辑表单：详情页 + 任务流列表的编辑弹窗共用（仅草稿/定时态可编辑）。
 // 按「基本信息 / 分支配置 / 执行选项 / 调度」分区排版，与新建表单 ComposeTaskForm 保持一致。
@@ -27,10 +27,11 @@ export function TaskEditForm({
   // 用 ref 而非 state，避免点击「保存并发布」后 setState 异步导致 handleSubmit 拿到旧值。
   const submitIntentRef = useRef<"save" | "publish">("save");
 
-  // datetime-local 值格式：去掉秒+时区（只保留 "YYYY-MM-DDTHH:MM"）
-  const scheduledAtDefault = task.scheduled_at
-    ? task.scheduled_at.slice(0, 16)
-    : "";
+  // 把存库的 UTC 时刻（task.scheduled_at 是带 Z 的 ISO）转成「本地墙钟」"YYYY-MM-DDTHH:MM"
+  // 喂给 DateTimePicker——它的值语义就是本地墙钟（formatLocal 的输出格式），保存时再 new Date(本地).toISOString()
+  // 回到正确 UTC。曾经直接 slice(0,16) 取 UTC 墙钟当本地用，保存会把时刻按时区偏移整体提前（东八区 -8h），
+  // 导致定时任务没到点就被提升认领（见 docs/spec/task-scheduled.md）。
+  const scheduledAtDefault = task.scheduled_at ? formatLocal(new Date(task.scheduled_at)) : "";
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
