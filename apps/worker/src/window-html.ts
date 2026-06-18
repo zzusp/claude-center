@@ -218,8 +218,8 @@ export function windowHtml(): string {
           }
           .list-item:first-child { border-top: 0; }
           .li-main { min-width: 0; }
-          .li-title { font-size: 13px; font-weight: 600; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-          .li-sub { display: block; font-size: 11.5px; color: var(--text-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
+          .li-title { display: block; font-size: 13px; font-weight: 600; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .li-sub { display: block; font-size: 11.5px; color: var(--text-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
           /* Buttons */
           .btn {
@@ -323,8 +323,13 @@ export function windowHtml(): string {
           .conv-row .li-main { flex: 1; }
           .conv-live { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--success); white-space: nowrap; }
           .conv-live::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: currentColor; animation: cc-breathe 1.4s ease-in-out infinite; }
-          .conv-detail { padding: 6px 0 12px; border-top: 1px dashed var(--border); }
-          .conv-msgs { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow: auto; padding: 4px 2px; scroll-behavior: auto; overscroll-behavior: none; }
+          .conv-layout { display: flex; gap: 16px; flex: 1 1 auto; min-height: 0; }
+          .conv-layout > .card { min-height: 0; display: flex; flex-direction: column; }
+          .conv-list-card { flex: 0 0 240px; min-width: 0; }
+          .conv-list-card .scroll-body { overflow-x: hidden; }
+          .conv-detail-card { flex: 1; min-width: 0; }
+          .conv-row.conv-active { background: var(--surface-3); }
+          .conv-msgs { display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; }
           .cbub { max-width: 86%; padding: 7px 11px; border-radius: 10px; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
           .cbub.user { align-self: flex-end; background: var(--running); color: #fff; border-bottom-right-radius: 3px; }
           .cbub.asst { align-self: flex-start; background: var(--surface-2); color: var(--text-1); border-bottom-left-radius: 3px; }
@@ -479,13 +484,21 @@ export function windowHtml(): string {
 
               <!-- 对话 -->
               <section class="page fill" id="page-conversations">
-                <section class="card">
-                  <div class="card-head">
-                    <h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z"/></svg></span>实时对话</h2>
-                    <button id="convRefresh" class="btn btn-sm" type="button">刷新</button>
-                  </div>
-                  <div class="card-body scroll-body"><div id="conversations"><span class="empty">加载中…</span></div></div>
-                </section>
+                <div class="conv-layout">
+                  <section class="card conv-list-card">
+                    <div class="card-head">
+                      <h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z"/></svg></span>实时对话</h2>
+                      <button id="convRefresh" class="btn btn-sm" type="button">刷新</button>
+                    </div>
+                    <div class="card-body scroll-body"><div id="conversations"><span class="empty">加载中…</span></div></div>
+                  </section>
+                  <section class="card conv-detail-card" id="conv-detail-card">
+                    <div class="card-head">
+                      <h2 class="card-title" id="conv-detail-title">对话详情</h2>
+                    </div>
+                    <div class="card-body scroll-body" id="conv-detail-body"><div id="conv-detail-panel"><span class="empty">选择左侧对话查看内容</span></div></div>
+                  </section>
+                </div>
               </section>
 
               <!-- 项目 -->
@@ -811,16 +824,15 @@ export function windowHtml(): string {
           var convDetailFpId = null;
           function convRow(c) {
             const right = c.generating ? '<span class="conv-live">回复中</span>' : '';
-            const head =
-              '<div class="conv-row" data-conv-row="' + esc(c.id) + '">' +
+            const activeClass = expandedConvId === c.id ? ' conv-active' : '';
+            return '<div class="conv-item">' +
+              '<div class="conv-row' + activeClass + '" data-conv-row="' + esc(c.id) + '">' +
                 '<span class="li-main"><span class="li-title">' + esc(c.title || "未命名对话") + '</span>' +
                 '<span class="li-sub">' + esc(c.project_name || "") + (c.branch ? " · " + esc(c.branch) : "") + '</span></span>' +
                 right +
                 '<span class="task-time">' + (c.last_message_at ? elapsed(c.last_message_at) : "") + '</span>' +
-              '</div>';
-            const detail = expandedConvId === c.id
-              ? '<div class="conv-detail" id="conv-detail-' + esc(c.id) + '"><span class="empty">加载中…</span></div>' : "";
-            return '<div class="conv-item">' + head + detail + '</div>';
+              '</div>' +
+            '</div>';
           }
           function renderConversations(list) {
             convCache = list || [];
@@ -830,25 +842,8 @@ export function windowHtml(): string {
             var newFp = (expandedConvId || '') + '|' + convCache.map(function(c) { return c.id + (c.generating ? '1' : '0'); }).join(',');
             if (convListFp === newFp) return;
             convListFp = newFp;
-            let keep = null;
-            if (expandedConvId) {
-              const old = document.getElementById("conv-detail-" + expandedConvId);
-              if (old) {
-                const ml = document.getElementById("conv-msgs-" + expandedConvId);
-                keep = { html: old.innerHTML, top: ml ? ml.scrollTop : null };
-              }
-            }
             $("conversations").innerHTML = convCache.map(convRow).join("");
-            if (expandedConvId) {
-              const box = document.getElementById("conv-detail-" + expandedConvId);
-              if (box && keep) {
-                box.innerHTML = keep.html;
-                const ml = document.getElementById("conv-msgs-" + expandedConvId);
-                if (ml && keep.top != null) ml.scrollTo({ top: keep.top, behavior: 'instant' });
-              } else {
-                loadConvDetail(expandedConvId);
-              }
-            }
+            if (expandedConvId) loadConvDetail(expandedConvId);
           }
           async function reloadConversations() {
             let list = [];
@@ -856,10 +851,10 @@ export function windowHtml(): string {
             renderConversations(list);
           }
           async function loadConvDetail(convId) {
-            const box = document.getElementById("conv-detail-" + convId);
+            const box = document.getElementById("conv-detail-panel");
             if (!box) return;
-            const mlBefore = document.getElementById("conv-msgs-" + convId);
-            const prevTop = mlBefore ? mlBefore.scrollTop : null;
+            const scrollEl = document.getElementById("conv-detail-body");
+            const prevTop = scrollEl ? scrollEl.scrollTop : null;
             let d;
             try { d = await window.workerApi.getConversationDetail(convId); }
             catch (e) { box.innerHTML = '<span class="empty">加载失败</span>'; return; }
@@ -870,7 +865,7 @@ export function windowHtml(): string {
             if (convDetailFpId === convId && convDetailFp === fp) return;
             convDetailFp = fp;
             convDetailFpId = convId;
-            box.innerHTML = '<div class="conv-msgs" id="conv-msgs-' + esc(convId) + '">' + msgs.map((m) => {
+            box.innerHTML = '<div class="conv-msgs">' + msgs.map((m) => {
               const cls = m.role === "user" ? "user" : "asst";
               const streaming = m.role === "assistant" && m.status === "streaming";
               const failed = m.status === "failed";
@@ -878,12 +873,11 @@ export function windowHtml(): string {
               return '<div class="cbub ' + cls + (failed ? " failed" : "") + '">' + body +
                 (streaming ? '<span class="cbub-caret"></span>' : "") + '</div>';
             }).join("") + '</div>';
-            const ml = document.getElementById("conv-msgs-" + convId);
-            if (!ml) return;
+            if (!scrollEl) return;
             if (hasStreaming || prevTop === null) {
-              ml.scrollTo({ top: ml.scrollHeight, behavior: 'instant' });
+              scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'instant' });
             } else {
-              ml.scrollTo({ top: prevTop, behavior: 'instant' });
+              scrollEl.scrollTo({ top: prevTop, behavior: 'instant' });
             }
           }
 
@@ -1081,8 +1075,16 @@ export function windowHtml(): string {
             const convRowEl = e.target.closest && e.target.closest("[data-conv-row]");
             if (convRowEl) {
               const cid = convRowEl.getAttribute("data-conv-row");
-              expandedConvId = expandedConvId === cid ? null : cid;
-              renderConversations(convCache);
+              if (expandedConvId !== cid) {
+                expandedConvId = cid;
+                convListFp = '';
+                convDetailFp = null;
+                convDetailFpId = null;
+                renderConversations(convCache);
+                const conv = convCache.find(function(c) { return c.id === cid; });
+                const titleEl = document.getElementById("conv-detail-title");
+                if (titleEl) titleEl.textContent = (conv && conv.title) ? conv.title : "未命名对话";
+              }
             }
           });
 
