@@ -36,6 +36,13 @@ export function windowHtml(): string {
           }
           button, input, textarea, select { font: inherit; color: inherit; }
 
+          /* —— 全局滚动条（Electron/Chromium webkit）—— */
+          ::-webkit-scrollbar { width: 6px; height: 6px; }
+          ::-webkit-scrollbar-track { background: transparent; }
+          ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+          ::-webkit-scrollbar-thumb:hover { background: var(--text-4); }
+          ::-webkit-scrollbar-corner { background: transparent; }
+
           /* —— App shell —— */
           .app { display: flex; height: 100vh; }
           .sidebar {
@@ -125,7 +132,7 @@ export function windowHtml(): string {
           .stat-value.muted { color: var(--text-3); }
           .stat-value .unit { font-size: 14px; font-weight: 500; color: var(--text-4); margin-left: 4px; }
           .stat-foot { margin-top: 6px; font-size: 11.5px; color: var(--text-4); min-height: 16px; }
-          .ov-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+          .ov-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
           .span2 { grid-column: 1 / -1; }
 
           .kv { display: grid; gap: 11px; }
@@ -170,11 +177,13 @@ export function windowHtml(): string {
           .badge[data-tone=merged] { color: var(--merged); background: rgba(124,58,237,.10); }
 
           /* Capability dots */
-          .cap-row { display: flex; flex-wrap: wrap; gap: 8px 18px; }
-          .cap-item { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-2); }
-          .dot { display: inline-block; width: 8px; height: 8px; border-radius: 999px; background: currentColor; color: var(--text-4); flex-shrink: 0; }
-          .dot[data-tone=success] { color: var(--success); }
-          .dot[data-tone=failed]  { color: var(--failed); }
+          .cap-row { display: flex; flex-direction: column; gap: 10px; }
+          .cap-item { display: grid; grid-template-columns: 80px 130px 1fr; align-items: center; gap: 0 10px; font-size: 13px; color: var(--text-2); min-width: 0; }
+          .cap-name { display: inline-flex; align-items: center; gap: 8px; }
+          .cap-version { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-3); }
+          .cap-path { font-family: var(--font-mono); font-size: 11px; color: var(--text-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; min-width: 0; }
+          .cap-path:hover { color: var(--running); text-decoration: underline; }
+          .live-dot.fail { background: var(--failed); }
 
           /* Usage bars */
           .usage-block { margin-bottom: 12px; }
@@ -295,6 +304,17 @@ export function windowHtml(): string {
           }
           .reply-input:focus { border-color: var(--running); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
 
+          #page-tasks .card-body { padding-top: 6px; padding-bottom: 6px; }
+
+          /* Tasks filter + pager */
+          .tasks-toolbar { display: flex; align-items: center; gap: 8px; }
+          .tasks-filter-bar { display: flex; gap: 3px; }
+          .filter-btn { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--text-3); font-size: 12px; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
+          .filter-btn:hover { background: var(--surface-2); color: var(--text-1); }
+          .filter-btn.active { background: var(--text-1); border-color: var(--text-1); color: var(--surface-1); }
+          .tasks-pager { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); flex-shrink: 0; }
+          .tasks-pager-info { font-size: 12px; color: var(--text-4); font-variant-numeric: tabular-nums; }
+
           /* Conversations panel (read-only) */
           .conv-item { border-top: 1px solid var(--border); }
           .conv-item:first-child { border-top: 0; }
@@ -316,6 +336,10 @@ export function windowHtml(): string {
           .live-dot.pulse { animation: cc-breathe 1.8s ease-in-out infinite; }
           .live-dot.pulse::after { content: ""; position: absolute; inset: -3px; border-radius: 999px; background: var(--success); opacity: .18; animation: cc-ring 1.8s ease-in-out infinite; }
           @keyframes cc-breathe { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
+          @keyframes cc-spin { to { transform: rotate(360deg); } }
+          .tasks-loading { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 40px 16px; color: var(--text-4); font-size: 13px; }
+          .tasks-loading-spin { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--running); border-radius: 50%; animation: cc-spin 0.7s linear infinite; flex-shrink: 0; }
+          .tasks-empty { display: flex; align-items: center; justify-content: center; padding: 40px 16px; color: var(--text-4); font-size: 13px; }
           @keyframes cc-ring { 0% { transform: scale(.7); opacity: .25; } 70% { transform: scale(1.7); opacity: 0; } 100% { opacity: 0; } }
         </style>
       </head>
@@ -408,11 +432,11 @@ export function windowHtml(): string {
                     <div class="card-head"><h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg></span>本机信息</h2></div>
                     <div class="card-body">
                       <div class="kv">
-                        <div class="kv-row"><span class="kv-k">名称</span><span class="kv-v" id="ovName">—</span></div>
-                        <div class="kv-row"><span class="kv-k">主机</span><span class="kv-v mono" id="ovHost">—</span></div>
+                        <div class="kv-row"><span class="kv-k">名称</span><span class="kv-v"><span id="ovName">—</span><span id="ovHost" class="kv-v mono" style="margin-left:6px;color:var(--text-4)">—</span></span></div>
                         <div class="kv-row"><span class="kv-k">系统</span><span class="kv-v" id="ovOs">—</span></div>
                         <div class="kv-row"><span class="kv-k">claude</span><span class="kv-v mono" id="ovClaude">—</span></div>
                         <div class="kv-row"><span class="kv-k">套餐</span><span class="kv-v" id="ovSub">—</span></div>
+                        <div class="kv-row"><span class="kv-k">终端</span><span class="kv-v mono" id="ovTerminal">—</span></div>
                       </div>
                     </div>
                   </section>
@@ -434,9 +458,22 @@ export function windowHtml(): string {
                 <section class="card">
                   <div class="card-head">
                     <h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.5l2.5 7 4-14 2.5 7H21"/></svg></span>本机任务</h2>
-                    <button id="tasksRefresh" class="btn btn-sm" type="button">刷新</button>
+                    <div class="tasks-toolbar">
+                      <span class="tasks-filter-bar">
+                        <button class="filter-btn active" data-tasks-filter="all" type="button">全部</button>
+                        <button class="filter-btn" data-tasks-filter="needs" type="button">待回复</button>
+                        <button class="filter-btn" data-tasks-filter="working" type="button">进行中</button>
+                        <button class="filter-btn" data-tasks-filter="done" type="button">已完成</button>
+                      </span>
+                      <button id="tasksRefresh" class="btn btn-sm" type="button">刷新</button>
+                    </div>
                   </div>
                   <div class="card-body scroll-body"><div id="tasks"><span class="empty">加载中…</span></div></div>
+                  <div class="tasks-pager" id="tasksPager" style="display:none">
+                    <button id="tasksPrev" class="btn btn-sm" type="button">‹ 上一页</button>
+                    <span id="tasksPagerInfo" class="tasks-pager-info"></span>
+                    <button id="tasksNext" class="btn btn-sm" type="button">下一页 ›</button>
+                  </div>
                 </section>
               </section>
 
@@ -538,8 +575,17 @@ export function windowHtml(): string {
 
           function capDot(name, cap) {
             const ok = cap && cap.ok;
-            return '<span class="cap-item"><span class="dot" data-tone="' + (ok ? "success" : "failed") + '"></span>' +
-              name + (ok && cap.version ? " " + esc(cap.version) : ok ? "" : " 未检出") + "</span>";
+            const dotClass = "live-dot" + (ok ? " pulse" : " fail");
+            const version = ok && cap.version ? cap.version : (ok ? "—" : "未检出");
+            const capPath = cap && cap.path ? cap.path : "";
+            const pathEl = capPath
+              ? '<span class="cap-path" title="' + esc(capPath) + '" data-cap-path="' + esc(capPath) + '">' + esc(capPath) + '</span>'
+              : '<span></span>';
+            return '<div class="cap-item">' +
+              '<span class="cap-name"><span class="' + dotClass + '"></span>' + esc(name) + '</span>' +
+              '<span class="cap-version">' + esc(version) + '</span>' +
+              pathEl +
+              '</div>';
           }
 
           // 距 resets_at 还剩多久（每次刷新重算，呈倒计时）。
@@ -572,8 +618,9 @@ export function windowHtml(): string {
           }
 
           // —— 菜单切换 ——
+          var currentPage = "overview";
           var PAGE_META = {
-            overview:      { t: "总览", s: "本机运行状态、能力与套餐用量" },
+            overview:      { t: "总览", s: "本机运行状态、能力与套餐用量 · 每 15s 刷新" },
             tasks:         { t: "任务", s: "本机认领的任务与执行进度" },
             conversations: { t: "对话", s: "本机承接的实时对话" },
             projects:      { t: "项目", s: "本地路径与云端项目的关联" },
@@ -582,6 +629,7 @@ export function windowHtml(): string {
           };
           var PAGE_LIST = ["overview", "tasks", "conversations", "projects", "settings", "logs"];
           function showPage(name) {
+            currentPage = name;
             PAGE_LIST.forEach(function (p) {
               var pg = $("page-" + p); if (pg) pg.classList.toggle("active", p === name);
               var nv = document.querySelector('[data-nav="' + p + '"]'); if (nv) nv.classList.toggle("active", p === name);
@@ -600,7 +648,7 @@ export function windowHtml(): string {
           // 状态机简化:accepted/rejected 已移除；Worker 终态只有 success/failed/waiting,
           // merged 由 Console 30s 轮询检测 PR 合并自动翻;桌面端不再提供「验收 / 打回」入口。
           var TASK_STATUS_META = {
-            waiting:   { group: "needs",   label: "需输入",   tone: "waiting" },
+            waiting:   { group: "needs",   label: "待回复",   tone: "waiting" },
             success:   { group: "done",    label: "已完成",   tone: "success" },
             claimed:   { group: "working", label: "已认领",   tone: "running" },
             running:   { group: "working", label: "执行中",   tone: "running" },
@@ -615,6 +663,10 @@ export function windowHtml(): string {
           ];
           var expandedTaskId = null;
           var tasksCache = [];
+          var tasksTotal = 0;
+          var tasksFilter = "all";
+          var tasksPage = 1;
+          var tasksPageSize = 10;
 
           function statusMeta(status) {
             return TASK_STATUS_META[status] || { group: "done", label: status, tone: "cancelled" };
@@ -647,35 +699,57 @@ export function windowHtml(): string {
               ? '<div class="task-detail" id="detail-' + esc(t.id) + '"><span class="empty">加载中…</span></div>' : "";
             return '<div class="task-item">' + head + detail + '</div>';
           }
-          function renderTasks(tasks) {
-            tasksCache = tasks || [];
-            var waitingN = tasksCache.filter(function (t) { return t.status === "waiting"; }).length;
-            setNavCount("navTasksCount", waitingN);
-            if (!tasksCache.length) { $("tasks").innerHTML = '<span class="empty">本机暂无任务</span>'; return; }
-            const byGroup = {};
-            tasksCache.forEach((t) => { const g = statusMeta(t.status).group; (byGroup[g] = byGroup[g] || []).push(t); });
-            let html = "";
-            TASK_GROUPS.forEach((g) => {
-              const list = byGroup[g.key];
-              if (!list || !list.length) return;
-              html += '<div class="task-group"><div class="task-group-head">' + g.title +
-                ' <span class="task-count">' + list.length + '</span></div>' + list.map(taskRow).join("") + "</div>";
+          // renderTasks: 渲染当前 tasksCache（已由服务端分好页），平铺不分组。
+          function renderTasks() {
+            document.querySelectorAll("[data-tasks-filter]").forEach(function(btn) {
+              btn.classList.toggle("active", btn.getAttribute("data-tasks-filter") === tasksFilter);
             });
-            // 同对话面板：重建列表会把已展开详情重置为「加载中…」再异步拉取 → 刷新闪烁。
-            // 先存下旧详情内容、重建后还原消除闪回；任务面板无独立刷新定时器，故仍调 loadDetail
-            // 平滑刷新（先 await 再换 innerHTML，过渡是旧内容→新内容，不经占位符）。
+
+            if (!tasksCache.length) {
+              $("tasks").innerHTML = '<div class="tasks-empty">' + (tasksTotal === 0 ? "本机暂无任务" : "当前筛选无任务") + '</div>';
+              $("tasksPager").style.display = "none";
+              return;
+            }
+
+            // 平铺渲染，先存已展开详情防闪烁
             const keep = expandedTaskId ? (document.getElementById("detail-" + expandedTaskId) || {}).innerHTML : null;
-            $("tasks").innerHTML = html;
+            $("tasks").innerHTML = tasksCache.map(taskRow).join("");
             if (expandedTaskId) {
               const box = document.getElementById("detail-" + expandedTaskId);
               if (box && keep != null) box.innerHTML = keep;
               loadDetail(expandedTaskId);
             }
+
+            var totalPages = Math.ceil(tasksTotal / tasksPageSize) || 1;
+            var showPager = totalPages > 1;
+            $("tasksPager").style.display = showPager ? "flex" : "none";
+            if (showPager) {
+              $("tasksPagerInfo").textContent = "第 " + tasksPage + " / " + totalPages + " 页（共 " + tasksTotal + " 条）";
+              $("tasksPrev").disabled = tasksPage <= 1;
+              $("tasksNext").disabled = tasksPage >= totalPages;
+            }
           }
-          async function reloadTasks() {
-            let tasks = [];
-            try { tasks = await window.workerApi.listMyTasks(); } catch (e) { return; }
-            renderTasks(tasks);
+          // showLoading=true 时出翻页/筛选动画；自动刷新不传（false），避免频繁闪烁。
+          async function reloadTasks(showLoading) {
+            if (showLoading) {
+              $("tasks").innerHTML = '<div class="tasks-loading"><span class="tasks-loading-spin"></span>加载中…</div>';
+              $("tasksPager").style.display = "none";
+            }
+            let result = { rows: [], total: 0, waitingCount: 0 };
+            try {
+              result = await window.workerApi.listMyTasks({
+                page: tasksPage,
+                pageSize: tasksPageSize,
+                statusGroup: tasksFilter === "all" ? null : tasksFilter
+              });
+            } catch (e) {
+              if (showLoading) $("tasks").innerHTML = '<div class="tasks-empty">加载失败，请刷新</div>';
+              return;
+            }
+            tasksCache = result.rows || [];
+            tasksTotal = result.total || 0;
+            setNavCount("navTasksCount", result.waitingCount || 0);
+            renderTasks();
           }
           async function loadDetail(taskId) {
             const box = document.getElementById("detail-" + taskId);
@@ -834,7 +908,7 @@ export function windowHtml(): string {
 
             // 能力自检
             const caps = s.capabilities || {};
-            $("caps").innerHTML = [capDot("git", caps.git), capDot("gh", caps.gh), capDot("claude", caps.claude)].join("");
+            $("caps").innerHTML = [capDot("git", caps.git), capDot("gh", caps.gh), capDot("claude", caps.claude), capDot("node.js", caps.nodejs), capDot("python", caps.python)].join("");
 
             // 套餐用量
             const u = s.usage || {};
@@ -845,16 +919,18 @@ export function windowHtml(): string {
             // 总览统计卡
             $("statWorking").textContent = working ? "工作中" : "空闲";
             $("statWorking").className = "stat-value " + (working ? "ok" : "muted");
-            $("statWorkingFoot").textContent = working ? "正在接收任务" : "在线但不接任务";
+            $("statWorkingFoot").textContent = working ? "正在等待新任务" : "在线但不接任务";
             $("statActive").innerHTML = s.activeCount + '<span class="unit">/ ' + s.maxParallel + "</span>";
             $("statActiveFoot").textContent = "并发上限 " + s.maxParallel;
-            const capList = [caps.git, caps.gh, caps.claude];
+            const capList = [caps.git, caps.gh, caps.claude, caps.nodejs, caps.python];
             const capOk = capList.filter(function (c) { return c && c.ok; }).length;
-            $("statCaps").innerHTML = capOk + '<span class="unit">/ 3</span>';
+            $("statCaps").innerHTML = capOk + '<span class="unit">/ 5</span>';
             const miss = [];
             if (!(caps.git && caps.git.ok)) miss.push("git");
             if (!(caps.gh && caps.gh.ok)) miss.push("gh");
             if (!(caps.claude && caps.claude.ok)) miss.push("claude");
+            if (!(caps.nodejs && caps.nodejs.ok)) miss.push("node.js");
+            if (!(caps.python && caps.python.ok)) miss.push("python");
             $("statCapsFoot").textContent = miss.length ? "缺：" + miss.join("、") : "全部就绪";
             const relayShort = { connected: (s.relayChannels || 0) + " 频道", connecting: "连接中", reconnecting: "重连中", disabled: "未启用" }[s.relayState] || "未启用";
             $("statRelay").textContent = relayShort;
@@ -866,6 +942,11 @@ export function windowHtml(): string {
             $("ovOs").textContent = (s.os && s.os.label) || "—";
             $("ovClaude").textContent = s.claudeVersion || "—";
             $("ovSub").textContent = s.subscriptionType || "—";
+            $("ovTerminal").textContent = s.terminalCommand || "默认";
+            if (currentPage === "overview") {
+              var _now = new Date(); var _p2 = function(n) { return String(n).padStart(2, "0"); };
+              $("pageSub").textContent = "本机运行状态、能力与套餐用量 · 每 15s 刷新 · 上次 " + _p2(_now.getHours()) + ":" + _p2(_now.getMinutes()) + ":" + _p2(_now.getSeconds());
+            }
 
             // 日志（仅内存，全高卡片内滚；保留近 200 行）
             const logs = s.logs || [];
@@ -946,7 +1027,12 @@ export function windowHtml(): string {
             try { await window.workerApi.addProjectLink({ projectName, localPath }); $("localPath").value = ""; await loadProjects(); }
             finally { $("addBtn").disabled = false; }
           });
-          $("tasksRefresh").addEventListener("click", reloadTasks);
+          $("tasksRefresh").addEventListener("click", function() { reloadTasks(true); });
+          $("tasksPrev").addEventListener("click", function() { if (tasksPage > 1) { tasksPage--; reloadTasks(true); } });
+          $("tasksNext").addEventListener("click", function() {
+            var totalPages = Math.ceil(tasksTotal / tasksPageSize) || 1;
+            if (tasksPage < totalPages) { tasksPage++; reloadTasks(true); }
+          });
           $("convRefresh").addEventListener("click", reloadConversations);
           $("logsClear").addEventListener("click", async () => { await window.workerApi.clearLogs(); refresh(); });
 
@@ -956,6 +1042,10 @@ export function windowHtml(): string {
           });
 
           document.addEventListener("click", async (e) => {
+            const capPathEl = e.target.closest && e.target.closest("[data-cap-path]");
+            if (capPathEl) { const p = capPathEl.getAttribute("data-cap-path"); if (p) window.workerApi.openPath(p); return; }
+            const filterBtn = e.target.closest && e.target.closest("[data-tasks-filter]");
+            if (filterBtn) { tasksFilter = filterBtn.getAttribute("data-tasks-filter"); tasksPage = 1; reloadTasks(true); return; }
             const actionEl = e.target.closest && e.target.closest("[data-task-action]");
             if (actionEl) {
               await handleTaskAction(actionEl.getAttribute("data-task-action"),
@@ -972,7 +1062,7 @@ export function windowHtml(): string {
             if (row) {
               const id = row.getAttribute("data-row");
               expandedTaskId = expandedTaskId === id ? null : id;
-              renderTasks(tasksCache);
+              renderTasks();
               return;
             }
             const convRowEl = e.target.closest && e.target.closest("[data-conv-row]");
@@ -985,7 +1075,7 @@ export function windowHtml(): string {
 
           showPage("overview");
           refresh(); loadProjects(); reloadTasks(); reloadConversations(); loadTerminals();
-          setInterval(refresh, 3000);
+          setInterval(refresh, 15000);
           setInterval(loadProjects, 15000);
           setInterval(() => { if (!isEditingTask()) reloadTasks(); }, 4000);
           setInterval(reloadConversations, 3000);

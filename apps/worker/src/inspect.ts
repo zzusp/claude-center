@@ -24,10 +24,10 @@ export type ClaudeInspect = {
   usage: WorkerUsage;
 };
 
-// 单个外部依赖的可用性自检结果:能否调用 + 解析出的版本号。
-export type Capability = { ok: boolean; version: string | null };
-// worker 执行任务依赖的三个外部命令的自检结果。registerWorker 用其替换原硬编码 capabilities。
-export type Capabilities = { git: Capability; gh: Capability; claude: Capability };
+// 单个外部依赖的可用性自检结果:能否调用 + 解析出的版本号 + 可执行文件路径。
+export type Capability = { ok: boolean; version: string | null; path: string | null };
+// worker 执行任务依赖的外部命令的自检结果。registerWorker 用其替换原硬编码 capabilities。
+export type Capabilities = { git: Capability; gh: Capability; claude: Capability; nodejs: Capability; python: Capability };
 
 // `claude --version` → "2.1.177 (Claude Code)"，取前导语义版本号。
 export async function getClaudeVersion(config: WorkerConfig): Promise<string | null> {
@@ -40,25 +40,33 @@ export async function getClaudeVersion(config: WorkerConfig): Promise<string | n
   }
 }
 
-// 跑 `<cmd> --version` 自检单个命令:成功(退出 0)即 ok,顺带解析版本号。容错:命令不存在/报错 → {ok:false}。
+// 跑 `<cmd> --version` 自检单个命令:成功(退出 0)即 ok,顺带解析版本号与安装路径。容错:命令不存在/报错 → {ok:false}。
 async function probeCommand(command: string, versionRe = /(\d+\.\d+\.\d+(?:[-.\w]*)?)/): Promise<Capability> {
+  let result;
   try {
-    const result = await runCommand(command, ["--version"], { timeoutMs: 15_000 });
-    const match = result.stdout.match(versionRe) ?? result.stderr.match(versionRe);
-    return { ok: true, version: match?.[1] ?? null };
+    result = await runCommand(command, ["--version"], { timeoutMs: 15_000 });
   } catch {
-    return { ok: false, version: null };
+    return { ok: false, version: null, path: null };
   }
+  const match = result.stdout.match(versionRe) ?? result.stderr.match(versionRe);
+  let resolvedPath: string | null = null;
+  try { resolvedPath = await resolveCommand(command); } catch { /* ignore */ }
+  if (!resolvedPath && path.isAbsolute(command)) resolvedPath = command;
+  return { ok: true, version: match?.[1] ?? null, path: resolvedPath };
 }
 
-// 启动时自检 worker 执行任务所需的三个外部命令是否可用。结果上报 DB(Console 可见)+ 桌面 UI 红绿点展示。
+// 启动时自检 worker 执行任务所需的外部命令是否可用。结果上报 DB(Console 可见)+ 桌面 UI 红绿点展示。
 export async function detectCapabilities(config: WorkerConfig): Promise<Capabilities> {
-  const [git, gh, claude] = await Promise.all([
+  const [git, gh, claude, nodejs, pythonMain, python3] = await Promise.all([
     probeCommand("git"),
     probeCommand(config.ghCommand),
-    probeCommand(config.claudeCommand)
+    probeCommand(config.claudeCommand),
+    probeCommand("node"),
+    probeCommand("python"),
+    probeCommand("python3")
   ]);
-  return { git, gh, claude };
+  const python = pythonMain.ok ? pythonMain : python3;
+  return { git, gh, claude, nodejs, python };
 }
 
 // worker 所在机器的操作系统概览，桌面端展示用。label 形如 "Windows 10.0.26200 (x64)"。

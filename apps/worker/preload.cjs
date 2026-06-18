@@ -17,10 +17,11 @@ contextBridge.exposeInMainWorld("workerApi", {
   addProjectLink: (input) => ipcRenderer.invoke("worker:addProjectLink", input),
   removeProjectLink: (input) => ipcRenderer.invoke("worker:removeProjectLink", input),
   cancelTask: (taskId) => ipcRenderer.invoke("worker:cancelTask", taskId),
-  listMyTasks: () => ipcRenderer.invoke("worker:listMyTasks"),
+  listMyTasks: (opts) => ipcRenderer.invoke("worker:listMyTasks", opts),
   getTaskDetail: (taskId) => ipcRenderer.invoke("worker:getTaskDetail", taskId),
   replyToTask: (taskId, body) => ipcRenderer.invoke("worker:replyToTask", taskId, body),
   retryMyTask: (taskId) => ipcRenderer.invoke("worker:retryMyTask", taskId),
   listMyConversations: () => ipcRenderer.invoke("worker:listMyConversations"),
-  getConversationDetail: (conversationId) => ipcRenderer.invoke("worker:getConversationDetail", conversationId)
+  getConversationDetail: (conversationId) => ipcRenderer.invoke("worker:getConversationDetail", conversationId),
+  openPath: (filePath) => ipcRenderer.invoke("worker:openPath", filePath)
 });

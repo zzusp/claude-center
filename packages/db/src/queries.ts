@@ -769,6 +769,48 @@ export async function listWorkerTasks(
   return result.rows;
 }
 
+// 带分页 + 状态组筛选的任务查询（桌面端真分页用）。
+// statusGroup: "needs"=["waiting"] / "working"=["claimed","running"] / "done"=[终态] / null=全部。
+// 同时返回当前筛选条件下的总条数（用于分页计算）和 waiting 任务数（用于侧边栏角标）。
+export type TaskPage = { rows: Task[]; total: number; waitingCount: number };
+
+const TASK_STATUS_GROUPS: Record<string, string[]> = {
+  needs:   ["waiting"],
+  working: ["claimed", "running"],
+  done:    ["success", "failed", "cancelled", "merged"]
+};
+
+export async function listWorkerTasksPaged(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string,
+  opts: { page: number; pageSize: number; statusGroup?: string | null }
+): Promise<TaskPage> {
+  const statuses = opts.statusGroup ? (TASK_STATUS_GROUPS[opts.statusGroup] ?? null) : null;
+  const offset = (opts.page - 1) * opts.pageSize;
+
+  const [pageResult, waitingResult] = await Promise.all([
+    client.query<Task & { _total: string }>(
+      `SELECT tasks.*, projects.name AS project_name, COUNT(*) OVER() AS _total
+         FROM tasks
+         JOIN projects ON projects.id = tasks.project_id
+        WHERE tasks.claimed_by = $1
+          AND ($2::text[] IS NULL OR tasks.status = ANY($2::text[]))
+        ORDER BY tasks.updated_at DESC
+        LIMIT $3 OFFSET $4`,
+      [workerId, statuses, opts.pageSize, offset]
+    ),
+    client.query<{ cnt: string }>(
+      `SELECT COUNT(*) AS cnt FROM tasks WHERE claimed_by = $1 AND status = 'waiting'`,
+      [workerId]
+    )
+  ]);
+
+  const total = pageResult.rows.length > 0 ? parseInt(pageResult.rows[0]!._total, 10) : 0;
+  const waitingCount = parseInt(waitingResult.rows[0]?.cnt ?? "0", 10);
+  const rows: Task[] = pageResult.rows.map(({ _total, ...rest }) => rest as unknown as Task);
+  return { rows, total, waitingCount };
+}
+
 export async function listWorkers(client: pg.Pool | pg.PoolClient): Promise<Worker[]> {
   const result = await client.query<Worker>(
     `SELECT workers.*,

@@ -22,6 +22,8 @@ import {
   listWorkerConversations,
   listWorkerProjectLinks,
   listWorkerTasks,
+  listWorkerTasksPaged,
+  type TaskPage,
   markConversationTurnCancelled,
   markTaskCancelled,
   registerWorker,
@@ -125,7 +127,7 @@ export type WorkerStatusSnapshot = {
   relayChannels: number;
 };
 
-const UNKNOWN_CAPABILITY = { ok: false, version: null };
+const UNKNOWN_CAPABILITY = { ok: false, version: null, path: null };
 
 export class ClaudeCenterWorker {
   private readonly config: WorkerConfig;
@@ -158,7 +160,9 @@ export class ClaudeCenterWorker {
   private capabilities: Capabilities = {
     git: UNKNOWN_CAPABILITY,
     gh: UNKNOWN_CAPABILITY,
-    claude: UNKNOWN_CAPABILITY
+    claude: UNKNOWN_CAPABILITY,
+    nodejs: UNKNOWN_CAPABILITY,
+    python: UNKNOWN_CAPABILITY
   };
   private readonly logs: LogLine[] = [];
   // 操作系统概览静态不变,启动时算一次。
@@ -171,7 +175,7 @@ export class ClaudeCenterWorker {
 
   async start(): Promise<void> {
     this.capabilities = await detectCapabilities(this.config);
-    this.log("info", `Capabilities — git:${this.cap("git")} gh:${this.cap("gh")} claude:${this.cap("claude")}`);
+    this.log("info", `Capabilities — git:${this.cap("git")} gh:${this.cap("gh")} claude:${this.cap("claude")} node:${this.cap("nodejs")} python:${this.cap("python")}`);
     if (!this.capabilities.claude.ok) {
       this.log("error", "claude CLI not detected on this worker — tasks will fail until it is installed / on PATH");
     }
@@ -341,9 +345,9 @@ export class ClaudeCenterWorker {
 
   // —— 桌面端任务面板（Agent-View 式）：仅本 worker（claimed_by=workerId）的任务总览 + 本机回复/重试 —— //
 
-  // 本 worker 认领过的全部任务，供桌面端按状态分组展示。
-  async listMyTasks(): Promise<Task[]> {
-    return listWorkerTasks(getPool(), this.config.workerId);
+  // 本 worker 认领过的任务（真分页 + 状态筛选），供桌面端任务面板使用。
+  async listMyTasks(opts: { page: number; pageSize: number; statusGroup?: string | null }): Promise<TaskPage> {
+    return listWorkerTasksPaged(getPool(), this.config.workerId, opts);
   }
 
   // 某任务的评论 + 事件流，供桌面端 peek 展开。
