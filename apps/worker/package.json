@@ -11,6 +11,7 @@
     "dev": "npm run build && electron .",
     "start": "electron .",
     "worker:headless": "npm -w @claude-center/db run build && npm -w @claude-center/relay-client run build && tsx src/runner.ts",
+    "preview:ui": "npm run build && electron scripts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
