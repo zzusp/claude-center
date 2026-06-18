@@ -10,6 +10,7 @@ import { useCallback, useState, type ReactNode } from "react";
 import { usePolling } from "../lib/use-polling";
 import { useRelayStatus, type RelayStatus } from "../lib/use-relay";
 import { fmtAgo } from "./dashboard-shared";
+import { FormModal } from "./controls";
 
 // 顶栏「铃铛」消息中心：聚合 9 类通知。
 //
@@ -23,6 +24,12 @@ import { fmtAgo } from "./dashboard-shared";
 // 两类瞬时通知不计入 unread 红点（无法持久化为「已读」），仅在下拉里展示当前健康状况，避免红点常亮。
 
 type Item = Notification;
+
+// 悬浮面板只显示最新 8 条；点「查看更多」打开弹窗，弹窗首屏 20 条，
+// 每点「加载更多」多查 20 条，累计上限 200 条（与后端钳制一致，防恶意大 limit）。
+const HOVER_LIMIT = 8;
+const MODAL_PAGE = 20;
+const MODAL_MAX = 200;
 
 // 前端合成的瞬时类型——加在原 NotificationType 之外，仅在 UI 内部使用。
 type EphemeralType = "sse_disconnect" | "db_disconnect";
@@ -127,9 +134,15 @@ export default function Notifications() {
     });
   }
 
+  // 弹窗状态：独立于悬浮面板的轮询，按 limit 增量翻页。
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalItems, setModalItems] = useState<Item[]>([]);
+  const [modalLimit, setModalLimit] = useState(MODAL_PAGE);
+  const [modalLoading, setModalLoading] = useState(false);
+
   const refresh = useCallback(async (isActive: () => boolean) => {
     try {
-      const res = await fetch("/api/notifications", { cache: "no-store" });
+      const res = await fetch(`/api/notifications?limit=${HOVER_LIMIT}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = (await res.json()) as { items: Item[]; unread: number };
       if (!isActive()) return;
@@ -139,6 +152,23 @@ export default function Notifications() {
     } catch {
       if (!isActive()) return;
       setDbFailures((n) => n + 1);
+    }
+  }, []);
+
+  // 弹窗拉取：每次按当前 limit 全量重取（最多 200 条，重取成本可忽略），
+  // 顺带刷新红点未读数，避免与轮询不一致。
+  const loadModal = useCallback(async (limit: number) => {
+    setModalLoading(true);
+    try {
+      const res = await fetch(`/api/notifications?limit=${limit}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const data = (await res.json()) as { items: Item[]; unread: number };
+      setModalItems(data.items ?? []);
+      setUnread(data.unread ?? 0);
+    } catch {
+      /* 保留已加载列表，用户可重试 */
+    } finally {
+      setModalLoading(false);
     }
   }, []);
 
@@ -159,13 +189,90 @@ export default function Notifications() {
       /* 静默：下次轮询会修正 */
     }
     void refresh(() => true);
+    if (modalOpen) void loadModal(modalLimit);
+  }
+
+  function openModal() {
+    setModalLimit(MODAL_PAGE);
+    setModalItems([]);
+    setModalOpen(true);
+    void loadModal(MODAL_PAGE);
+  }
+
+  function loadMore() {
+    const next = Math.min(modalLimit + MODAL_PAGE, MODAL_MAX);
+    setModalLimit(next);
+    void loadModal(next);
+  }
+
+  // 满页（返回数 == 请求数）说明可能还有更多；不足说明已到底；并受 200 上限封顶。
+  const modalHasMore = modalItems.length >= modalLimit && modalLimit < MODAL_MAX;
+
+  // 单条持久化通知的渲染：悬浮面板与弹窗共用，保证两处样式 / 交互一致。
+  function renderItem(item: Item): ReactNode {
+    const tone = toneFor(item.type);
+    const isUnread = item.read_at === null;
+    const inner = (
+      <>
+        <span className="notif-ico">{iconFor(item.type)}</span>
+        <div className="notif-body">
+          <div className="notif-row-title">{item.title}</div>
+          {item.body && <div className="notif-row-body">{item.body}</div>}
+          <div className="notif-row-meta">
+            {TYPE_LABEL[item.type]} · {fmtAgo(item.created_at)}
+          </div>
+        </div>
+        {isUnread && <span className="notif-row-dot" aria-hidden />}
+      </>
+    );
+    const classes = `notif-row${isUnread ? " unread" : ""}`;
+    if (item.link) {
+      const external = item.link.startsWith("http://") || item.link.startsWith("https://");
+      if (external) {
+        return (
+          <a
+            key={item.id}
+            className={classes}
+            data-tone={tone}
+            href={item.link}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => void markRead(item.id)}
+          >
+            {inner}
+          </a>
+        );
+      }
+      return (
+        <Link
+          key={item.id}
+          className={classes}
+          data-tone={tone}
+          href={item.link}
+          onClick={() => void markRead(item.id)}
+        >
+          {inner}
+        </Link>
+      );
+    }
+    return (
+      <button
+        key={item.id}
+        type="button"
+        className={classes}
+        data-tone={tone}
+        onClick={() => void markRead(item.id)}
+      >
+        {inner}
+      </button>
+    );
   }
 
   const totalDot = unread; // 瞬时通知不计入红点
   const empty = items.length === 0 && ephemerals.length === 0;
 
   return (
-    <div className="notif">
+    <div className={`notif${modalOpen ? " notif-modal-open" : ""}`}>
       <button
         type="button"
         className="notif-trigger"
@@ -204,64 +311,7 @@ export default function Notifications() {
               </div>
             ))}
 
-            {items.map((item) => {
-              const tone = toneFor(item.type);
-              const unread = item.read_at === null;
-              const inner = (
-                <>
-                  <span className="notif-ico">{iconFor(item.type)}</span>
-                  <div className="notif-body">
-                    <div className="notif-row-title">{item.title}</div>
-                    {item.body && <div className="notif-row-body">{item.body}</div>}
-                    <div className="notif-row-meta">
-                      {TYPE_LABEL[item.type]} · {fmtAgo(item.created_at)}
-                    </div>
-                  </div>
-                  {unread && <span className="notif-row-dot" aria-hidden />}
-                </>
-              );
-              const classes = `notif-row${unread ? " unread" : ""}`;
-              if (item.link) {
-                const external = item.link.startsWith("http://") || item.link.startsWith("https://");
-                if (external) {
-                  return (
-                    <a
-                      key={item.id}
-                      className={classes}
-                      data-tone={tone}
-                      href={item.link}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={() => void markRead(item.id)}
-                    >
-                      {inner}
-                    </a>
-                  );
-                }
-                return (
-                  <Link
-                    key={item.id}
-                    className={classes}
-                    data-tone={tone}
-                    href={item.link}
-                    onClick={() => void markRead(item.id)}
-                  >
-                    {inner}
-                  </Link>
-                );
-              }
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={classes}
-                  data-tone={tone}
-                  onClick={() => void markRead(item.id)}
-                >
-                  {inner}
-                </button>
-              );
-            })}
+            {items.map(renderItem)}
 
             {empty && (
               <div className="notif-empty">
@@ -270,7 +320,35 @@ export default function Notifications() {
               </div>
             )}
           </div>
+
+          {items.length > 0 && (
+            <button type="button" className="notif-more" onClick={openModal}>
+              查看更多
+            </button>
+          )}
         </div>
+
+      <FormModal open={modalOpen} title="消息通知" onClose={() => setModalOpen(false)} size="md">
+        <div className="notif-modal-list">
+          {modalItems.length > 0 ? (
+            modalItems.map(renderItem)
+          ) : (
+            <div className="notif-empty">
+              <ServerOff size={18} strokeWidth={1.5} />
+              <span>{modalLoading ? "加载中…" : "暂无通知"}</span>
+            </div>
+          )}
+        </div>
+        <div className="notif-modal-foot">
+          {modalHasMore ? (
+            <button type="button" className="btn btn-sm" onClick={loadMore} disabled={modalLoading}>
+              {modalLoading ? "加载中…" : "加载更多"}
+            </button>
+          ) : (
+            modalItems.length > 0 && <span className="notif-modal-end">没有更多了</span>
+          )}
+        </div>
+      </FormModal>
     </div>
   );
 }
