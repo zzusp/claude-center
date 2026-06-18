@@ -169,7 +169,6 @@ export function ChatView({
                     <span className="mono">{c.project_name}</span>
                     <span className="chat-li-tags">
                       {c.generating ? <span className="chat-tag live">回复中</span> : null}
-                      <span className={`chat-tag ${c.status}`}>{c.status === "active" ? "进行中" : "已结束"}</span>
                     </span>
                   </span>
                 </button>

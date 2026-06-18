@@ -324,7 +324,7 @@ export function windowHtml(): string {
           .conv-live { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--success); white-space: nowrap; }
           .conv-live::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: currentColor; animation: cc-breathe 1.4s ease-in-out infinite; }
           .conv-detail { padding: 6px 0 12px; border-top: 1px dashed var(--border); }
-          .conv-msgs { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow: auto; padding: 4px 2px; }
+          .conv-msgs { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow: auto; padding: 4px 2px; scroll-behavior: auto; overscroll-behavior: none; }
           .cbub { max-width: 86%; padding: 7px 11px; border-radius: 10px; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
           .cbub.user { align-self: flex-end; background: var(--running); color: #fff; border-bottom-right-radius: 3px; }
           .cbub.asst { align-self: flex-start; background: var(--surface-2); color: var(--text-1); border-bottom-left-radius: 3px; }
@@ -806,11 +806,11 @@ export function windowHtml(): string {
           // —— 对话面板（只读：本 worker 承接的远程实时对话，展开见消息线 + 流式实时增量）——
           var expandedConvId = null;
           var convCache = [];
+          var convListFp = '';
+          var convDetailFp = null;
+          var convDetailFpId = null;
           function convRow(c) {
-            const right = c.generating
-              ? '<span class="conv-live">回复中</span>'
-              : '<span class="badge" data-tone="' + (c.status === "active" ? "running" : "cancelled") + '"><span class="glyph">' +
-                (c.status === "active" ? "▷" : "✓") + '</span>' + (c.status === "active" ? "进行中" : "已结束") + '</span>';
+            const right = c.generating ? '<span class="conv-live">回复中</span>' : '';
             const head =
               '<div class="conv-row" data-conv-row="' + esc(c.id) + '">' +
                 '<span class="li-main"><span class="li-title">' + esc(c.title || "未命名对话") + '</span>' +
@@ -826,9 +826,10 @@ export function windowHtml(): string {
             convCache = list || [];
             var liveN = convCache.filter(function (c) { return c.generating; }).length;
             setNavCount("navConvCount", liveN);
-            if (!convCache.length) { $("conversations").innerHTML = '<span class="empty">本机暂无对话</span>'; return; }
-            // 轮询重建列表会把已展开详情重置为「加载中…」并触发重新拉取 → 每次刷新闪烁；
-            // 先存下当前详情内容与滚动位置，重建后原样还原，平滑刷新仍交给 1.5s 定时器。
+            if (!convCache.length) { $("conversations").innerHTML = '<span class="empty">本机暂无对话</span>'; convListFp = ''; return; }
+            var newFp = (expandedConvId || '') + '|' + convCache.map(function(c) { return c.id + (c.generating ? '1' : '0'); }).join(',');
+            if (convListFp === newFp) return;
+            convListFp = newFp;
             let keep = null;
             if (expandedConvId) {
               const old = document.getElementById("conv-detail-" + expandedConvId);
@@ -843,9 +844,9 @@ export function windowHtml(): string {
               if (box && keep) {
                 box.innerHTML = keep.html;
                 const ml = document.getElementById("conv-msgs-" + expandedConvId);
-                if (ml && keep.top != null) ml.scrollTop = keep.top;
+                if (ml && keep.top != null) ml.scrollTo({ top: keep.top, behavior: 'instant' });
               } else {
-                loadConvDetail(expandedConvId); // 首次展开：显示「加载中…」并拉取
+                loadConvDetail(expandedConvId);
               }
             }
           }
@@ -857,11 +858,18 @@ export function windowHtml(): string {
           async function loadConvDetail(convId) {
             const box = document.getElementById("conv-detail-" + convId);
             if (!box) return;
+            const mlBefore = document.getElementById("conv-msgs-" + convId);
+            const prevTop = mlBefore ? mlBefore.scrollTop : null;
             let d;
             try { d = await window.workerApi.getConversationDetail(convId); }
             catch (e) { box.innerHTML = '<span class="empty">加载失败</span>'; return; }
             const msgs = d.messages || [];
             if (!msgs.length) { box.innerHTML = '<span class="empty">无消息</span>'; return; }
+            const hasStreaming = msgs.some((m) => m.role === "assistant" && m.status === "streaming");
+            const fp = msgs.map((m) => m.id + m.status + (m.body || "").length).join(",");
+            if (convDetailFpId === convId && convDetailFp === fp) return;
+            convDetailFp = fp;
+            convDetailFpId = convId;
             box.innerHTML = '<div class="conv-msgs" id="conv-msgs-' + esc(convId) + '">' + msgs.map((m) => {
               const cls = m.role === "user" ? "user" : "asst";
               const streaming = m.role === "assistant" && m.status === "streaming";
@@ -871,7 +879,12 @@ export function windowHtml(): string {
                 (streaming ? '<span class="cbub-caret"></span>' : "") + '</div>';
             }).join("") + '</div>';
             const ml = document.getElementById("conv-msgs-" + convId);
-            if (ml) ml.scrollTop = ml.scrollHeight;
+            if (!ml) return;
+            if (hasStreaming || prevTop === null) {
+              ml.scrollTo({ top: ml.scrollHeight, behavior: 'instant' });
+            } else {
+              ml.scrollTo({ top: prevTop, behavior: 'instant' });
+            }
           }
 
           async function refresh() {
@@ -1079,7 +1092,7 @@ export function windowHtml(): string {
           setInterval(loadProjects, 15000);
           setInterval(() => { if (!isEditingTask()) reloadTasks(); }, 4000);
           setInterval(reloadConversations, 3000);
-          setInterval(() => { if (expandedConvId) loadConvDetail(expandedConvId); }, 1500);
+          setInterval(() => { if (expandedConvId) loadConvDetail(expandedConvId); }, 400);
         </script>
       </body>
     </html>

@@ -226,9 +226,7 @@ export function WorkerConversationsTab({ workerId }: { workerId: string }) {
                       </span>
                     </td>
                     <td>
-                      <span className="badge" data-tone={c.status === "active" ? "running" : "cancelled"}>
-                        {c.generating ? "回复中" : c.status === "active" ? "进行中" : "已关闭"}
-                      </span>
+                      {c.generating ? <span className="badge" data-tone="running">回复中</span> : null}
                     </td>
                     <td className="t-num">{fmtDateTime(c.last_message_at ?? c.created_at)}</td>
                   </tr>
