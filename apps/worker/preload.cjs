@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld("workerApi", {
   replyToTask: (taskId, body) => ipcRenderer.invoke("worker:replyToTask", taskId, body),
   retryMyTask: (taskId) => ipcRenderer.invoke("worker:retryMyTask", taskId),
   listMyConversations: () => ipcRenderer.invoke("worker:listMyConversations"),
-  getConversationDetail: (conversationId) => ipcRenderer.invoke("worker:getConversationDetail", conversationId),
+  getConversationDetail: (conversationId, knownJsonlVersion) =>
+    ipcRenderer.invoke("worker:getConversationDetail", conversationId, knownJsonlVersion),
   openPath: (filePath) => ipcRenderer.invoke("worker:openPath", filePath)
 });

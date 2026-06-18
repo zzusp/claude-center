@@ -17,6 +17,7 @@ import {
   listCancelRequestedConversationMessages,
   listCancelRequestedTaskIds,
   getConversationSession,
+  getConversationSessionSyncedAt,
   listConversationMessages,
   listProjects,
   listTaskComments,
@@ -391,10 +392,22 @@ export class ClaudeCenterWorker {
   }
 
   // 某会话的消息线 + session JSONL（桌面端 transcript 富展示，对齐 Console 渲染方式）。
-  async getConversationDetail(conversationId: string): Promise<{ messages: ConversationMessage[]; jsonl: string }> {
-    const messages = await listConversationMessages(getPool(), conversationId);
-    const session = await getConversationSession(getPool(), conversationId);
-    return { messages, jsonl: session?.jsonl ?? "" };
+  // H2 条件拉取：先用 synced_at 做轻量版本判定，未变（knownJsonlVersion 命中）则 jsonl 回传 null，
+  // 跳过 571KB blob 的 DB 读 + IPC 传输；渲染端复用本地缓存。session 每 3s 才同步一次，而桌面端 400ms
+  // 轮询 → 多数轮次走这条空回，省下绝大部分大 blob 流量。
+  async getConversationDetail(
+    conversationId: string,
+    knownJsonlVersion?: string | null
+  ): Promise<{ messages: ConversationMessage[]; jsonl: string | null; jsonlVersion: string }> {
+    const pool = getPool();
+    const messages = await listConversationMessages(pool, conversationId);
+    const syncedAt = await getConversationSessionSyncedAt(pool, conversationId);
+    const version = syncedAt ? String(new Date(syncedAt).getTime()) : "";
+    if (version && version === knownJsonlVersion) {
+      return { messages, jsonl: null, jsonlVersion: version };
+    }
+    const session = await getConversationSession(pool, conversationId);
+    return { messages, jsonl: session?.jsonl ?? "", jsonlVersion: version };
   }
 
   async getStatusSnapshot(): Promise<WorkerStatusSnapshot> {

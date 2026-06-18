@@ -64,8 +64,8 @@ app.whenReady().then(async () => {
 
   // 桌面端对话面板（只读）：本 worker 承接的远程实时对话总览 + 消息线（含流式实时增量）。
   ipcMain.handle("worker:listMyConversations", () => worker?.listMyConversations() ?? []);
-  ipcMain.handle("worker:getConversationDetail", (_event, conversationId: string) =>
-    worker?.getConversationDetail(conversationId) ?? { messages: [] }
+  ipcMain.handle("worker:getConversationDetail", (_event, conversationId: string, knownJsonlVersion: string | null) =>
+    worker?.getConversationDetail(conversationId, knownJsonlVersion) ?? { messages: [], jsonl: "", jsonlVersion: "" }
   );
 
   // 在文件管理器中定位并选中文件（能力自检路径点击用）。

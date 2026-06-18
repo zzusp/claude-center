@@ -331,6 +331,7 @@ export function windowHtml(): string {
           .conv-row.conv-active { background: var(--surface-3); }
           /* —— transcript 富展示（对齐 Console apps/console/app/ui/transcript.tsx）—— */
           .tx { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+          .tx-truncated { align-self: center; font-size: 11px; color: var(--text-3); background: var(--surface-3); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; margin-bottom: 2px; }
           .tx-row { display: flex; max-width: 100%; }
           .tx-row.user { justify-content: flex-end; }
           .tx-row.asst { justify-content: flex-start; }
@@ -374,11 +375,12 @@ export function windowHtml(): string {
           .tx-result.err .tx-result-head { color: var(--failed); }
           .tx-result-body { margin: 0; font-family: monospace; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; color: var(--text-2); max-height: 240px; overflow: auto; }
           .tx-think-label { color: var(--text-3); }
-          .tx-streaming { padding: 4px 2px; display: flex; align-items: center; gap: 4px; }
-          .tx-streaming span { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--text-3); opacity: .45; animation: cc-dot-bounce 1.2s ease-in-out infinite; }
-          .tx-streaming span:nth-child(2) { animation-delay: .15s; }
-          .tx-streaming span:nth-child(3) { animation-delay: .3s; }
-          @keyframes cc-dot-bounce { 0%,60%,100% { transform: translateY(0); opacity: .45; } 30% { transform: translateY(-5px); opacity: .85; } }
+          /* 「思考中」指示：✦ 中性灰脉冲 + 「思考中…」shimmer 文字（与 Web 控制台 .tx-thinking 同款）。 */
+          .tx-thinking { padding: 4px 2px; display: inline-flex; align-items: center; gap: 6px; }
+          .tx-thinking-ico { flex-shrink: 0; color: var(--text-3); animation: cc-spark 2.2s ease-in-out infinite; }
+          .tx-thinking-label { font-size: 12.5px; font-weight: 500; background: linear-gradient(90deg, var(--text-4) 0%, var(--text-4) 40%, var(--text-1) 50%, var(--text-4) 60%, var(--text-4) 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; animation: cc-shimmer 1.9s linear infinite; }
+          @keyframes cc-shimmer { 0% { background-position: 150% 0; } 100% { background-position: -50% 0; } }
+          @keyframes cc-spark { 0%,100% { opacity: .55; transform: scale(.9) rotate(0deg); } 50% { opacity: 1; transform: scale(1.12) rotate(18deg); } }
 
           .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 999px; background: var(--success); position: relative; }
           .live-dot.pulse { animation: cc-breathe 1.8s ease-in-out infinite; }
@@ -756,7 +758,9 @@ export function windowHtml(): string {
             return '<div class="task-item">' + head + detail + '</div>';
           }
           // renderTasks: 渲染当前 tasksCache（已由服务端分好页），平铺不分组。
-          function renderTasks() {
+          // force=true 时无视指纹强制重建（手动刷新/翻页/筛选先填了 loading 占位，必须重建覆盖）。
+          var tasksFp = '';
+          function renderTasks(force) {
             document.querySelectorAll("[data-tasks-filter]").forEach(function(btn) {
               btn.classList.toggle("active", btn.getAttribute("data-tasks-filter") === tasksFilter);
             });
@@ -764,8 +768,15 @@ export function windowHtml(): string {
             if (!tasksCache.length) {
               $("tasks").innerHTML = '<div class="tasks-empty">' + (tasksTotal === 0 ? "本机暂无任务" : "当前筛选无任务") + '</div>';
               $("tasksPager").style.display = "none";
+              tasksFp = '';
               return;
             }
+
+            // M2：指纹跳过——数据/页/筛选/展开项都没变就不重建整页 DOM，避免每 4s 自动刷新的无谓 churn。
+            var fp = tasksFilter + '|' + tasksPage + '|' + tasksTotal + '|' + (expandedTaskId || '') + '|' +
+              tasksCache.map(function(t){ return t.id + t.status + t.updated_at + (t.merge_status||'') + (t.pr_url||''); }).join(',');
+            if (!force && fp === tasksFp) return;
+            tasksFp = fp;
 
             // 平铺渲染，先存已展开详情防闪烁
             const keep = expandedTaskId ? (document.getElementById("detail-" + expandedTaskId) || {}).innerHTML : null;
@@ -805,7 +816,7 @@ export function windowHtml(): string {
             tasksCache = result.rows || [];
             tasksTotal = result.total || 0;
             setNavCount("navTasksCount", result.waitingCount || 0);
-            renderTasks();
+            renderTasks(showLoading);
           }
           async function loadDetail(taskId) {
             const box = document.getElementById("detail-" + taskId);
@@ -1002,6 +1013,7 @@ export function windowHtml(): string {
             }
             return items;
           }
+          var TX_RENDER_CAP = 120;
           function renderTranscriptHtml(items) {
             var results = {};
             for (var i = 0; i < items.length; i++) {
@@ -1010,8 +1022,12 @@ export function windowHtml(): string {
                 if (b.kind === 'tool_result' && b.toolUseId) results[b.toolUseId] = {text:b.text, isError:b.isError};
               }
             }
+            // H1：只渲染最近 TX_RENDER_CAP 条，封顶 DOM 规模——长对话(571KB+)整棵重建会卡死渲染进程。
+            // tool_result 配对表仍从全量 items 建（上面），保证被渲染轮里的工具返回能正确配上。完整记录见 Web 控制台。
+            var startIdx = items.length > TX_RENDER_CAP ? items.length - TX_RENDER_CAP : 0;
             var html = '<div class="tx">';
-            for (var i = 0; i < items.length; i++) {
+            if (startIdx > 0) html += '<div class="tx-truncated">仅显示最近 ' + TX_RENDER_CAP + ' 条消息（完整记录见 Web 控制台）</div>';
+            for (var i = startIdx; i < items.length; i++) {
               var item = items[i];
               var renderable = item.blocks.filter(function(b2) { return b2.kind !== 'tool_result'; });
               if (!renderable.length) continue;
@@ -1029,6 +1045,13 @@ export function windowHtml(): string {
           var convListFp = '';
           var convDetailFp = null;
           var convDetailFpId = null;
+          // H2：当前展开对话的 jsonl 缓存 + 版本（synced_at 毫秒）。版本命中则主进程回传 jsonl=null，
+          // 复用缓存、跳过 571KB blob 的 DB 读 + IPC 传输。
+          var convDetailJsonl = "";
+          var convDetailJsonlVer = "";
+          var convDetailJsonlConvId = null;
+          // 「思考中」指示 HTML（✦ 内联 SVG 取自 lucide sparkles，与 Web 控制台同款）。
+          var TX_THINKING_HTML = '<div class="tx-thinking"><svg class="tx-thinking-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg><span class="tx-thinking-label">思考中…</span></div>';
           function convRow(c) {
             const right = c.generating ? '<span class="conv-live">回复中</span>' : '';
             const activeClass = expandedConvId === c.id ? ' conv-active' : '';
@@ -1057,57 +1080,76 @@ export function windowHtml(): string {
             try { list = await window.workerApi.listMyConversations(); } catch (e) { return; }
             renderConversations(list);
           }
+          var convDetailLoadingId = null;
           async function loadConvDetail(convId) {
+            // 单飞：同一对话已在途加载则跳过，避免 400ms 轮询叠加大 jsonl 慢取堆成请求风暴（卡顿主因）。
+            // 切到「不同」对话不拦（convId 不同即放行），靠下方「过期丢弃」只渲染当前选中对话的结果。
+            if (convDetailLoadingId === convId) return;
             var box = document.getElementById("conv-detail-panel");
             if (!box) return;
-            var scrollEl = document.getElementById("conv-detail-body");
-            var prevTop = scrollEl ? scrollEl.scrollTop : null;
-            // 从对话列表缓存取 generating 状态，不依赖 msgs（msgs 早期可能为空）
-            var convMeta = convCache.find(function(c) { return c.id === convId; });
-            var isGenerating = !!(convMeta && convMeta.generating);
-            var d;
-            try { d = await window.workerApi.getConversationDetail(convId); }
-            catch (e) { box.innerHTML = '<span class="empty">加载失败</span>'; return; }
-            var msgs = d.messages || [];
-            var jsonl = d.jsonl || "";
-            // 若对话正在生成且内容还未就绪，只展示动画；否则无内容时显示占位文字
-            if (!msgs.length && !jsonl) {
-              if (isGenerating) {
-                var animFp = "generating|" + convId;
-                if (convDetailFpId === convId && convDetailFp === animFp) return;
-                convDetailFp = animFp; convDetailFpId = convId;
-                box.innerHTML = '<div class="tx-streaming"><span></span><span></span><span></span></div>';
-                if (scrollEl) scrollEl.scrollTo({ top: 0, behavior: 'instant' });
+            convDetailLoadingId = convId;
+            try {
+              var scrollEl = document.getElementById("conv-detail-body");
+              var prevTop = scrollEl ? scrollEl.scrollTop : null;
+              // 从对话列表缓存取 generating 状态，不依赖 msgs（msgs 早期可能为空）
+              var convMeta = convCache.find(function(c) { return c.id === convId; });
+              var isGenerating = !!(convMeta && convMeta.generating);
+              var known = (convDetailJsonlConvId === convId) ? convDetailJsonlVer : null;
+              var d;
+              try { d = await window.workerApi.getConversationDetail(convId, known); }
+              catch (e) { if (convId === expandedConvId) box.innerHTML = '<span class="empty">加载失败</span>'; return; }
+              // 过期丢弃：await 期间用户已切到别的对话 → 本次结果不再渲染，否则两对话内容互相覆盖、循环渲染。
+              if (convId !== expandedConvId) return;
+              var msgs = d.messages || [];
+              // H2：jsonl==null 表示版本未变 → 复用缓存；否则刷新缓存。
+              var jsonl;
+              if (d.jsonl == null) {
+                jsonl = (convDetailJsonlConvId === convId) ? convDetailJsonl : "";
               } else {
-                box.innerHTML = '<span class="empty">无消息</span>';
+                jsonl = d.jsonl;
+                convDetailJsonl = jsonl; convDetailJsonlVer = d.jsonlVersion || ""; convDetailJsonlConvId = convId;
               }
-              return;
-            }
-            var hasStreaming = isGenerating || msgs.some(function(m) { return m.role === "assistant" && (m.status === "streaming" || m.status === "pending"); });
-            var fp = msgs.map(function(m) { return m.id + m.status; }).join(",") + "|" + jsonl.length + "|" + (isGenerating ? "1" : "0");
-            if (convDetailFpId === convId && convDetailFp === fp) return;
-            convDetailFp = fp;
-            convDetailFpId = convId;
-            var html = "";
-            if (jsonl) {
-              html = renderTranscriptHtml(parseTranscript(jsonl));
-            } else {
-              // JSONL 未就绪（对话启动头几秒）：降级为纯文本气泡
-              html = '<div class="tx">' + msgs.map(function(m) {
-                var isUser = m.role === "user";
-                var body = m.status === "failed" ? "执行失败：" + esc(m.error_message || "") : esc(m.body || "");
-                if (!body && !isUser) return "";
-                return '<div class="tx-row ' + (isUser ? "user" : "asst") + '"><div class="tx-msg ' + (isUser ? "user" : "asst") + '">' +
-                  '<div class="tx-text"><span style="white-space:pre-wrap">' + body + '</span></div></div></div>';
-              }).join("") + '</div>';
-            }
-            if (hasStreaming) html += '<div class="tx-streaming"><span></span><span></span><span></span></div>';
-            box.innerHTML = html;
-            if (!scrollEl) return;
-            if (hasStreaming || prevTop === null) {
-              scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'instant' });
-            } else {
-              scrollEl.scrollTo({ top: prevTop, behavior: 'instant' });
+              // 若对话正在生成且内容还未就绪，只展示动画；否则无内容时显示占位文字
+              if (!msgs.length && !jsonl) {
+                if (isGenerating) {
+                  var animFp = "generating|" + convId;
+                  if (convDetailFpId === convId && convDetailFp === animFp) return;
+                  convDetailFp = animFp; convDetailFpId = convId;
+                  box.innerHTML = TX_THINKING_HTML;
+                  if (scrollEl) scrollEl.scrollTo({ top: 0, behavior: 'instant' });
+                } else {
+                  box.innerHTML = '<span class="empty">无消息</span>';
+                }
+                return;
+              }
+              var hasStreaming = isGenerating || msgs.some(function(m) { return m.role === "assistant" && (m.status === "streaming" || m.status === "pending"); });
+              var fp = msgs.map(function(m) { return m.id + m.status; }).join(",") + "|" + jsonl.length + "|" + (isGenerating ? "1" : "0");
+              if (convDetailFpId === convId && convDetailFp === fp) return;
+              convDetailFp = fp;
+              convDetailFpId = convId;
+              var html = "";
+              if (jsonl) {
+                html = renderTranscriptHtml(parseTranscript(jsonl));
+              } else {
+                // JSONL 未就绪（对话启动头几秒）：降级为纯文本气泡
+                html = '<div class="tx">' + msgs.map(function(m) {
+                  var isUser = m.role === "user";
+                  var body = m.status === "failed" ? "执行失败：" + esc(m.error_message || "") : esc(m.body || "");
+                  if (!body && !isUser) return "";
+                  return '<div class="tx-row ' + (isUser ? "user" : "asst") + '"><div class="tx-msg ' + (isUser ? "user" : "asst") + '">' +
+                    '<div class="tx-text"><span style="white-space:pre-wrap">' + body + '</span></div></div></div>';
+                }).join("") + '</div>';
+              }
+              if (hasStreaming) html += TX_THINKING_HTML;
+              box.innerHTML = html;
+              if (!scrollEl) return;
+              if (hasStreaming || prevTop === null) {
+                scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'instant' });
+              } else {
+                scrollEl.scrollTo({ top: prevTop, behavior: 'instant' });
+              }
+            } finally {
+              if (convDetailLoadingId === convId) convDetailLoadingId = null;
             }
           }
 
@@ -1330,7 +1372,13 @@ export function windowHtml(): string {
           setInterval(loadProjects, 15000);
           setInterval(() => { if (!isEditingTask()) reloadTasks(); }, 4000);
           setInterval(reloadConversations, 3000);
-          setInterval(() => { if (expandedConvId) loadConvDetail(expandedConvId); }, 400);
+          // 详情高频刷新只在「生成中」对话上跑：静态对话内容不变，无需每 400ms 经 IPC 重取整段 jsonl（卡顿源）；
+          // 静态对话的内容已由点击切换 / 列表变化时的 renderConversations→loadConvDetail 兜住。
+          setInterval(() => {
+            if (!expandedConvId) return;
+            var meta = convCache.find(function(c) { return c.id === expandedConvId; });
+            if (meta && meta.generating) loadConvDetail(expandedConvId);
+          }, 400);
         </script>
       </body>
     </html>

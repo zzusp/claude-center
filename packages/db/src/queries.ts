@@ -2275,6 +2275,20 @@ export async function getConversationSession(
   return result.rows[0] ?? null;
 }
 
+// 仅取 session 同步时间戳（不拉 jsonl blob），供桌面端做「内容是否变化」的轻量版本判定：
+// upsertConversationSession 仅在内容真变化时被调用（startSync 按长度去重 + 终态强制一次），故 synced_at
+// 单调推进即代表内容有更新；未变时桌面端复用本地缓存、跳过 571KB blob 的 DB 读 + IPC 传输。
+export async function getConversationSessionSyncedAt(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string
+): Promise<string | null> {
+  const result = await client.query<{ synced_at: string }>(
+    `SELECT synced_at FROM conversation_sessions WHERE conversation_id = $1 LIMIT 1`,
+    [conversationId]
+  );
+  return result.rows[0]?.synced_at ?? null;
+}
+
 // 流式收尾：落最终全文 + done；首轮把 claude session 写回会话（COALESCE 不覆盖已有）。
 export async function finalizeConversationTurn(
   client: pg.Pool | pg.PoolClient,
