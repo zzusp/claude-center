@@ -2313,26 +2313,29 @@ export async function finalizeConversationTurn(
   );
 }
 
-// 持久化承接本轮的 detached claude 进程 pid + worktree cwd（spawn 后立即调）。worker 重启重连据此判活/定位 .jsonl。
+// 持久化承接本轮的 detached claude 进程 pid + worktree cwd + OS 创建时间（spawn 后立即调）。
+// 创建时间用于 worker 重启时的进程身份校验（防 pid 复用误连/误杀），详见 isSameProcessAlive。
 export async function setConversationTurnProcess(
   client: pg.Pool | pg.PoolClient,
   messageId: string,
   pid: number,
-  cwd: string
+  cwd: string,
+  startedAt: number | null
 ): Promise<void> {
   await client.query(
-    `UPDATE conversation_messages SET claude_pid = $2, claude_cwd = $3 WHERE id = $1`,
-    [messageId, pid, cwd]
+    `UPDATE conversation_messages SET claude_pid = $2, claude_cwd = $3, claude_started_at = $4 WHERE id = $1`,
+    [messageId, pid, cwd, startedAt]
   );
 }
 
-// 本机名下仍 in-flight（pending/streaming）的 assistant 轮 + 其 claude_pid/claude_cwd，供 worker 启动对账重连。
+// 本机名下仍 in-flight（pending/streaming）的 assistant 轮 + 其进程信息，供 worker 启动对账重连。
+// claude_pid::int / claude_started_at::float8：bigint 默认按字符串返回，强转回 number 便于比较。
 export async function listInflightConversationTurnsForWorker(
   client: pg.Pool | pg.PoolClient,
   workerId: string
-): Promise<{ id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null }[]> {
-  const result = await client.query<{ id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null }>(
-    `SELECT id, conversation_id, claude_pid::int AS claude_pid, claude_cwd
+): Promise<{ id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null; claude_started_at: number | null }[]> {
+  const result = await client.query<{ id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null; claude_started_at: number | null }>(
+    `SELECT id, conversation_id, claude_pid::int AS claude_pid, claude_cwd, claude_started_at::float8 AS claude_started_at
        FROM conversation_messages
       WHERE claimed_by = $1 AND role = 'assistant' AND status IN ('pending', 'streaming')`,
     [workerId]

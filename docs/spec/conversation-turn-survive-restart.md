@@ -20,19 +20,26 @@
 - `finalizeConversationFromSession(cwd)`：`result` = jsonl 末条 assistant 文本，`sessionId` = `.jsonl` 文件名。复用现有 `finalizeConversationTurn`（加终态守卫 `WHERE status IN ('streaming','pending')`，防覆盖 cancelled）。
 - 正常路径（worker 在世）：`await` claude exit → exit 0 则 finalize-from-session，否则 `failConversationTurn`。
 
-### 3. 重启对账（`runner.reconcileInflightConversationTurns`，替代旧 `recoverOrphanedConversationTurns`）
-对本机名下每条 in-flight（streaming/pending）assistant 轮：
-- `claude_pid` 仍存活（`process.kill(pid,0)` 不抛 / EPERM）→ **重连**：占住对话车道、恢复 `startConversationSessionSync`、轮询 pid；pid 消失即 finalize-from-session（除非已被取消）。Console 端继续显示「回复中」。
-- 否则（pid 已退/未记）→ jsonl 有完整本轮 assistant 结果就 finalize-from-session，否则 `failConversationTurn("worker 重启时该轮进程已退出且无完整结果")`。
+### 3. 进程身份校验（防 pid 复用，关键安全点）
+pid **不是**稳定身份：进程退出后 OS 会把该 pid 复用给别的进程（可能正是用户另开的 claude session）。仅 `process.kill(pid,0)`
+判活会误判，导致**误连到不相干进程**，更严重的是**取消时 `killByPid` 误杀那个进程**。
+- 用 **(pid, 进程创建时间)** 做身份：spawn 时取 claude 进程的 OS 创建时间（`claude_started_at`，Win32_Process.CreationDate / POSIX ps），持久化。
+- `isSameProcessAlive(pid, startedAt)`：当前 pid 的创建时间**精确等于** startedAt 才算「还是原进程」；不等（pid 被复用）/ 已退 / 未记创建时间一律 false（宁可不重连、不杀，也不冒误连/误杀风险）。
+- 重连判定、重连轮询、取消杀进程**三处**都走 `isSameProcessAlive`。
 
-### 4. 取消兼容
-- `conversationActive` 加 `pid` 字段。`handleConversationCancellations`：有 child 句柄走 `killProcessTree(child)`；重连轮无句柄走 `killByPid(pid)`（新增，Win `taskkill /T /F /PID`，POSIX 杀进程组）。
-- 重连轮的 pid 轮询在退出时，若 `active.cancelled` 则跳过 finalize（cancelled 终态已落）。
+### 4. 重启对账（`runner.reconcileInflightConversationTurns`，替代旧 `recoverOrphanedConversationTurns`）
+对本机名下每条 in-flight（streaming/pending）assistant 轮：
+- `isSameProcessAlive(claude_pid, claude_started_at)` → **重连**：占住对话车道、恢复 `startConversationSessionSync`、轮询身份；身份失配（退出/复用）即 finalize-from-session（除非已被取消）。Console 端继续显示「回复中」。
+- 否则（进程已退/复用/未记 pid）→ jsonl 有完整本轮 assistant 结果就 finalize-from-session，否则 `failConversationTurn`。
+
+### 5. 取消兼容
+- `conversationActive` 加 `pid` / `startedAt` 字段。`handleConversationCancellations`：有 child 句柄走 `killProcessTree(child)`；重连轮无句柄时**先 `isSameProcessAlive` 校验身份再 `killByPid`**（防误杀复用进程）。
+- 重连轮的轮询在身份失配时，若 `active.cancelled` 则跳过 finalize（cancelled 终态已落）。
 
 ### 已知边界 / 取舍
-- **pid 复用**：进程退出后 pid 可能被别的进程复用，`process.kill(pid,0)` 会误判存活。桌面端重连通常发生在重启后短时内，复用概率低；不额外存进程启动时间做强校验（标注，不治理）。
 - **完整性判定**：重启后无 exit code，只能靠「jsonl 末条是本轮 assistant」启发判完成；claude 中途崩可能误判。可接受（partial 仍可见，最坏 fail）。
 - **用量**：停机期间 claude 继续跑会持续消耗 claude 用量——通常正是预期。
+- ~~pid 复用~~：已用 (pid, 创建时间) 身份校验治理，见 §3。
 
 ## 改动面
 - `packages/db/migrations/030_conversation_turn_process.sql`（+ COMMENT ON）

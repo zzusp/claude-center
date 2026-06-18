@@ -72,7 +72,7 @@ import {
   type TerminalInfo,
   type WorkerUsage
 } from "./inspect.js";
-import { isProcessAlive, killByPid, killProcessTree } from "./shell.js";
+import { isSameProcessAlive, killByPid, killProcessTree } from "./shell.js";
 import { startConversationSessionSync } from "./session.js";
 import { gcWorktrees } from "./worktree.js";
 import { WorkerRelay, type RelayStatus } from "./relay.js";
@@ -155,6 +155,8 @@ export class ClaudeCenterWorker {
     conversationId: string;
     child: ChildProcess | null;
     pid: number | null;
+    // claude 进程的 OS 创建时间（仅重连轮有值，正常轮持 child 句柄、无需）。配合 pid 做身份校验防复用误杀。
+    startedAt: number | null;
     cancelled: boolean;
   } | null = null;
   // 重连轮的 pid 存活轮询定时器（worker 重启时进程仍活的对话轮，靠轮询 pid 探测其退出后收尾）。
@@ -762,7 +764,7 @@ export class ClaudeCenterWorker {
       // 认领即推：让 Console 秒级看到该会话进入「回复中」。
       this.publishConversationTurn(conv, turn);
       // 跟踪在跑轮：onClaudeSpawn 回填 child + pid（取消时 killProcessTree 用；pid 也供重连轮取消按 pid 杀）。
-      const active = { messageId: turn.id, conversationId: conv.id, child: null as ChildProcess | null, pid: null as number | null, cancelled: false };
+      const active = { messageId: turn.id, conversationId: conv.id, child: null as ChildProcess | null, pid: null as number | null, startedAt: null as number | null, cancelled: false };
       this.conversationActive = active;
       // fire-and-forget：执行期间占住车道，完成后释放并再催一次（处理排队的新消息）。
       void executeConversationTurn(this.config, conv, turn, {
@@ -791,7 +793,7 @@ export class ClaudeCenterWorker {
   //  · 已退/未记 pid → 从 .jsonl 收尾（有完整回答则 done），否则 failConversationTurn。
   // best-effort：失败仅记日志，不阻塞启动。详见 docs/spec/conversation-turn-survive-restart.md。
   private async reconcileInflightConversationTurns(): Promise<void> {
-    let turns: { id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null }[] = [];
+    let turns: { id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null; claude_started_at: number | null }[] = [];
     try {
       turns = await listInflightConversationTurnsForWorker(getPool(), this.config.workerId);
     } catch (error) {
@@ -800,7 +802,9 @@ export class ClaudeCenterWorker {
     }
     let reattached = false;
     for (const turn of turns) {
-      const alive = turn.claude_pid != null && isProcessAlive(turn.claude_pid);
+      // 身份校验：pid 存活且创建时间精确匹配，才是「当初那个 claude」。pid 被复用（创建时间不同）一律按已退处理，
+      // 杜绝误连到别的 running 进程（如另一个 claude session）。
+      const alive = await isSameProcessAlive(turn.claude_pid, turn.claude_started_at);
       if (alive && !reattached) {
         reattached = true;
         this.log("info", `boot: 重连在途对话轮 ${turn.id}（claude pid=${turn.claude_pid} 仍在跑）`);
@@ -836,14 +840,15 @@ export class ClaudeCenterWorker {
   }
 
   // 重连一条仍存活的在途轮：占住对话车道、恢复 .jsonl 同步、轮询 pid；进程退出即从 session 收尾（除非已被取消）。
-  private reattachConversationTurn(turn: { id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null }): void {
+  private reattachConversationTurn(turn: { id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null; claude_started_at: number | null }): void {
     const pid = turn.claude_pid;
     const cwd = turn.claude_cwd;
+    const startedAt = turn.claude_started_at;
     if (pid == null || !cwd) {
       return;
     }
     this.conversationBusy = true;
-    const active = { messageId: turn.id, conversationId: turn.conversation_id, child: null as ChildProcess | null, pid, cancelled: false };
+    const active = { messageId: turn.id, conversationId: turn.conversation_id, child: null as ChildProcess | null, pid, startedAt, cancelled: false };
     this.conversationActive = active;
     // 恢复 .jsonl → conversation_sessions 周期同步，让 Console 继续看到流式增量。
     const stopSync = startConversationSessionSync(turn.conversation_id, cwd);
@@ -873,11 +878,24 @@ export class ClaudeCenterWorker {
         void this.tickConversation();
       }
     };
-    // 轮询 pid：消失即收尾。无 child 句柄拿不到 exit 事件，只能探活。
+    // 轮询进程身份：无 child 句柄拿不到 exit 事件，只能探活。用 isSameProcessAlive（pid + 创建时间）而非裸 pid——
+    // 否则 claude 退出后 pid 被复用会让轮询误判「还在跑」而永不收尾、甚至取消时误杀复用进程。
+    // isSameProcessAlive 异步（要查进程创建时间），加 inflight 锁防重入。
+    let checking = false;
     this.conversationReattachTimer = setInterval(() => {
-      if (!isProcessAlive(pid)) {
-        void done();
+      if (checking) {
+        return;
       }
+      checking = true;
+      void (async () => {
+        try {
+          if (!(await isSameProcessAlive(pid, startedAt))) {
+            await done();
+          }
+        } finally {
+          checking = false;
+        }
+      })();
     }, CANCEL_INTERVAL_MS);
   }
 
@@ -982,8 +1000,11 @@ export class ClaudeCenterWorker {
           if (active.child) {
             killProcessTree(active.child);
           } else if (active.pid != null) {
-            // 重连的在途轮无 ChildProcess 句柄，只有持久化的 pid → 按 pid 杀进程树。
-            killByPid(active.pid);
+            // 重连的在途轮无 ChildProcess 句柄，只有持久化的 pid。杀之前先校验进程身份（pid + 创建时间），
+            // 防 pid 被复用后误杀别的进程（如另一个 running 的 claude session）——这是 pid 复用最严重的后果。
+            if (await isSameProcessAlive(active.pid, active.startedAt)) {
+              killByPid(active.pid);
+            }
           }
         }
         if (ok) {
