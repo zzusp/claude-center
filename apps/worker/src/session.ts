@@ -59,6 +59,20 @@ export async function readSessionJsonl(cwd: string): Promise<string | null> {
   }
 }
 
+// 读取某 cwd 对应会话 transcript 全文 + sessionId（= .jsonl 文件名）。供对话轮「从 session 收尾」用：
+// detached/重连场景下 claude 的 stdout 已不可得，终态的 result/sessionId 都从这里取。无则 null。
+export async function findSessionInfo(cwd: string): Promise<{ jsonl: string; sessionId: string } | null> {
+  const found = await findSessionFile(cwd);
+  if (!found) return null;
+  try {
+    const jsonl = await fsp.readFile(found.file, "utf8");
+    const sessionId = path.basename(found.file).replace(/\.jsonl$/i, "");
+    return { jsonl, sessionId };
+  } catch {
+    return null;
+  }
+}
+
 // 执行期间周期同步某 cwd 的 session transcript，persist 落库；返回 stop()：清定时器 + 强制最终同步一次
 //（保证终态——成功/失败/超时/取消——落库的是完整文件）。transcript append-only、长度单调增，故周期同步：
 //   ① 先按 mtime 跳过未写过的轮（claude 思考/工具间隙的空转，免整文件读盘）；
