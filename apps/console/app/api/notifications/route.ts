@@ -11,7 +11,7 @@ const MAX_LIMIT = 200;
 const DEFAULT_LIMIT = 8;
 
 // 顶栏铃铛聚合接口：返回本人最近通知 + 未读条数。
-// limit 由调用方决定（悬浮面板取 8、弹窗分页取 20/40/…），服务端钳到 [1, 200]。
+// limit 由调用方决定（悬浮面板取 8、弹窗分页取 10/20/…），服务端钳到 [1, 200]。
 // 鉴权：登录即可读自己的通知；通知是按收件人写入，自然按用户过滤，不需要再加 RBAC 项目范围。
 export async function GET(request: Request) {
   const gate = await requireUser();

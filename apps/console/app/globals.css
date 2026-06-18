@@ -5329,6 +5329,19 @@ a.ds-v:hover {
   background: var(--surface-1);
 }
 
+/* 消息通知弹窗比默认 modal-md(560px) 宽，加宽到 800px 容纳更长标题/正文。
+   选择器特异性(0,3,0)高于 .modal.modal-md(0,2,0)，稳定覆盖。 */
+.notif .modal.modal-form {
+  max-width: 800px;
+}
+
+/* 弹窗顶部工具条：右对齐「全部已读」。 */
+.notif-modal-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
 /* 弹窗内的消息列表：复用 .notif-row 行样式，外加边框圆角形成卡片。 */
 .notif-modal-list {
   border: 1px solid var(--border);
