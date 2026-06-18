@@ -4684,6 +4684,45 @@ a.ds-v:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* 执行存活信号：running 态下显示在进度卡底部，区分「在跑」与「卡死」。 */
+.ov-liveness {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ov-liveness-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.ov-liveness-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--running, #2563eb);
+  flex-shrink: 0;
+  animation: ov-liveness-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ov-liveness-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.ov-liveness-text {
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.ov-liveness-step {
+  font-size: 12px;
+  color: var(--text-4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* 相关信息：PR 链接（分支 icon + 编号）。 */
 .ov-pr-link {
   display: inline-flex;
