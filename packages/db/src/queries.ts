@@ -2290,22 +2290,54 @@ export async function getConversationSessionSyncedAt(
 }
 
 // 流式收尾：落最终全文 + done；首轮把 claude session 写回会话（COALESCE 不覆盖已有）。
+// 成功收尾：终态守卫 WHERE status IN ('pending','streaming')——仅在途轮可翻 done，防重启重连/轮询收尾
+// 覆盖已被取消(cancelled)的轮。session_id 只在更新到 done 后才落（rowCount>0）。
 export async function finalizeConversationTurn(
   client: pg.Pool | pg.PoolClient,
   input: { conversationId: string; messageId: string; body: string; sessionId: string | null }
 ): Promise<void> {
-  await client.query(
+  const result = await client.query(
     `UPDATE conversation_messages
         SET body = $2, status = 'done', updated_at = now()
-      WHERE id = $1`,
+      WHERE id = $1 AND status IN ('pending', 'streaming')`,
     [input.messageId, input.body]
   );
+  if ((result.rowCount ?? 0) === 0) {
+    return;
+  }
   await client.query(
     `UPDATE conversations
         SET claude_session_id = COALESCE($2, claude_session_id), updated_at = now()
       WHERE id = $1`,
     [input.conversationId, input.sessionId]
   );
+}
+
+// 持久化承接本轮的 detached claude 进程 pid + worktree cwd（spawn 后立即调）。worker 重启重连据此判活/定位 .jsonl。
+export async function setConversationTurnProcess(
+  client: pg.Pool | pg.PoolClient,
+  messageId: string,
+  pid: number,
+  cwd: string
+): Promise<void> {
+  await client.query(
+    `UPDATE conversation_messages SET claude_pid = $2, claude_cwd = $3 WHERE id = $1`,
+    [messageId, pid, cwd]
+  );
+}
+
+// 本机名下仍 in-flight（pending/streaming）的 assistant 轮 + 其 claude_pid/claude_cwd，供 worker 启动对账重连。
+export async function listInflightConversationTurnsForWorker(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<{ id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null }[]> {
+  const result = await client.query<{ id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null }>(
+    `SELECT id, conversation_id, claude_pid::int AS claude_pid, claude_cwd
+       FROM conversation_messages
+      WHERE claimed_by = $1 AND role = 'assistant' AND status IN ('pending', 'streaming')`,
+    [workerId]
+  );
+  return result.rows;
 }
 
 // 失败收尾：仅在仍处于 in-flight（pending/streaming）时才翻 failed，避免被已落 'cancelled' 终态的轮被回头覆盖。
@@ -2320,29 +2352,6 @@ export async function failConversationTurn(
       WHERE id = $1 AND status IN ('pending', 'streaming')`,
     [input.messageId, input.errorMessage]
   );
-}
-
-// Worker 启动自检：把本机名下仍处 in-flight（pending/streaming）的对话轮判为孤儿并落 failed 终态。
-// 背景：worker 在 executeConversationTurn 执行中途崩溃/重启时，内存里的执行 promise 丢失，但 DB 行会
-// 永远卡 'streaming' —— 既让该会话「回复中/思考中」不灭（generating 派生为 true），又因 claimNextConversationTurn
-// 要求「无在途 assistant」而堵死后续认领。worker 重启后内存态已空，本机名下的 in-flight 轮必为孤儿，统一收口。
-// 返回受影响的会话 id（供 publish 刷新 Console）。
-export async function failOrphanedConversationTurns(
-  client: pg.Pool | pg.PoolClient,
-  workerId: string
-): Promise<string[]> {
-  const result = await client.query<{ conversation_id: string }>(
-    `UPDATE conversation_messages
-        SET status = 'failed',
-            error_message = 'worker 重启，本轮未正常收尾（如已生成回复，见会话记录）',
-            updated_at = now()
-      WHERE claimed_by = $1
-        AND role = 'assistant'
-        AND status IN ('pending', 'streaming')
-      RETURNING conversation_id`,
-    [workerId]
-  );
-  return result.rows.map((row) => row.conversation_id);
 }
 
 // Console 请求终止某会话的在途轮：标记本会话最后一条 in-flight assistant 消息。

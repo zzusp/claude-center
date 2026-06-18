@@ -7,7 +7,6 @@ import {
   claimNextRetryableTask,
   claimNextTask,
   failConversationTurn,
-  failOrphanedConversationTurns,
   getConversation,
   getTaskWithDeps,
   getPool,
@@ -16,6 +15,7 @@ import {
   listActiveTaskIdsForWorker,
   listCancelRequestedConversationMessages,
   listCancelRequestedTaskIds,
+  listInflightConversationTurnsForWorker,
   getConversationSession,
   getConversationSessionSyncedAt,
   listConversationMessages,
@@ -56,6 +56,7 @@ import {
   executeConversationTurn,
   executeDirectCommand,
   executeTask,
+  finalizeConversationFromSession,
   resumeTask,
   retryFailedTask,
   type ExecHooks
@@ -71,7 +72,8 @@ import {
   type TerminalInfo,
   type WorkerUsage
 } from "./inspect.js";
-import { killProcessTree } from "./shell.js";
+import { isProcessAlive, killByPid, killProcessTree } from "./shell.js";
+import { startConversationSessionSync } from "./session.js";
 import { gcWorktrees } from "./worktree.js";
 import { WorkerRelay, type RelayStatus } from "./relay.js";
 import { projectChannel, type RelayEvent } from "@claude-center/relay-client";
@@ -146,13 +148,17 @@ export class ClaudeCenterWorker {
   private claiming = false;
   // 对话独立车道：≤1 轮在途、不占任务并发槽、不受工作态门控（用户显式点名了这个 worker，idle 也应答）。
   private conversationBusy = false;
-  // 在跑的对话轮：messageId + conversationId + Claude 子进程句柄 + 已取消标记，供 Console 端「终止本轮回答」杀进程。
+  // 在跑的对话轮：messageId + conversationId + Claude 子进程句柄 + pid + 已取消标记，供 Console 端「终止本轮回答」杀进程。
+  // child 为本进程派生时的句柄（正常 tick）；重启重连的轮无句柄、只有持久化的 pid（取消时按 pid 杀）。
   private conversationActive: {
     messageId: string;
     conversationId: string;
     child: ChildProcess | null;
+    pid: number | null;
     cancelled: boolean;
   } | null = null;
+  // 重连轮的 pid 存活轮询定时器（worker 重启时进程仍活的对话轮，靠轮询 pid 探测其退出后收尾）。
+  private conversationReattachTimer: NodeJS.Timeout | null = null;
   private readonly relay: WorkerRelay;
   // 本机当前关联的项目 id 集（订阅 project 频道 + worker.upserted 扇出用）。
   private linkedProjectIds: string[] = [];
@@ -189,9 +195,10 @@ export class ClaudeCenterWorker {
     // 拉取本机关联项目 → 订阅 worker:<id> + 各 project:<id> 频道（relayUrl 为空则 no-op）。
     await this.refreshLinkedProjects();
     await this.refreshInfo();
-    // 启动自检：把上次崩溃/重启遗留、本机名下仍卡 in-flight 的对话轮判孤儿并落终态，否则该会话
-    // 「回复中/思考中」永不熄、且后续消息无法被认领。必须在首个 tickConversation 之前跑。
-    await this.recoverOrphanedConversationTurns();
+    // 启动对账本机名下仍 in-flight 的对话轮（关机存活 + 重启重连，见 docs/spec/conversation-turn-survive-restart.md）：
+    // claude 进程仍存活 → 重连（恢复 .jsonl 同步 + 轮询其退出后从 session 收尾）；已退 → 从 .jsonl 收尾或判 fail。
+    // 必须在首个 tickConversation 之前跑（重连会占住对话车道）。
+    await this.reconcileInflightConversationTurns();
     await this.tick();
     await this.tickConversation();
 
@@ -226,6 +233,7 @@ export class ClaudeCenterWorker {
     if (this.infoTimer) clearInterval(this.infoTimer);
     if (this.cancelTimer) clearInterval(this.cancelTimer);
     if (this.gcTimer) clearInterval(this.gcTimer);
+    if (this.conversationReattachTimer) clearInterval(this.conversationReattachTimer);
     this.relay.stop();
   }
 
@@ -753,14 +761,15 @@ export class ClaudeCenterWorker {
       }
       // 认领即推：让 Console 秒级看到该会话进入「回复中」。
       this.publishConversationTurn(conv, turn);
-      // 跟踪在跑轮：onClaudeSpawn 回填 child（取消时 killProcessTree 用）。
-      const active = { messageId: turn.id, conversationId: conv.id, child: null as ChildProcess | null, cancelled: false };
+      // 跟踪在跑轮：onClaudeSpawn 回填 child + pid（取消时 killProcessTree 用；pid 也供重连轮取消按 pid 杀）。
+      const active = { messageId: turn.id, conversationId: conv.id, child: null as ChildProcess | null, pid: null as number | null, cancelled: false };
       this.conversationActive = active;
       // fire-and-forget：执行期间占住车道，完成后释放并再催一次（处理排队的新消息）。
       void executeConversationTurn(this.config, conv, turn, {
         claudeAvailable: this.capabilities.claude.ok,
         onClaudeSpawn: (child) => {
           active.child = child;
+          active.pid = child.pid ?? null;
         }
       })
         .catch((error) => this.log("error", `conversation ${conv.id}: ${error instanceof Error ? error.message : String(error)}`))
@@ -777,21 +786,99 @@ export class ClaudeCenterWorker {
     }
   }
 
-  // 启动自检：回收本机名下的孤儿对话轮（崩溃/重启遗留的 in-flight 行），落 failed 终态 + 推会话头让
-  // Console 秒级熄灭「回复中」。best-effort：失败仅记日志，不阻塞启动（下次重启再兜）。
-  private async recoverOrphanedConversationTurns(): Promise<void> {
+  // 启动对账本机名下仍 in-flight 的对话轮（关机存活 + 重启重连）：
+  //  · claude_pid 仍存活 → 重连：占住对话车道 + 恢复 .jsonl 同步 + 轮询其退出后从 session 收尾（首条命中即占满车道）；
+  //  · 已退/未记 pid → 从 .jsonl 收尾（有完整回答则 done），否则 failConversationTurn。
+  // best-effort：失败仅记日志，不阻塞启动。详见 docs/spec/conversation-turn-survive-restart.md。
+  private async reconcileInflightConversationTurns(): Promise<void> {
+    let turns: { id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null }[] = [];
     try {
-      const convIds = await failOrphanedConversationTurns(getPool(), this.config.workerId);
-      if (!convIds.length) {
-        return;
-      }
-      this.log("info", `boot: 回收 ${convIds.length} 条孤儿对话轮（上次重启遗留）`);
-      for (const id of convIds) {
-        void this.publishConversationFinal(id);
-      }
+      turns = await listInflightConversationTurnsForWorker(getPool(), this.config.workerId);
     } catch (error) {
-      this.log("error", `recoverOrphanedConversationTurns: ${error instanceof Error ? error.message : String(error)}`);
+      this.log("error", `reconcileInflightConversationTurns: ${error instanceof Error ? error.message : String(error)}`);
+      return;
     }
+    let reattached = false;
+    for (const turn of turns) {
+      const alive = turn.claude_pid != null && isProcessAlive(turn.claude_pid);
+      if (alive && !reattached) {
+        reattached = true;
+        this.log("info", `boot: 重连在途对话轮 ${turn.id}（claude pid=${turn.claude_pid} 仍在跑）`);
+        this.reattachConversationTurn(turn);
+        continue;
+      }
+      if (alive) {
+        // 罕见：对话车道应 ≤1 在途轮。多出的存活轮先留着（下次重启再处理），不动它。
+        this.log("info", `boot: 跳过额外存活对话轮 ${turn.id}（车道已被占）`);
+        continue;
+      }
+      // 进程已退（停机期间跑完/崩溃）：从 .jsonl 收尾，无完整回答则判 fail。
+      await this.finalizeOrFailReconnect(turn);
+    }
+  }
+
+  // 进程已退的在途轮：cwd 有 .jsonl 且含完整 assistant 回答 → finalize done；否则 fail。然后推会话头刷新 Console。
+  private async finalizeOrFailReconnect(turn: { id: string; conversation_id: string; claude_cwd: string | null }): Promise<void> {
+    const pool = getPool();
+    try {
+      const done = turn.claude_cwd
+        ? await finalizeConversationFromSession(pool, { conversationId: turn.conversation_id, messageId: turn.id, cwd: turn.claude_cwd })
+        : false;
+      if (!done) {
+        await failConversationTurn(pool, { messageId: turn.id, errorMessage: "worker 重启时该轮 claude 进程已退出且无完整结果" });
+      }
+      this.log("info", `boot: 在途对话轮 ${turn.id} 进程已退 → ${done ? "从 session 收尾(done)" : "判 fail"}`);
+    } catch (error) {
+      this.log("error", `finalizeOrFailReconnect ${turn.id}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      void this.publishConversationFinal(turn.conversation_id);
+    }
+  }
+
+  // 重连一条仍存活的在途轮：占住对话车道、恢复 .jsonl 同步、轮询 pid；进程退出即从 session 收尾（除非已被取消）。
+  private reattachConversationTurn(turn: { id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null }): void {
+    const pid = turn.claude_pid;
+    const cwd = turn.claude_cwd;
+    if (pid == null || !cwd) {
+      return;
+    }
+    this.conversationBusy = true;
+    const active = { messageId: turn.id, conversationId: turn.conversation_id, child: null as ChildProcess | null, pid, cancelled: false };
+    this.conversationActive = active;
+    // 恢复 .jsonl → conversation_sessions 周期同步，让 Console 继续看到流式增量。
+    const stopSync = startConversationSessionSync(turn.conversation_id, cwd);
+    // 推一次会话头，让重连后 Console 立即恢复生成态（turn 仍 streaming → generating 派生为 true）。
+    void this.publishConversationFinal(turn.conversation_id);
+    const done = async (): Promise<void> => {
+      if (this.conversationReattachTimer) {
+        clearInterval(this.conversationReattachTimer);
+        this.conversationReattachTimer = null;
+      }
+      await stopSync().catch(() => {});
+      try {
+        if (!active.cancelled) {
+          const ok = await finalizeConversationFromSession(getPool(), { conversationId: turn.conversation_id, messageId: turn.id, cwd });
+          if (!ok) {
+            await failConversationTurn(getPool(), { messageId: turn.id, errorMessage: "重连的 claude 进程已退出但无完整结果" });
+          }
+        }
+      } catch (error) {
+        this.log("error", `reattach finalize ${turn.id}: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        if (this.conversationActive === active) {
+          this.conversationActive = null;
+        }
+        this.conversationBusy = false;
+        void this.publishConversationFinal(turn.conversation_id);
+        void this.tickConversation();
+      }
+    };
+    // 轮询 pid：消失即收尾。无 child 句柄拿不到 exit 事件，只能探活。
+    this.conversationReattachTimer = setInterval(() => {
+      if (!isProcessAlive(pid)) {
+        void done();
+      }
+    }, CANCEL_INTERVAL_MS);
   }
 
   // 按优先级认领一个工作单元并启动执行；认领成功返回 true。
@@ -894,6 +981,9 @@ export class ClaudeCenterWorker {
           active.cancelled = true;
           if (active.child) {
             killProcessTree(active.child);
+          } else if (active.pid != null) {
+            // 重连的在途轮无 ChildProcess 句柄，只有持久化的 pid → 按 pid 杀进程树。
+            killByPid(active.pid);
           }
         }
         if (ok) {

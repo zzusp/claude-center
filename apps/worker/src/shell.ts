@@ -33,6 +33,40 @@ export function killProcessTree(child: ChildProcess): void {
   }
 }
 
+// 按 pid 杀进程树（重连的对话轮无 ChildProcess 句柄，只有持久化的 pid）。语义同 killProcessTree。
+export function killByPid(pid: number): void {
+  if (!pid) {
+    return;
+  }
+  if (process.platform === "win32") {
+    spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }).on("error", () => {});
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // 进程可能已退出
+    }
+  }
+}
+
+// 进程是否存活：process.kill(pid,0) 不真发信号，仅探测。抛 ESRCH=不存在；EPERM=存在但无权（视为存活）。
+// 注意 pid 复用：退出后的 pid 可能被别的进程占用，这里会误判存活——桌面端重启重连场景窗口短，概率低（见 spec）。
+export function isProcessAlive(pid: number): boolean {
+  if (!pid || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 const outputLimit = 80_000;
 
 function appendLimited(current: string, chunk: string): string {
@@ -56,6 +90,10 @@ export function runCommand(
     // 把这些非零退出码也视为成功 resolve（少数命令用退出码表达状态而非错误，
     // 如 `git check-ignore -q` 退出 1 表示「未被忽略」）。默认仅 0 算成功。
     acceptExitCodes?: number[];
+    // detached:子进程脱离父进程组（stdio:ignore + unref）。父进程（worker）退出后子进程不被杀、继续运行。
+    // 用于对话轮的 claude「关机存活」（实测见 docs/spec/conversation-turn-survive-restart.md）。
+    // 代价：stdio 被忽略，stdout/stderr 拿不到——detached 调用方靠 .jsonl 取结果，不读 stdout。
+    detached?: boolean;
   } = {}
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
@@ -69,8 +107,15 @@ export function runCommand(
       cwd: options.cwd,
       shell: options.shell ?? false,
       windowsHide: true,
-      env: options.env ?? process.env
+      env: options.env ?? process.env,
+      // detached 下 stdio 必须 ignore：保留管道会让子进程在父退出后随断管而亡（也是实测结论）。
+      detached: options.detached ?? false,
+      stdio: options.detached ? "ignore" : undefined
     });
+    // detached：从父事件循环 unref，使父（worker）可独立退出而不等子进程；子进程继续后台运行。
+    if (options.detached) {
+      child.unref();
+    }
     options.onSpawn?.(child);
 
     let stdout = "";

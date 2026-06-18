@@ -19,6 +19,7 @@ import {
   markTaskFailed,
   markTaskRunning,
   markTaskSuccess,
+  setConversationTurnProcess,
   setTaskClaudeSession,
   setTaskWaiting,
   updateTaskRepoPrUrl,
@@ -54,7 +55,7 @@ import {
   resolveSubRepoRelativePath,
   worktreePathFor
 } from "./worktree.js";
-import { startConversationSessionSync, startTaskSessionSync } from "./session.js";
+import { findSessionInfo, startConversationSessionSync, startTaskSessionSync } from "./session.js";
 
 const CLAUDE_TIMEOUT_MS = 60 * 60_000;
 // 定向 shell 指令的执行上限（沿用原 runPowerShell 的 20 分钟）。
@@ -153,6 +154,8 @@ type ClaudeCallOpts = {
   // true=任务执行（带 --settings / --append-system-prompt-file / --permission-mode / --output-format json）；
   // false=定向 claude 指令（仅 `-p <prompt>`，跟随 claude 默认）。
   full: boolean;
+  // true=detached 启动（stdio:ignore + unref）：worker 退出后 claude 不被杀、继续写 .jsonl。对话轮用，使「关机存活」成立。
+  detached?: boolean;
 };
 
 // 统一的 claude 调用：按运行终端配置选执行形态。
@@ -188,7 +191,8 @@ function spawnClaude(config: WorkerConfig, opts: ClaudeCallOpts): Promise<Comman
     return runCommand(config.claudeCommand, args, {
       cwd: opts.cwd,
       timeoutMs: CLAUDE_TIMEOUT_MS,
-      onSpawn: opts.onSpawn
+      onSpawn: opts.onSpawn,
+      detached: opts.detached
     });
   }
 
@@ -223,7 +227,8 @@ function spawnClaude(config: WorkerConfig, opts: ClaudeCallOpts): Promise<Comman
     timeoutMs: CLAUDE_TIMEOUT_MS,
     onSpawn: opts.onSpawn,
     shell: false,
-    env
+    env,
+    detached: opts.detached
   });
 }
 
@@ -1133,9 +1138,57 @@ export async function executeDirectCommand(config: WorkerConfig, command: Direct
   }
 }
 
-// 实时对话一轮：在指定项目分支的「只读工作树」里跑 claude（非流式 json，与任务同 runClaudeJson），执行期间
-// 周期 + 终态把 session .jsonl 同步到 conversation_sessions（Console 据此富展示）；收尾落最终全文 + session。
-// 全程不 commit / 不开 PR（与任务流彻底解耦）。turn 是已认领的 assistant streaming 消息。
+// 从 session .jsonl 取末条 assistant 的文本（detached/重连下 claude 的 stdout 已不可得，终态结果只能从这里重建）。
+function extractFinalAssistantText(jsonl: string): string {
+  let text = "";
+  for (const line of jsonl.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let obj: { type?: string; message?: { content?: unknown } };
+    try {
+      obj = JSON.parse(trimmed) as { type?: string; message?: { content?: unknown } };
+    } catch {
+      continue;
+    }
+    if (obj.type !== "assistant" || !obj.message) continue;
+    const content = obj.message.content;
+    let cur = "";
+    if (typeof content === "string") {
+      cur = content;
+    } else if (Array.isArray(content)) {
+      cur = (content as Array<{ type?: string; text?: unknown }>)
+        .filter((b) => b && b.type === "text" && typeof b.text === "string")
+        .map((b) => b.text as string)
+        .join("\n");
+    }
+    if (cur.trim()) text = cur; // 留住最后一条有正文的 assistant 轮
+  }
+  return text;
+}
+
+// 从 session .jsonl 收尾对话轮：result=末条 assistant 文本、sessionId=文件名。jsonl 缺失或无完整 assistant
+// 回答（claude 中途崩）→ 返回 false（调用方据此 fail）；成功落 done 返回 true。finalizeConversationTurn 自带
+// 终态守卫，不会覆盖已 cancelled 的轮。供正常收尾与「重启重连后进程已退」两条路径共用。
+export async function finalizeConversationFromSession(
+  pool: ReturnType<typeof getPool>,
+  input: { conversationId: string; messageId: string; cwd: string }
+): Promise<boolean> {
+  const info = await findSessionInfo(input.cwd);
+  if (!info) return false;
+  const result = extractFinalAssistantText(info.jsonl);
+  if (!result.trim()) return false;
+  await finalizeConversationTurn(pool, {
+    conversationId: input.conversationId,
+    messageId: input.messageId,
+    body: result,
+    sessionId: info.sessionId
+  });
+  return true;
+}
+
+// 实时对话一轮：在指定项目分支的「只读工作树」里跑 claude，执行期间周期 + 终态把 session .jsonl 同步到
+// conversation_sessions（Console 据此富展示）。claude 以 detached 启动（关机存活）、spawn 后立即持久化 pid+cwd
+// 供 worker 重启重连；收尾一律从 .jsonl 重建（stdio 已 ignore）。全程不 commit / 不开 PR。turn 是已认领的 streaming 轮。
 export async function executeConversationTurn(
   config: WorkerConfig,
   conv: Conversation,
@@ -1165,15 +1218,34 @@ export async function executeConversationTurn(
 
     // 执行期间周期 + 终态把 session .jsonl 同步到 conversation_sessions；进程退出后强制最终同步一次保证完整。
     const stopSync = startConversationSessionSync(conv.id, wtPath);
-    const { sessionId, result } = await runClaudeJson(config, {
-      prompt,
-      cwd: wtPath,
-      resumeSessionId: conv.claude_session_id ?? undefined,
-      model: conv.model,
-      onSpawn: hooks?.onClaudeSpawn
-    }).finally(() => stopSync());
+    let exitOk = false;
+    try {
+      // detached 启动：worker 关机后 claude 继续跑完、写 .jsonl。spawn 后立即把 pid+cwd 落到本轮，供重启重连判活。
+      await spawnClaude(config, {
+        prompt,
+        cwd: wtPath,
+        resumeSessionId: conv.claude_session_id ?? undefined,
+        model: conv.model,
+        full: true,
+        detached: true,
+        onSpawn: (child) => {
+          hooks?.onClaudeSpawn?.(child);
+          if (child.pid) {
+            void setConversationTurnProcess(pool, turn.id, child.pid, wtPath).catch(() => {});
+          }
+        }
+      });
+      exitOk = true; // runCommand 非零退出/超时会 reject，走不到这里
+    } catch {
+      // 非零退出 / 超时 / 被取消杀死 → 下面按未成功收尾（fail，终态守卫保护已 cancelled 的轮）
+    } finally {
+      await stopSync(); // 终态强制最终同步，保证 .jsonl 完整入库
+    }
 
-    await finalizeConversationTurn(pool, { conversationId: conv.id, messageId: turn.id, body: result, sessionId });
+    const finalized = exitOk && (await finalizeConversationFromSession(pool, { conversationId: conv.id, messageId: turn.id, cwd: wtPath }));
+    if (!finalized) {
+      await failConversationTurn(pool, { messageId: turn.id, errorMessage: "claude 未正常完成本轮（进程异常退出或无完整结果）" });
+    }
   } catch (error) {
     await failConversationTurn(pool, { messageId: turn.id, errorMessage: error instanceof Error ? error.message : String(error) });
   }
