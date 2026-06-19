@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("workerApi", {
   listTerminals: () => ipcRenderer.invoke("worker:listTerminals"),
   setTerminal: (command) => ipcRenderer.invoke("worker:setTerminal", command),
   setPreCommand: (command) => ipcRenderer.invoke("worker:setPreCommand", command),
+  setRelayConfig: (input) => ipcRenderer.invoke("worker:setRelayConfig", input),
   listCloudProjects: () => ipcRenderer.invoke("worker:listCloudProjects"),
   listProjectLinks: () => ipcRenderer.invoke("worker:listProjectLinks"),
   pickFolder: () => ipcRenderer.invoke("worker:pickFolder"),

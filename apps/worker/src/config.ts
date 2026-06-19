@@ -64,6 +64,10 @@ export type WorkerState = {
   // 桌面端配置的运行终端与前置命令，跨重启保留。
   terminalCommand?: string;
   claudePreCommand?: string;
+  // 桌面端配置的 SSE 中转服务地址与鉴权 token，跨重启保留；设了即覆盖同名 env。
+  relayUrl?: string;
+  relayPublishToken?: string;
+  relayWorkerToken?: string;
 };
 
 function dataDirOf(): string {
@@ -201,8 +205,9 @@ export function readWorkerConfig(): WorkerConfig {
     usageProxy,
     infoIntervalMs: readNumber("CLAUDE_CENTER_INFO_INTERVAL_MS", 60_000),
     usageIntervalMs: readNumber("CLAUDE_CENTER_USAGE_INTERVAL_MS", 300_000),
-    relayUrl: process.env.CLAUDE_CENTER_RELAY_URL?.trim() || "",
-    relayPublishToken: process.env.CLAUDE_CENTER_RELAY_PUBLISH_TOKEN?.trim() || "",
-    relayWorkerToken: process.env.CLAUDE_CENTER_RELAY_WORKER_TOKEN?.trim() || ""
+    // 桌面端持久化优先（设过即覆盖 env），其次 env，最后空。与 terminalCommand/claudePreCommand 同模式。
+    relayUrl: state.relayUrl ?? (process.env.CLAUDE_CENTER_RELAY_URL?.trim() || ""),
+    relayPublishToken: state.relayPublishToken ?? (process.env.CLAUDE_CENTER_RELAY_PUBLISH_TOKEN?.trim() || ""),
+    relayWorkerToken: state.relayWorkerToken ?? (process.env.CLAUDE_CENTER_RELAY_WORKER_TOKEN?.trim() || "")
   };
 }

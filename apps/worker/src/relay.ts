@@ -22,7 +22,7 @@ export type RelayStatus = "disabled" | "connecting" | "connected" | "reconnectin
 //     把认领延迟从轮询周期（默认 10s）降到亚秒级。
 // relayUrl 为空时整体 no-op，Worker 退回纯数据库轮询，功能不降级。
 export class WorkerRelay {
-  private readonly publisher: Publisher;
+  private publisher: Publisher;
   private sub: Subscription | null = null;
   private channels: string[] = [];
   private status: RelayStatus = "disabled";
@@ -32,11 +32,26 @@ export class WorkerRelay {
     private readonly onSignal: (event: RelayEvent) => void,
     private readonly log: LogFn
   ) {
-    this.publisher = createPublisher({
-      url: config.relayUrl,
-      token: config.relayPublishToken,
+    this.publisher = this.makePublisher();
+  }
+
+  private makePublisher(): Publisher {
+    return createPublisher({
+      url: this.config.relayUrl,
+      token: this.config.relayPublishToken,
       onError: (error) => this.log("error", `relay publish: ${error.message}`)
     });
+  }
+
+  // 运行时重配（桌面端改 relayUrl/token 后调用，无需重启）：按最新 config 重建发布器、
+  // 断开旧订阅并清空频道集，由调用方随后 subscribe(projectIds) 触发按新配置重订阅。
+  // config 与 runner 共享同一对象引用，调用前 runner 已就地更新好 relayUrl/token。
+  reconfigure(): void {
+    this.publisher = this.makePublisher();
+    this.sub?.close();
+    this.sub = null;
+    this.channels = [];
+    this.status = "disabled";
   }
 
   get enabled(): boolean {

@@ -130,6 +130,10 @@ export type WorkerStatusSnapshot = {
   // SSE 中转连接状态 + 当前订阅频道数（桌面端展示连通性）。
   relayState: RelayStatus;
   relayChannels: number;
+  // 当前生效的中转配置（桌面端「设置」回显 / 编辑用）。空字符串 = 未配置。
+  relayUrl: string;
+  relayPublishToken: string;
+  relayWorkerToken: string;
 };
 
 const UNKNOWN_CAPABILITY = { ok: false, version: null, path: null };
@@ -285,6 +289,23 @@ export class ClaudeCenterWorker {
     this.config.claudePreCommand = next;
     persistWorkerState(this.config.dataDir, { claudePreCommand: next });
     await updateWorkerTerminal(getPool(), this.config.workerId, this.config.terminalCommand, next);
+  }
+
+  // 设置 SSE 中转服务地址 + 鉴权 token：改内存 + 持久化 worker.json（覆盖同名 env）+ 即时重配并重订阅，无需重启。
+  // 地址留空 = 禁用中转、退回纯数据库轮询（功能不降级）。
+  async setRelayConfig(input: { url: string; publishToken: string; workerToken: string }): Promise<void> {
+    this.config.relayUrl = input.url.trim();
+    this.config.relayPublishToken = input.publishToken.trim();
+    this.config.relayWorkerToken = input.workerToken.trim();
+    persistWorkerState(this.config.dataDir, {
+      relayUrl: this.config.relayUrl,
+      relayPublishToken: this.config.relayPublishToken,
+      relayWorkerToken: this.config.relayWorkerToken
+    });
+    // 按最新配置重建发布器并断开旧订阅，再按本机关联项目重订阅频道（地址为空则整体 no-op）。
+    this.relay.reconfigure();
+    await this.refreshLinkedProjects();
+    this.log("info", this.config.relayUrl ? `SSE 中转已配置：${this.config.relayUrl}` : "SSE 中转已禁用（纯数据库轮询）");
   }
 
   // —— 桌面端项目关联 —— //
@@ -446,7 +467,10 @@ export class ClaudeCenterWorker {
       })),
       logs: this.logs,
       relayState: this.relay.state,
-      relayChannels: this.relay.channelCount
+      relayChannels: this.relay.channelCount,
+      relayUrl: this.config.relayUrl,
+      relayPublishToken: this.config.relayPublishToken,
+      relayWorkerToken: this.config.relayWorkerToken
     };
   }
 
