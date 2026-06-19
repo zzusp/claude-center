@@ -150,6 +150,9 @@ type ClaudeCallOpts = {
   cwd?: string;
   resumeSessionId?: string;
   model?: string;
+  // 任务级「动态工作流」开关：true 给 claude 注入 CLAUDE_CODE_WORKFLOWS=1 启用 Workflows 特性，
+  // false 注入 CLAUDE_CODE_DISABLE_WORKFLOWS=1 关闭（见 workflowEnv）。缺省=关闭（对话/定向指令不传）。
+  dynamicWorkflow?: boolean;
   onSpawn?: (child: ChildProcess) => void;
   // true=任务执行（带 --settings / --append-system-prompt-file / --permission-mode / --output-format json）；
   // false=定向 claude 指令（仅 `-p <prompt>`，跟随 claude 默认）。
@@ -157,6 +160,16 @@ type ClaudeCallOpts = {
   // true=detached 启动（stdio:ignore + unref）：worker 退出后 claude 不被杀、继续写 .jsonl。对话轮用，使「关机存活」成立。
   detached?: boolean;
 };
+
+// 「动态工作流」按任务开关映射到 claude 进程 env。ground truth（claude 2.1.x 二进制）：
+//   启用 ← CLAUDE_CODE_WORKFLOWS 为真；禁用 ← CLAUDE_CODE_DISABLE_WORKFLOWS 为真（优先级高于启用）。
+// 任务级开关作权威：开→只设启用变量，关→只设禁用变量。worker 机器默认不全局设这两个变量
+// （不在 .env.example / config 里），故无需再清反向变量——一条清晰路径即可确定状态。
+// undefined（对话轮 / 定向指令不带此开关）则不注入任何变量，沿用 claude 默认，不改动任务以外的行为。
+function workflowEnv(dynamicWorkflow: boolean | undefined): Record<string, string> {
+  if (dynamicWorkflow === undefined) return {};
+  return dynamicWorkflow ? { CLAUDE_CODE_WORKFLOWS: "1" } : { CLAUDE_CODE_DISABLE_WORKFLOWS: "1" };
+}
 
 // 统一的 claude 调用：按运行终端配置选执行形态。
 // - 直接形态（默认终端 + 无前置命令）：spawn(claude, argv)，无 shell 解析，最稳，等同旧行为。
@@ -167,6 +180,8 @@ type ClaudeCallOpts = {
 function spawnClaude(config: WorkerConfig, opts: ClaudeCallOpts): Promise<CommandResult> {
   // 'default' / 空 表示不指定 --model；其余为白名单别名（opus/sonnet/haiku），可安全内联。
   const modelArg = opts.model && opts.model !== "default" ? opts.model : null;
+  // 动态工作流通过 env 注入（非 CLI flag），直接 / 终端两形态共用。
+  const wfEnv = workflowEnv(opts.dynamicWorkflow);
   const usesTerminal = config.claudePreCommand !== "" || config.terminalCommand !== "";
 
   if (!usesTerminal) {
@@ -192,7 +207,8 @@ function spawnClaude(config: WorkerConfig, opts: ClaudeCallOpts): Promise<Comman
       cwd: opts.cwd,
       timeoutMs: CLAUDE_TIMEOUT_MS,
       onSpawn: opts.onSpawn,
-      detached: opts.detached
+      detached: opts.detached,
+      env: { ...process.env, ...wfEnv }
     });
   }
 
@@ -212,11 +228,12 @@ function spawnClaude(config: WorkerConfig, opts: ClaudeCallOpts): Promise<Comman
     [CLAUDE_ENV.CMD]: config.claudeCommand,
     [CLAUDE_ENV.PROMPT]: opts.prompt,
     [CLAUDE_ENV.SETTINGS]: config.claudeSettingsPath,
-    [CLAUDE_ENV.RULES]: config.claudeRulesPath
+    [CLAUDE_ENV.RULES]: config.claudeRulesPath,
+    ...wfEnv
   };
-  // WSL 不继承 Windows 进程 env，需在 WSLENV 声明转发的变量名（冒号分隔）。
+  // WSL 不继承 Windows 进程 env，需在 WSLENV 声明转发的变量名（冒号分隔）；动态工作流变量一并转发。
   if (isWsl(terminalCommand)) {
-    const names = [CLAUDE_ENV.CMD, CLAUDE_ENV.PROMPT, CLAUDE_ENV.SETTINGS, CLAUDE_ENV.RULES].join(":");
+    const names = [CLAUDE_ENV.CMD, CLAUDE_ENV.PROMPT, CLAUDE_ENV.SETTINGS, CLAUDE_ENV.RULES, ...Object.keys(wfEnv)].join(":");
     env.WSLENV = process.env.WSLENV ? `${process.env.WSLENV}:${names}` : names;
   }
 
@@ -240,6 +257,7 @@ function runClaudeJson(
     cwd?: string;
     resumeSessionId?: string;
     model?: string;
+    dynamicWorkflow?: boolean;
     onSpawn?: (child: ChildProcess) => void;
   }
 ): Promise<ClaudeTurn> {
@@ -259,6 +277,7 @@ function runTaskClaude(
     cwd: string;
     resumeSessionId?: string;
     model?: string;
+    dynamicWorkflow?: boolean;
     onSpawn?: (child: ChildProcess) => void;
   }
 ): Promise<ClaudeTurn> {
@@ -983,6 +1002,7 @@ export async function executeTask(config: WorkerConfig, task: Task, hooks?: Exec
       prompt: taskPrompt(task, taskAtts, wtPath),
       cwd: wtPath,
       model: task.model,
+      dynamicWorkflow: task.dynamic_workflow,
       onSpawn: hooks?.onClaudeSpawn
     });
     await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, hooks?.onClaudeSpawn);
@@ -1030,6 +1050,7 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
       cwd: wtPath,
       resumeSessionId: task.claude_session_id,
       model: task.model,
+      dynamicWorkflow: task.dynamic_workflow,
       onSpawn: hooks?.onClaudeSpawn
     });
     await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, hooks?.onClaudeSpawn);
@@ -1072,6 +1093,7 @@ export async function retryFailedTask(config: WorkerConfig, task: Task, hooks?: 
       cwd: wtPath,
       resumeSessionId: task.claude_session_id ?? undefined,
       model: task.model,
+      dynamicWorkflow: task.dynamic_workflow,
       onSpawn: hooks?.onClaudeSpawn
     });
     await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, hooks?.onClaudeSpawn);

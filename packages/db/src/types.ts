@@ -194,6 +194,9 @@ export type Task = {
   auto_decision_hints: string;
   // 任务级 Claude 执行模型，见 TaskModel；'default' 表示 Worker 执行时不传 --model。
   model: TaskModel;
+  // 动态工作流开关：true 时 Worker 给 Claude 注入 CLAUDE_CODE_WORKFLOWS=1 启用 Claude Code Workflows（多代理编排）特性，
+  // false 注入 CLAUDE_CODE_DISABLE_WORKFLOWS=1 关闭；默认 false。见 apps/worker/src/executor.ts workflowEnv()。
+  dynamic_workflow: boolean;
   status: TaskStatus;
   claimed_by: string | null;
   claimed_at: string | null;

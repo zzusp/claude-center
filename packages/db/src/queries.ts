@@ -153,6 +153,8 @@ export async function createTask(
     autoDecisionHints: string;
     // 任务级 Claude 执行模型；'default' 表示 Worker 执行时不传 --model。
     model: TaskModel;
+    // 动态工作流（Claude Code Workflows 特性）开关；见 Task.dynamic_workflow。
+    dynamicWorkflow: boolean;
     // 指定发布时间则落 'scheduled' 定时态，到点由调度器转 pending；为空走默认 'draft'。
     scheduledAt?: string | null;
   }
@@ -160,8 +162,8 @@ export async function createTask(
   const scheduledAt = input.scheduledAt ?? null;
   const status = scheduledAt ? "scheduled" : "draft";
   const result = await client.query<Task>(
-    `INSERT INTO tasks (project_id, title, description, base_branch, work_branch, target_branch, submit_mode, model, auto_merge_pr, auto_reply, auto_decision_hints, status, scheduled_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    `INSERT INTO tasks (project_id, title, description, base_branch, work_branch, target_branch, submit_mode, model, auto_merge_pr, auto_reply, auto_decision_hints, status, scheduled_at, dynamic_workflow)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      RETURNING *`,
     [
       input.projectId,
@@ -176,7 +178,8 @@ export async function createTask(
       input.autoReply,
       input.autoDecisionHints,
       status,
-      scheduledAt
+      scheduledAt,
+      input.dynamicWorkflow
     ]
   );
   return result.rows[0]!;
@@ -198,6 +201,7 @@ export async function updateTask(
     autoReply: boolean;
     autoDecisionHints: string;
     model: TaskModel;
+    dynamicWorkflow: boolean;
     scheduledAt?: string | null;
   }
 ): Promise<Task | null> {
@@ -215,6 +219,7 @@ export async function updateTask(
             auto_reply = $9,
             auto_decision_hints = $10,
             model = $11,
+            dynamic_workflow = $14,
             scheduled_at = $12,
             status = $13,
             updated_at = now()
@@ -233,7 +238,8 @@ export async function updateTask(
       input.autoDecisionHints,
       input.model,
       scheduledAt,
-      status
+      status,
+      input.dynamicWorkflow
     ]
   );
   return result.rows[0] ?? null;

@@ -88,6 +88,7 @@ export default function TasksClient({ canCreateTask }: { canCreateTask: boolean 
         autoReply: data.get("autoReply") === "on",
         autoDecisionHints: String(data.get("autoDecisionHints") ?? ""),
         model: data.get("model"),
+        dynamicWorkflow: data.get("dynamicWorkflow") === "on",
         dependsOn: data.getAll("dependsOn").map(String),
         scheduledAt,
         taskRepos,

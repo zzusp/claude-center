@@ -1701,6 +1701,35 @@ select:focus {
   gap: 12px;
 }
 
+/* 发布任务表单（modal-xl）：左右分栏，缩短纵向长度。每列各自堆叠 form-section，
+   section 间沿用既有 border-top 分隔；窄屏（≤820px）回落单列。 */
+.compose-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 28px;
+  align-items: start;
+}
+
+.compose-col {
+  display: grid;
+  gap: 0;
+  align-content: start;
+  /* 防止长内容（datalist 选项 / 长分支名）撑破网格列。 */
+  min-width: 0;
+}
+
+@media (max-width: 820px) {
+  .compose-cols {
+    grid-template-columns: 1fr;
+  }
+  /* 单列堆叠时，右列首个 section 恢复分隔线（两列并排时它是列首、本不需要）。 */
+  .compose-col:nth-child(2) .form-section:first-child {
+    padding-top: 14px;
+    margin-top: 14px;
+    border-top: 1px dashed var(--border);
+  }
+}
+
 .btn {
   display: inline-flex;
   align-items: center;

@@ -95,6 +95,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       autoReply?: boolean;
       autoDecisionHints?: string;
       model?: TaskModel;
+      dynamicWorkflow?: boolean;
       scheduledAt?: string | null;
       // 多仓任务（spec docs/spec/task-multi-repo.md）：编辑时整批替换 task_repos。
       // 缺省时按主仓单行重新生成、其它子仓 skipped（兼容旧前端）。
@@ -146,6 +147,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           autoReply,
           autoDecisionHints: autoReply ? (body.autoDecisionHints ?? "").trim() : "",
           model: body.model,
+          dynamicWorkflow: body.dynamicWorkflow === true,
           scheduledAt: body.scheduledAt ?? null
         });
         if (!task) {
