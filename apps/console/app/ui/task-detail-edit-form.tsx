@@ -23,6 +23,7 @@ export function TaskEditForm({
   const [autoReply, setAutoReply] = useState(task.auto_reply);
   const [autoDecisionHints, setAutoDecisionHints] = useState(task.auto_decision_hints);
   const [model, setModel] = useState(task.model);
+  const [dynamicWorkflow, setDynamicWorkflow] = useState(task.dynamic_workflow);
   // 提交意图：save 仅保存编辑（保留 draft/scheduled），publish 保存后立刻发布为 pending（待处理）。
   // 用 ref 而非 state，避免点击「保存并发布」后 setState 异步导致 handleSubmit 拿到旧值。
   const submitIntentRef = useRef<"save" | "publish">("save");
@@ -55,6 +56,7 @@ export function TaskEditForm({
           autoReply,
           autoDecisionHints,
           model,
+          dynamicWorkflow,
           scheduledAt: scheduledAtRaw ? new Date(scheduledAtRaw).toISOString() : null
         })
       });
@@ -166,18 +168,35 @@ export function TaskEditForm({
             />
           </div>
         </div>
-        <div className="field">
-          <label className="field-label">自动回复（兜底）</label>
-          <Select
-            value={autoReply ? "on" : "off"}
-            onChange={(value) => setAutoReply(value === "on")}
-            options={[
-              { value: "off", label: "否 · 等人回复（默认）" },
-              { value: "on", label: "是 · 无人值守，按规则兜底" }
-            ]}
-            disabled={busy}
-            ariaLabel="自动回复"
-          />
+        <div className="form-row">
+          <div className="field">
+            <label className="field-label">自动回复（兜底）</label>
+            <Select
+              value={autoReply ? "on" : "off"}
+              onChange={(value) => setAutoReply(value === "on")}
+              options={[
+                { value: "off", label: "否 · 等人回复（默认）" },
+                { value: "on", label: "是 · 无人值守，按规则兜底" }
+              ]}
+              disabled={busy}
+              ariaLabel="自动回复"
+            />
+          </div>
+          <div className="field">
+            <label className="field-label">
+              动态工作流 <span className="field-hint">Claude Code Workflows：多代理编排</span>
+            </label>
+            <Select
+              value={dynamicWorkflow ? "on" : "off"}
+              onChange={(value) => setDynamicWorkflow(value === "on")}
+              options={[
+                { value: "off", label: "否 · 关闭（默认）" },
+                { value: "on", label: "是 · 启用动态工作流" }
+              ]}
+              disabled={busy}
+              ariaLabel="动态工作流"
+            />
+          </div>
         </div>
         {autoReply ? (
           <div className="field">

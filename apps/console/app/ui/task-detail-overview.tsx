@@ -82,6 +82,7 @@ export function OverviewTab({
               <KvRow k="自动合并 PR" v={task.auto_merge_pr ? "是 · 创建后自动合并" : "否"} />
             ) : null}
             <KvRow k="自动回复" v={task.auto_reply ? "是 · 无人值守兜底（cap=2）" : "否"} />
+            <KvRow k="动态工作流" v={task.dynamic_workflow ? "是 · 启用" : "否"} />
             <KvRow k="执行模型" v={modelLabel} />
             <KvRow k="定时任务" v={task.scheduled_at ? `${fmtDateTime(task.scheduled_at)} 发布` : "否"} />
             <KvRow k="前置任务" v={depIds.length > 0 ? `${depIds.length} 个` : "无"} />

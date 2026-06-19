@@ -121,6 +121,7 @@ export async function POST(request: NextRequest) {
       autoReply?: boolean;
       autoDecisionHints?: string;
       model?: string;
+      dynamicWorkflow?: boolean;
       dependsOn?: string[];
       scheduledAt?: string;
       // 多仓任务（spec docs/spec/task-multi-repo.md §UI）：每个项目仓的 base/work/target 与启用标志。
@@ -164,6 +165,8 @@ export async function POST(request: NextRequest) {
     // 执行模型白名单校验：非法 / 缺省一律落 'default'（Worker 执行时不传 --model）。
     const model: TaskModel =
       typeof body.model === "string" && TASK_MODELS.includes(body.model) ? (body.model as TaskModel) : "default";
+    // 动态工作流（Claude Code Workflows）：缺省关闭，仅显式 true 时启用。
+    const dynamicWorkflow = body.dynamicWorkflow === true;
 
     const dependsOn = Array.isArray(body.dependsOn) ? body.dependsOn.filter((id) => typeof id === "string") : [];
     const attachmentIds = Array.isArray(body.attachmentIds)
@@ -204,6 +207,7 @@ export async function POST(request: NextRequest) {
         autoReply,
         autoDecisionHints,
         model,
+        dynamicWorkflow,
         scheduledAt
       });
       await addTaskDependencies(client, task.id, dependsOn);
