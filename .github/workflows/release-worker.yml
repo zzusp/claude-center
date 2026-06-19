@@ -1,0 +1,162 @@
+# worker-vX.Y.Z tag → matrix [windows-latest, macos-latest] 跑 electron-builder → GitHub Release。
+# 详细方案见 docs/spec/deployment-pipeline.md。
+name: release-worker
+
+on:
+  push:
+    tags:
+      - 'worker-v[0-9]+.[0-9]+.[0-9]+'
+
+concurrency:
+  group: release-worker-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  precheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      worker_version: ${{ steps.parse.outputs.worker_version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse tag → WORKER_VERSION
+        id: parse
+        run: |
+          ref="${GITHUB_REF#refs/tags/}"
+          version="${ref#worker-v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag $ref 不符合 worker-vX.Y.Z 格式"
+            exit 1
+          fi
+          echo "worker_version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify CHANGELOG-worker.md has section
+        run: node scripts/extract-changelog.mjs CHANGELOG-worker.md "${{ steps.parse.outputs.worker_version }}" --check
+
+      - name: Extract release notes
+        run: |
+          mkdir -p artifacts
+          node scripts/extract-changelog.mjs CHANGELOG-worker.md "${{ steps.parse.outputs.worker_version }}" > artifacts/notes.md
+          echo "── release notes ──"; cat artifacts/notes.md; echo "───────────────"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: artifacts/notes.md
+          retention-days: 7
+
+  build:
+    needs: precheck
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: dist:win
+            artifact_name: dist-win
+            artifact_pattern: 'apps/worker/release/*.exe'
+          - os: macos-latest
+            script: dist:mac
+            artifact_name: dist-mac
+            # 含 dmg、dmg.blockmap、latest-mac.yml
+            artifact_pattern: |
+              apps/worker/release/*.dmg
+              apps/worker/release/*.dmg.blockmap
+              apps/worker/release/latest-mac.yml
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Patch worker version
+        # electron-builder 从 apps/worker/package.json 的 version 字段读，把 worker tag 注进去。
+        shell: bash
+        run: |
+          version="${{ needs.precheck.outputs.worker_version }}"
+          node -e "
+            const fs = require('fs');
+            const p = 'apps/worker/package.json';
+            const j = JSON.parse(fs.readFileSync(p, 'utf-8'));
+            j.version = '${version}';
+            fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+          "
+          echo "[patch] apps/worker/package.json version → $version"
+
+      - name: Install deps
+        # 不能 --ignore-scripts：electron 需要 postinstall 拉 binary 才能 packager 跑起来。
+        run: npm ci
+
+      - name: Dist precheck
+        run: npm -w @claude-center/worker run dist:check
+
+      - name: Build workspace deps + worker dist
+        shell: bash
+        run: |
+          npm -w @claude-center/db run build
+          npm -w @claude-center/relay-client run build
+          npm -w @claude-center/worker run build
+
+      - name: electron-builder
+        shell: bash
+        env:
+          # GitHub-hosted runner 上的临时凭据：不签名也不发布，纯打包。
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm -w @claude-center/worker run ${{ matrix.script }}
+
+      - name: List artifacts
+        shell: bash
+        run: ls -la apps/worker/release/ || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_pattern }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: [precheck, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          # 把 dist-win/dist-mac 下的产物移到 release/，扁平化便于上传。
+          find downloaded -mindepth 2 -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.dmg.blockmap' -o -name 'latest-mac.yml' \) -exec mv {} release/ \;
+          # release-notes artifact 移出来作 notes-file。
+          if [[ -f downloaded/release-notes/notes.md ]]; then
+            cp downloaded/release-notes/notes.md release/notes.md
+          fi
+          ls -la release/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # gh release create 一次上传所有 binary。notes.md 不应作为 asset，--notes-file 单独读。
+          assets=$(find release -maxdepth 1 -type f ! -name 'notes.md')
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file release/notes.md \
+            --target "$GITHUB_SHA" \
+            $assets

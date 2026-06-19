@@ -13,13 +13,75 @@
     "worker:headless": "npm -w @claude-center/db run build && npm -w @claude-center/relay-client run build && tsx src/runner.ts",
     "preview:ui": "npm run build && electron scripts",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dist:win": "npm run build && electron-builder --win --x64 --publish never",
+    "dist:mac": "npm run build && electron-builder --mac --x64 --arm64 --publish never",
+    "dist:check": "node scripts/dist-check.mjs"
   },
   "dependencies": {
     "@claude-center/db": "0.1.0",
     "@claude-center/relay-client": "0.1.0"
   },
   "devDependencies": {
-    "electron": "^33.3.1"
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.claudecenter.worker",
+    "productName": "ClaudeCenter Worker",
+    "copyright": "Copyright © ClaudeCenter",
+    "asar": true,
+    "compression": "normal",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "preload.cjs",
+      "prompts/**/*",
+      "config/**/*",
+      "package.json",
+      "!**/*.{md,tsbuildinfo,map}",
+      "!**/.DS_Store"
+    ],
+    "asarUnpack": [
+      "**/node_modules/pg/**"
+    ],
+    "extraMetadata": {
+      "main": "dist/main.js"
+    },
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
+    "publish": null,
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "artifactName": "ClaudeCenter-Worker-${version}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ClaudeCenter Worker"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] }
+      ],
+      "artifactName": "ClaudeCenter-Worker-${version}-mac-${arch}.${ext}",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "ClaudeCenter Worker ${version}"
+    }
   }
 }

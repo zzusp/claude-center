@@ -1,0 +1,25 @@
+**/node_modules
+**/.next
+**/dist
+**/out
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+!**/.env.example
+
+# 仓库基建文件，build 不需要
+.git
+.github
+.idea
+.claude
+.claude-attachments
+docs/tmp
+docs/acceptance
+docs/ops
+.worktreeinclude
+
+# worker 桌面端的产物 / 打包目录，与 Web 镜像无关
+apps/worker/release
+
+# 日志与本地脚本临时
+*.log
