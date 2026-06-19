@@ -1016,7 +1016,10 @@ export async function getWorker(client: pg.Pool | pg.PoolClient, workerId: strin
             CASE WHEN last_seen_at > now() - interval '60 seconds' THEN 'online' ELSE 'offline' END AS status,
             (SELECT count(*)::int FROM tasks
               WHERE tasks.claimed_by = workers.id
-                AND tasks.status IN (${sqlInList(ACTIVE_WORKER_STATUSES)})) AS active_task_count
+                AND tasks.status IN (${sqlInList(ACTIVE_WORKER_STATUSES)})) AS active_task_count,
+            (SELECT count(*)::int FROM tasks
+              WHERE tasks.claimed_by = workers.id
+                AND tasks.status IN (${sqlInList(COMPLETED_STATUSES)})) AS completed_task_count
        FROM workers
       WHERE workers.id = $1`,
     [workerId]
