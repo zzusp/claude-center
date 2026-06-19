@@ -676,6 +676,44 @@ async function anyRepoHasChanges(ctxs: TaskRepoCtx[], localPath: string, taskId:
   return false;
 }
 
+// work_branch 是否领先 target_branch（持有未合并提交）。用于区分两种「工作区干净」：真无改动 vs
+// 首轮已提交但 PR / push 未成、改动留在提交里。比较 origin/<target>..HEAD——worktree 与主仓共享 refs，
+// prepare 阶段已 `git fetch origin`，origin/<target> 是最新值。取不到该 ref（目标分支尚不存在等）时
+// rev-list 报错，保守返回 false（按真无改动处理，不误建空 PR）。
+async function branchAheadOfTarget(subWt: string, targetBranch: string): Promise<boolean> {
+  try {
+    const res = await runCommand(
+      "git",
+      ["-C", subWt, "rev-list", "--count", `origin/${targetBranch}..HEAD`],
+      { timeoutMs: 60_000 }
+    );
+    return Number.parseInt(res.stdout.trim(), 10) > 0;
+  } catch {
+    return false;
+  }
+}
+
+// 查 work_branch → target_branch 的已开 PR（幂等建 PR 用）。无匹配 / 查询失败均返回 null，
+// 交回上层正常走 gh pr create。
+async function findExistingPrUrl(
+  config: WorkerConfig,
+  subWt: string,
+  workBranch: string,
+  targetBranch: string
+): Promise<string | null> {
+  try {
+    const res = await runCommand(
+      config.ghCommand,
+      ["pr", "list", "--head", workBranch, "--base", targetBranch, "--state", "open", "--json", "url"],
+      { cwd: subWt, timeoutMs: 60_000 }
+    );
+    const list = JSON.parse(res.stdout.trim() || "[]") as { url?: string }[];
+    return list[0]?.url ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // 收尾：在任务专属工作树（wtPath）里检查/提交，并按 submit_mode 分流（PR 或直接推送目标分支）。
 // localPath 是项目主仓，仅用于 push（push 模式落地即 merged）后移除工作树。
 // 多仓 finalize（spec §7）：循环 task_repos 各自 commit/push/PR；强语义聚合（任一仓 failed → 任务整体 failed）。
@@ -716,7 +754,12 @@ async function finalizeTaskMultiRepo(
     const repoLabel = ctx.role === "main" ? "主仓" : ctx.relative_path;
     try {
       const status = await runCommand("git", ["-C", subWt, "status", "--porcelain"], { timeoutMs: 60_000 });
-      if (!status.stdout.trim()) {
+      const dirty = Boolean(status.stdout.trim());
+      // 工作区干净 ≠ 一定无改动：首轮已 commit（甚至 push）却在建 PR / 推送前失败时，改动已落在
+      // work_branch 的提交里、工作区是干净的。这种重试场景若当 no_changes 跳过，PR 永远建不出来
+      // （曾踩：首轮失败→第二轮成功但 PR 未保存到任务）。故工作区干净时还要看 work_branch 是否领先
+      // target_branch：领先说明有「已提交但未成 PR」的改动，仍要继续 push + 建 PR。
+      if (!dirty && !(await branchAheadOfTarget(subWt, ctx.target_branch))) {
         await updateTaskRepoStatus(pool, ctx.id, "no_changes");
         await addTaskEvent(pool, task.id, config.workerId, "no_changes", `${repoLabel} 本轮无改动`, {
           repoRole: ctx.role,
@@ -725,19 +768,29 @@ async function finalizeTaskMultiRepo(
         results.push({ ctx, sub: "no_changes" });
         continue;
       }
-      await runCommand("git", ["-C", subWt, "add", "--all"], { timeoutMs: 5 * 60_000 });
-      // --no-verify：自动化机械提交，跳过目标仓库的 commit-msg / pre-commit 钩子（见原 finalizeTask 注释）。
-      const commitMsg =
-        ctx.role === "main" && order.filter((c) => c.sub_status !== "skipped").length === 1
-          ? `ClaudeCenter task: ${task.title}`
-          : `ClaudeCenter task: ${task.title} (${ctx.role === "main" ? "main" : ctx.relative_path})`;
-      await runCommand("git", ["-C", subWt, "commit", "--no-verify", "-m", commitMsg], { timeoutMs: 5 * 60_000 });
-      await updateTaskRepoStatus(pool, ctx.id, "committed");
-      await addTaskEvent(pool, task.id, config.workerId, "committed", `${repoLabel} 已提交`, {
-        repoRole: ctx.role,
-        relativePath: ctx.relative_path,
-        workBranch: ctx.work_branch
-      });
+      if (dirty) {
+        await runCommand("git", ["-C", subWt, "add", "--all"], { timeoutMs: 5 * 60_000 });
+        // --no-verify：自动化机械提交，跳过目标仓库的 commit-msg / pre-commit 钩子（见原 finalizeTask 注释）。
+        const commitMsg =
+          ctx.role === "main" && order.filter((c) => c.sub_status !== "skipped").length === 1
+            ? `ClaudeCenter task: ${task.title}`
+            : `ClaudeCenter task: ${task.title} (${ctx.role === "main" ? "main" : ctx.relative_path})`;
+        await runCommand("git", ["-C", subWt, "commit", "--no-verify", "-m", commitMsg], { timeoutMs: 5 * 60_000 });
+        await updateTaskRepoStatus(pool, ctx.id, "committed");
+        await addTaskEvent(pool, task.id, config.workerId, "committed", `${repoLabel} 已提交`, {
+          repoRole: ctx.role,
+          relativePath: ctx.relative_path,
+          workBranch: ctx.work_branch
+        });
+      } else {
+        // 工作区干净但 work_branch 领先：复用上一轮已落的提交，无需再 commit，直接走 push + 建 PR。
+        await addTaskEvent(pool, task.id, config.workerId, "committed", `${repoLabel} 复用上一轮已提交改动`, {
+          repoRole: ctx.role,
+          relativePath: ctx.relative_path,
+          workBranch: ctx.work_branch,
+          reusedCommit: true
+        });
+      }
 
       if (task.submit_mode === "push") {
         const push = await runCommand(
@@ -767,6 +820,22 @@ async function finalizeTaskMultiRepo(
       if (ctx.pr_url) {
         await updateTaskRepoStatus(pool, ctx.id, "pr_created");
         results.push({ ctx, sub: "pr_created", prUrl: ctx.pr_url, reused: true });
+        continue;
+      }
+
+      // 幂等建 PR：首轮可能已 `gh pr create` 成功、却在落 pr_url 前失败（task_repos.pr_url 仍空）。
+      // 此时再 create 会因「a pull request already exists」整仓判失败。先查同 head/base 的已开 PR，命中即复用。
+      const existingPrUrl = await findExistingPrUrl(config, subWt, ctx.work_branch, ctx.target_branch);
+      if (existingPrUrl) {
+        await updateTaskRepoPrUrl(pool, ctx.id, existingPrUrl);
+        await updateTaskRepoStatus(pool, ctx.id, "pr_created");
+        await addTaskEvent(pool, task.id, config.workerId, "pr_created", `${repoLabel} 复用已存在 PR`, {
+          repoRole: ctx.role,
+          relativePath: ctx.relative_path,
+          prUrl: existingPrUrl,
+          reused: true
+        });
+        results.push({ ctx, sub: "pr_created", prUrl: existingPrUrl, reused: true });
         continue;
       }
 
