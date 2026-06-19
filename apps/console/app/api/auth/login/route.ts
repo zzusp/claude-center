@@ -25,10 +25,14 @@ export async function POST(request: NextRequest) {
     const response = NextResponse.json({
       user: { id: user.id, username: user.username, displayName: user.display_name, role: user.role }
     });
+    // Secure cookie 在 HTTP 下会被浏览器丢弃 → 登录后 cookie 不落地、回不到中控台。
+    // 跟随请求实际协议：HTTPS（含反代时的 x-forwarded-proto）开 Secure，HTTP 直接暴露时放宽。
+    const xfProto = request.headers.get("x-forwarded-proto");
+    const isHttps = xfProto ? xfProto.split(",")[0]?.trim() === "https" : new URL(request.url).protocol === "https:";
     response.cookies.set(SESSION_COOKIE, token, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: isHttps,
       path: "/",
       maxAge: SESSION_TTL_DAYS * 24 * 60 * 60
     });
