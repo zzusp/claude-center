@@ -455,19 +455,30 @@ CI 流程：
 
 ### 服务器首次准备（bootstrap）
 
-```bash
-# 在新服务器上 root 跑一次
-ssh ubuntu@115.159.161.47 'sudo -i'
-git clone https://github.com/zzusp/claude-center.git /opt/claude-center
-bash /opt/claude-center/scripts/server-bootstrap.sh        # 写 .env 模板（chmod 600）
-vim /opt/claude-center/.env                                 # 填 DATABASE_URL 等
-# 之后 push 第一个 cc-vX.Y.Z tag，CI 会自动接管后续部署
+国内服务器对 `github.com:443` 普遍不通，所以 bootstrap **不走 git clone**，而是从本地 SFTP/scp 推一份 tarball 上去：
+
+```powershell
+# 本地（能上 GitHub）打包 + 上传
+tar czf /tmp/cc-bootstrap.tar.gz `
+  --exclude=node_modules --exclude=.next --exclude=dist --exclude=.git `
+  --exclude=apps/worker/release --exclude=.env -C D:\project\claude-center .
+scp /tmp/cc-bootstrap.tar.gz ubuntu@115.159.161.47:/tmp/
 ```
 
-bootstrap 假设宿主机已装：
+```bash
+# 服务器（ubuntu 登录后 sudo -i 切 root）
+sudo BUNDLE=/tmp/cc-bootstrap.tar.gz bash /tmp/cc-bootstrap-extract/scripts/server-bootstrap.sh
+#   ↑ 或者先 tar xzf 拿到 server-bootstrap.sh 再跑也行
+vim /opt/claude-center/.env   # 填 DATABASE_URL（用 host.docker.internal:55432 走 host-gateway）
+```
 
-- docker engine + docker compose v2
-- PostgreSQL 监听 `:55432`（compose 内服务通过 `host.docker.internal` 或公网 IP 访问）
+后续不再需要 bootstrap——CI 跑 `cc-vX.Y.Z` tag 时 runner 自动 scp 新 tarball + 新版 deploy 脚本到服务器 `/tmp/`，覆盖式部署。
+
+bootstrap 与持续部署假设宿主机已装：
+
+- **docker engine + docker compose v2**（推荐用阿里云镜像源 apt 装：`download.docker.com` 国内多不通）
+- **Docker registry mirror**（`/etc/docker/daemon.json` 配腾讯云/daocloud，否则拉 Docker Hub 镜像会 timeout）
+- **PostgreSQL 监听 `:55432`**（compose 内服务通过 `host.docker.internal:host-gateway` 访问）
 
 ### GitHub Secrets 一览
 

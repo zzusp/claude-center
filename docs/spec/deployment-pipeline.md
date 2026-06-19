@@ -62,6 +62,12 @@ on:
 
 ## Web 端部署（`cc-v*` → `deploy-web.yml`）
 
+### 重要：服务器不依赖 GitHub 出站
+
+国内服务器对 `github.com:443` 普遍不通（实测 135s 超时）。所以**服务器不 git fetch tag**，而是 CI runner 在境外 checkout 后打 release bundle、scp 上来。`codeload.github.com` 也曾被探测过返回 404（GitHub 对源 IP 限制），不可靠。
+
+部署源唯一是「CI 推上来的 tarball」，路径是 `/tmp/cc-deploy-<APP_VERSION>.tar.gz`。服务器只装 docker + compose，不需要 git remote。
+
 ### Job 编排
 
 ```
@@ -76,13 +82,16 @@ build (ubuntu-latest)
   └─ outputs: app_version, release_notes
 
 deploy (needs: build, ubuntu-latest)
-  ├─ 准备 SSH（webfactory/ssh-agent 加 secrets.DEPLOY_SSH_KEY）
-  ├─ 把 known_hosts 写入（避免首次连接交互；用 secrets.DEPLOY_KNOWN_HOSTS）
-  ├─ ssh root@HOST 'bash -s' < scripts/deploy-on-server.sh APP_VERSION
+  ├─ actions/checkout @ tag（再次 checkout 一份，作为 release bundle 源）
+  ├─ 准备 SSH（webfactory/ssh-agent 加 secrets.DEPLOY_SSH_KEY）+ known_hosts
+  ├─ Pack release bundle:
+  │     tar czf /tmp/cc-deploy-X.Y.Z.tar.gz \
+  │       --exclude=node_modules --exclude=.git --exclude=.env --exclude=.next ...
+  ├─ scp bundle + scripts/deploy-on-server.sh → 服务器 /tmp/
+  ├─ ssh ubuntu@HOST 'sudo bash /tmp/deploy-on-server.sh X.Y.Z /tmp/cc-deploy-X.Y.Z.tar.gz'
   │     脚本里：
-  │       cd /opt/claude-center
-  │       git fetch --tags origin
-  │       git checkout cc-vX.Y.Z
+  │       tar xzf bundle → 临时区
+  │       rsync -a --delete --exclude=.env <stage>/ /opt/claude-center/
   │       export APP_VERSION=X.Y.Z
   │       docker compose build console relay
   │       docker compose up -d console relay
@@ -90,11 +99,13 @@ deploy (needs: build, ubuntu-latest)
   └─ 健康检查：
         curl -fsS http://HOST:3000/api/auth/me  → 401（未登录正常态）
         curl -fsS http://HOST:8787/healthz       → 200（如果对外）
-        失败 → 任务红、保留旧版本（docker compose up -d 不会停旧服务，回滚靠下一行）
+        失败 → 任务红、保留旧版本（docker compose up -d 不会停旧服务）
 
 release (needs: deploy)
   └─ gh release create cc-vX.Y.Z --notes "$RELEASE_NOTES" --target $GITHUB_SHA
 ```
+
+注意：deploy-on-server.sh 也由 CI scp 上来（写 `/tmp/deploy-on-server.sh`），不调 `/opt/claude-center` 里旧版本——避免「先 rsync 才能拿到新版脚本」的鸡生蛋。
 
 ### Secrets 一览（Web 端）
 
@@ -111,13 +122,14 @@ release (needs: deploy)
 ### 服务器目录结构（部署后）
 
 ```
-/opt/claude-center/                   # git checkout
-├── .env                              # ★ 不进 git，首次 bootstrap 时手工放
+/opt/claude-center/                   # CI rsync 覆盖；非 git 目录
+├── .env                              # ★ 不进 git，首次 bootstrap 时手工放（rsync --exclude 保留）
 ├── docker-compose.yml
 ├── apps/{console,relay}/Dockerfile
 └── ...
 
-/var/lib/claude-center/               # 数据卷预留位（postgres 是宿主机自建不走 compose volume，此目录暂空）
+/tmp/cc-deploy-X.Y.Z.tar.gz           # CI 每次 scp 上来的 release bundle（用完不主动清，docker prune 处理）
+/tmp/deploy-on-server.sh              # CI 每次 scp 上来的脚本（避免鸡生蛋）
 ```
 
 ### Console 版本展示

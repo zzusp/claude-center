@@ -77,6 +77,11 @@ jobs:
     timeout-minutes: 30
     environment: production
     steps:
+      - name: Checkout @ tag
+        # 在 runner 上 checkout 当前 tag，作为 release bundle 的来源。runner 在境外能直连 github.com，
+        # 服务器对 github.com:443 不通（国内常见），所以服务器不再 git fetch，而是接收 scp 上来的 tarball。
+        uses: actions/checkout@v4
+
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -88,6 +93,34 @@ jobs:
           echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
+      - name: Pack release bundle
+        env:
+          APP_VERSION: ${{ needs.build.outputs.app_version }}
+        run: |
+          set -e
+          # 把 runner 上 checkout 出的 tag 内容打包。排除 .git / node_modules / 产物。
+          # bundle 解压后的根目录直接是仓库内容（不带 wrapper 目录），与 deploy-on-server.sh 的解析一致。
+          tar czf /tmp/cc-deploy-${APP_VERSION}.tar.gz \
+            --exclude='node_modules' --exclude='.next' --exclude='dist' \
+            --exclude='.git' --exclude='apps/worker/release' --exclude='docs/tmp' \
+            --exclude='.env' --exclude='.env.*' \
+            .
+          ls -la /tmp/cc-deploy-${APP_VERSION}.tar.gz
+
+      - name: Upload bundle + deploy script
+        env:
+          APP_VERSION: ${{ needs.build.outputs.app_version }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -e
+          scp -P "${DEPLOY_PORT}" -o StrictHostKeyChecking=yes /tmp/cc-deploy-${APP_VERSION}.tar.gz \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/"
+          # deploy-on-server.sh 也走 /tmp/ 版本（避免「先 rsync 替换才能拿到新版脚本」的鸡生蛋）。
+          scp -P "${DEPLOY_PORT}" -o StrictHostKeyChecking=yes scripts/deploy-on-server.sh \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/deploy-on-server.sh"
+
       - name: Run deploy-on-server.sh
         env:
           APP_VERSION: ${{ needs.build.outputs.app_version }}
@@ -96,10 +129,8 @@ jobs:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
           set -e
-          # 把 deploy-on-server.sh 推上服务器并 sudo 运行（脚本路径写死 /opt/claude-center 下的副本，
-          # 这里走 git pull 后跑仓库里的脚本即可）。
           ssh -o StrictHostKeyChecking=yes -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "sudo APP_VERSION=${APP_VERSION} bash /opt/claude-center/scripts/deploy-on-server.sh ${APP_VERSION}"
+            "sudo bash /tmp/deploy-on-server.sh ${APP_VERSION} /tmp/cc-deploy-${APP_VERSION}.tar.gz"
 
       - name: External health check
         env:
