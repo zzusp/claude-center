@@ -399,3 +399,98 @@ Console 顶栏（侧边栏品牌区右侧）新增「铃铛」聚合 9 类消息
 - `worker_offline` 由 Console 后台调度器每 30s 顺带扫描一次（与现有定时发布提升共 tick）：`UPDATE workers SET status='offline' WHERE status='online' AND last_seen_at < now()-60s RETURNING ...` 用 `status` 字段做幂等门，避免反复发。重启上线再由 `registerWorker` 翻回 `online`。
 - `worker_online` 仅在 `offline→online` 翻转或首次注册时触发；纯心跳保持在线（仍 online）不发，避免每分钟一条。
 - 该能力依赖数据库迁移 `029_notifications.sql`（新增 `notifications` 表 + 收件箱 / 未读索引）。升级后务必先跑 `npm run db:migrate`。
+
+## 部署与发版
+
+两条 tag 路径互不相干，方案见 `docs/spec/deployment-pipeline.md`。
+
+| Tag 格式 | 触发 | 产物 |
+|---|---|---|
+| `cc-vX.Y.Z` | `.github/workflows/deploy-web.yml` | console + relay 部署到生产服务器（docker compose）+ `cc-vX.Y.Z` GitHub Release |
+| `worker-vX.Y.Z` | `.github/workflows/release-worker.yml` | windows/macos 安装包上传到 `worker-vX.Y.Z` GitHub Release Assets |
+
+### 发版前 ship 硬线
+
+1. **CHANGELOG 必须先写**：在 `CHANGELOG-console.md` / `CHANGELOG-worker.md` 加 `## [X.Y.Z] - YYYY-MM-DD` 节，写好本版本变更。空节 / 缺节 → CI 校验红、Release 不发。
+2. **本地实跑**：改了代码就要本地真起一遍（`npm run verify:console` 或本地装 worker 试用）。
+3. **clean tree + 在 main**：发版脚本会自检，未提交改动或不在 main 直接拒绝。
+
+### Web 端发版（console + relay）
+
+```powershell
+# 1) 先把 CHANGELOG-console.md 的 [X.Y.Z] 节写好并 commit/push
+# 2) 本地自检 + 打 tag 推送（会触发 CI）
+node scripts/deploy-web-trigger.mjs 0.2.0 --check    # 只跑自检
+node scripts/deploy-web-trigger.mjs 0.2.0            # 自检通过 → git tag cc-v0.2.0 → git push
+# 3) 跟踪 CI
+gh run watch
+```
+
+CI 流程：
+
+1. **build**：`npm ci` + `typecheck` + `build` + 抽取 CHANGELOG 节作为 release notes。
+2. **deploy**：SSH 上服务器 `sudo bash /opt/claude-center/scripts/deploy-on-server.sh X.Y.Z` —— git fetch tag、`docker compose build`、`up -d`、健康检查。
+3. **release**：`gh release create cc-vX.Y.Z` 把 release notes 贴上去。
+
+部署后访问 console 顶栏侧栏 brand 区下方会显示 `v0.2.0`，与 git tag 一致。
+
+### 桌面端发版（worker 安装包）
+
+```powershell
+# 1) 先把 CHANGELOG-worker.md 的 [X.Y.Z] 节写好并 commit/push
+# 2) 本地自检 + 打 tag 推送
+node scripts/release-worker-trigger.mjs 0.2.0 --check
+node scripts/release-worker-trigger.mjs 0.2.0
+# 3) 跟踪 CI（windows + macos 并行打包，约 10-15 分钟）
+gh run watch
+```
+
+CI 流程：
+
+1. **precheck**：校验 CHANGELOG-worker.md 有 `[X.Y.Z]` 节、抽取 release notes。
+2. **build matrix**（`windows-latest` + `macos-latest`）：把 `apps/worker/package.json` 的 version 改成 X.Y.Z，跑 `npm -w @claude-center/worker run dist:win` / `dist:mac` 跑 electron-builder。
+3. **release**：下载两个平台 artifact，`gh release create worker-vX.Y.Z` 把所有 `.exe` / `.dmg` 上传。
+
+**未做代码签名**：Windows 首次启动会弹 SmartScreen（点「更多信息 → 仍要运行」即可），macOS 首次启动需右键打开或 `xattr -d com.apple.quarantine` 绕 Gatekeeper。后续接入证书后会自动签名 + notarize。
+
+### 服务器首次准备（bootstrap）
+
+```bash
+# 在新服务器上 root 跑一次
+ssh ubuntu@115.159.161.47 'sudo -i'
+git clone https://github.com/zzusp/claude-center.git /opt/claude-center
+bash /opt/claude-center/scripts/server-bootstrap.sh        # 写 .env 模板（chmod 600）
+vim /opt/claude-center/.env                                 # 填 DATABASE_URL 等
+# 之后 push 第一个 cc-vX.Y.Z tag，CI 会自动接管后续部署
+```
+
+bootstrap 假设宿主机已装：
+
+- docker engine + docker compose v2
+- PostgreSQL 监听 `:55432`（compose 内服务通过 `host.docker.internal` 或公网 IP 访问）
+
+### GitHub Secrets 一览
+
+仓库 Settings → Secrets and variables → Actions：
+
+| Secret | 用途 |
+|---|---|
+| `DEPLOY_SSH_KEY` | SSH 私钥（用 key 不用密码）。对应公钥放服务器 `~ubuntu/.ssh/authorized_keys` |
+| `DEPLOY_HOST` | 服务器 IP / 域名 |
+| `DEPLOY_PORT` | SSH 端口（默认 22） |
+| `DEPLOY_USER` | SSH 用户（默认 ubuntu，脚本内 sudo 切 root） |
+| `DEPLOY_KNOWN_HOSTS` | `ssh-keyscan -p 22 <host>` 输出，防 CI 首连接问 host fingerprint |
+
+桌面端 release-worker.yml 不需要任何额外 secret（用内置 `GITHUB_TOKEN`）。
+
+### 回滚
+
+不自动化（避免幻觉回滚到坏版本）。手工：
+
+```bash
+ssh ubuntu@<host>
+sudo -i
+cd /opt/claude-center
+git tag -l 'cc-v*' --sort=-v:refname | head -5    # 看可回滚版本
+APP_VERSION=0.1.9 bash scripts/deploy-on-server.sh 0.1.9
+```

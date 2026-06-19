@@ -61,7 +61,10 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
           <span className="brand-mark">
             <Boxes size={18} />
           </span>
-          <span className="brand-text">ClaudeCenter</span>
+          <span className="brand-stack">
+            <span className="brand-text">ClaudeCenter</span>
+            <span className="brand-version">v{process.env.NEXT_PUBLIC_APP_VERSION || "dev"}</span>
+          </span>
         </div>
 
         <nav className="nav">

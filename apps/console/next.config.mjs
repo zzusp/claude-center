@@ -1,3 +1,8 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // 关闭 React StrictMode。Next 15 dev 默认开启 StrictMode，它会在「客户端导航（软切页）后挂载组件」时
@@ -6,6 +11,12 @@ const nextConfig = {
   // cleanup 的幂等轮询、不依赖 StrictMode 兜底排错，关闭后 dev 行为与生产一致、切页只发一遍。
   reactStrictMode: false,
   transpilePackages: ["@claude-center/db"],
+  // Docker 镜像用 standalone：next build 把运行时必需的 node_modules（含 monorepo workspace
+  // 链路的依赖）拷到 .next/standalone/，runtime 阶段只需要这一个目录 + .next/static + public，
+  // 镜像体积从 ~1.2GB 降到 ~250MB。outputFileTracingRoot 指向 monorepo 根，否则 trace 算法看不到
+  // workspaces 提升上去的依赖，会漏拷 @claude-center/db 与 pg。
+  output: "standalone",
+  outputFileTracingRoot: path.join(__dirname, "../.."),
   webpack: (config, { nextRuntime }) => {
     // instrumentation.ts 会被 Node.js 与 Edge 两个 runtime 分别编译。它静态依赖的 merge-check.ts 用
     // `node:` scheme 导入 child_process/fs 等内置模块，Edge 编译无法解析 `node:` scheme，直接抛

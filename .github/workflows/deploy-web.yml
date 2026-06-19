@@ -1,0 +1,147 @@
+# cc-vX.Y.Z tag → Web 端部署到生产服务器（docker compose build/up）→ 创建 GitHub Release。
+# 详细方案见 docs/spec/deployment-pipeline.md。
+name: deploy-web
+
+on:
+  push:
+    tags:
+      - 'cc-v[0-9]+.[0-9]+.[0-9]+'
+
+# 同一时间只允许一个 deploy-web 在跑（避免两个 tag 并发部署互踩 git checkout）。
+concurrency:
+  group: deploy-web
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      app_version: ${{ steps.parse.outputs.app_version }}
+      release_notes_path: ${{ steps.notes.outputs.path }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Parse tag → APP_VERSION
+        id: parse
+        run: |
+          ref="${GITHUB_REF#refs/tags/}"
+          version="${ref#cc-v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag $ref 不符合 cc-vX.Y.Z 格式"
+            exit 1
+          fi
+          echo "app_version=$version" >> "$GITHUB_OUTPUT"
+          echo "[parse] APP_VERSION=$version"
+
+      - name: Install deps
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build (smoke)
+        env:
+          NEXT_PUBLIC_APP_VERSION: ${{ steps.parse.outputs.app_version }}
+        run: |
+          npm -w @claude-center/db run build
+          npm -w @claude-center/relay-client run build
+          npm -w @claude-center/console run build
+          npm -w @claude-center/relay run build
+
+      - name: Extract release notes
+        id: notes
+        run: |
+          mkdir -p artifacts
+          node scripts/extract-changelog.mjs CHANGELOG-console.md "${{ steps.parse.outputs.app_version }}" > artifacts/notes.md
+          echo "path=artifacts/notes.md" >> "$GITHUB_OUTPUT"
+          echo "── release notes ──"; cat artifacts/notes.md; echo "───────────────"
+
+      - name: Upload notes artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: artifacts/notes.md
+          retention-days: 7
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Trust host
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Run deploy-on-server.sh
+        env:
+          APP_VERSION: ${{ needs.build.outputs.app_version }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -e
+          # 把 deploy-on-server.sh 推上服务器并 sudo 运行（脚本路径写死 /opt/claude-center 下的副本，
+          # 这里走 git pull 后跑仓库里的脚本即可）。
+          ssh -o StrictHostKeyChecking=yes -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "sudo APP_VERSION=${APP_VERSION} bash /opt/claude-center/scripts/deploy-on-server.sh ${APP_VERSION}"
+
+      - name: External health check
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          # 部署完后从 CI runner 再次走公网验证 console 可达（绕开服务器内 127.0.0.1）。
+          # 401 与 200 都算 OK；500 / 超时 / 拒连 → fail。
+          set -e
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://${DEPLOY_HOST}:3000/api/auth/me" || echo 000)
+            if [[ "$code" == "200" || "$code" == "401" ]]; then
+              echo "console health OK (HTTP $code)"
+              exit 0
+            fi
+            echo "尝试 $i：HTTP $code，5s 后重试"
+            sleep 5
+          done
+          echo "::error::console 外部健康检查未通过（最后 HTTP $code）"
+          exit 1
+
+  release:
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: artifacts
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file artifacts/notes.md \
+            --target "$GITHUB_SHA"

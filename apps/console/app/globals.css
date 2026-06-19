@@ -130,6 +130,18 @@ a:hover {
   letter-spacing: -0.01em;
 }
 
+.brand-stack {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.brand-version {
+  font-size: 11px;
+  color: var(--text-3, #999);
+  letter-spacing: 0;
+}
+
 .nav {
   display: flex;
   flex-direction: column;

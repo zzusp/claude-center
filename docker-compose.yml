@@ -1,0 +1,49 @@
+# ClaudeCenter Web 端部署 compose（console + relay）。postgres 走宿主机自建（端口 55432），
+# 不在 compose 内起。env_file 指向 /opt/claude-center/.env，由 ops 维护（不入 git）。
+#
+# 使用：
+#   docker compose build --build-arg APP_VERSION=$APP_VERSION console relay
+#   docker compose up -d console relay
+#
+# 健康检查 + 重启策略由 image HEALTHCHECK + restart: unless-stopped 兜底。
+services:
+  console:
+    image: claude-center-console:${APP_VERSION:-dev}
+    build:
+      context: .
+      dockerfile: apps/console/Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
+    container_name: claude-center-console
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 容器内通过 host-gateway 访问宿主机 postgres。pg 监听 127.0.0.1:55432 或 0.0.0.0:55432 均可通。
+      # 若 .env 里 DATABASE_URL 已用宿主机公网 IP（如 115.159.161.47:55432），直连公网走 eth0 也能通，
+      # 二选一无需改 .env；host-gateway 只是稳健兜底。
+      - NEXT_TELEMETRY_DISABLED=1
+    ports:
+      - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - relay
+
+  relay:
+    image: claude-center-relay:${APP_VERSION:-dev}
+    build:
+      context: .
+      dockerfile: apps/relay/Dockerfile
+    container_name: claude-center-relay
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - CLAUDE_CENTER_RELAY_HOST=0.0.0.0
+      - CLAUDE_CENTER_RELAY_PORT=8787
+    ports:
+      - "8787:8787"
+
+# 注意：APP_VERSION 由 compose 命令读宿主 env（部署脚本会 `export APP_VERSION=X.Y.Z` 后再 compose）。
+# 不设默认 `dev` 会让本地 `docker compose config` 报错，故留 :-dev 兜底，但生产部署应当总是显式传值。
