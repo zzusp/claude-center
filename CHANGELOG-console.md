@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-19
+
+### Fixed
+
+- 登录 cookie 在 HTTP 部署下被浏览器丢弃导致登录后回不到中控台：`/api/auth/login` 设置 `cc_session` cookie 时 `secure` 标志改为跟随请求实际协议判定（反代时优先看 `x-forwarded-proto`，否则看请求 URL protocol），HTTPS 仍开 Secure、HTTP 直接暴露时放宽。
+
 ## [0.2.0] - 2026-06-19
 
 ### Added
