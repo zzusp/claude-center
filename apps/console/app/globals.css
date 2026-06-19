@@ -137,9 +137,26 @@ a:hover {
 }
 
 .brand-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  align-self: flex-start;
+  margin-top: 1px;
   font-size: 11px;
   color: var(--text-3, #999);
   letter-spacing: 0;
+  transition: color 0.12s ease;
+}
+.brand-version:hover {
+  color: var(--running);
+  text-decoration: none;
+}
+.brand-version svg {
+  opacity: 0.55;
+  transition: opacity 0.12s ease;
+}
+.brand-version:hover svg {
+  opacity: 0.9;
 }
 
 .nav {

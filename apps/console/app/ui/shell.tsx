@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  Boxes, FolderGit2, LayoutGrid, ListTodo, LogOut, MessageSquare, Server, UserRound, Users
+  Boxes, ExternalLink, FolderGit2, LayoutGrid, ListTodo, LogOut, MessageSquare, Server, UserRound, Users
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -37,6 +37,13 @@ function pageMetaFor(pathname: string): { title: string; sub: string } {
   return { title: "ClaudeCenter", sub: "" };
 }
 
+// 顶栏 brand 区版本号。CI build 注入 NEXT_PUBLIC_APP_VERSION（如 0.2.0），本地为空时回退 dev。
+const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || "dev";
+// GitHub release 页：发布版按 cc-vX.Y.Z tag 直达对应发布说明，dev 退回 releases 列表页。
+const RELEASES_BASE = "https://github.com/zzusp/claude-center/releases";
+const RELEASE_URL =
+  APP_VERSION === "dev" ? RELEASES_BASE : `${RELEASES_BASE}/tag/cc-v${APP_VERSION}`;
+
 // 全站外壳：侧边栏 + 主内容区。系统级 header 钉在主内容区顶部，左侧承担页面标题/描述，
 // 右侧承担通知 + 当前用户信息（含登出）。各页面不再渲染 page-head。
 export default function Shell({ currentUser, children }: { currentUser: CurrentUser; children: ReactNode }) {
@@ -63,7 +70,16 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
           </span>
           <span className="brand-stack">
             <span className="brand-text">ClaudeCenter</span>
-            <span className="brand-version">v{process.env.NEXT_PUBLIC_APP_VERSION || "dev"}</span>
+            <a
+              className="brand-version"
+              href={RELEASE_URL}
+              target="_blank"
+              rel="noreferrer"
+              title={`查看 v${APP_VERSION} 版本发布说明`}
+            >
+              v{APP_VERSION}
+              <ExternalLink size={10} strokeWidth={2} />
+            </a>
           </span>
         </div>
 

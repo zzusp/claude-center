@@ -8,6 +8,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- console 顶栏 brand 区版本号优化为可点击链接：点击跳转 GitHub 版本发布页（发布版直达 `releases/tag/cc-vX.Y.Z` 对应发布说明，本地 dev 退回 `releases` 列表页），带外链图标 + hover 高亮提示可点击。
+
 ## [0.2.4] - 2026-06-19
 
 ### Added
