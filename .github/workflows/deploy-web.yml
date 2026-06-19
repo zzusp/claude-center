@@ -44,6 +44,17 @@ jobs:
       - name: Install deps
         run: npm ci --ignore-scripts
 
+      - name: Cache Next.js build
+        # Next 持久化 webpack 缓存落在 apps/console/.next/cache，命中可省下大头模块编译时间。
+        # source 变 → key 变 → restore-keys 退回到 lockfile-only key 做 partial 命中（webpack 复用未变模块）。
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/console/.next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('package-lock.json') }}-${{ hashFiles('apps/console/**/*.{js,jsx,ts,tsx,css,json}', 'packages/db/**/*.{ts,json}', 'packages/relay-client/**/*.{ts,json}') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('package-lock.json') }}-
+
       - name: Typecheck
         run: npm run typecheck
 
