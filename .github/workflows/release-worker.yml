@@ -78,8 +78,14 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
+      - name: Install deps
+        # 不能 --ignore-scripts：electron 需要 postinstall 拉 binary 才能 packager 跑起来。
+        # 必须在 patch worker version 之前跑——npm ci 严格比对 lock 与 workspace package.json 的 version 字段。
+        run: npm ci
+
       - name: Patch worker version
         # electron-builder 从 apps/worker/package.json 的 version 字段读，把 worker tag 注进去。
+        # patch 必须放在 npm ci 之后：electron-builder 是 build 阶段才读 version，与依赖解析无关。
         shell: bash
         run: |
           version="${{ needs.precheck.outputs.worker_version }}"
@@ -91,10 +97,6 @@ jobs:
             fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
           "
           echo "[patch] apps/worker/package.json version → $version"
-
-      - name: Install deps
-        # 不能 --ignore-scripts：electron 需要 postinstall 拉 binary 才能 packager 跑起来。
-        run: npm ci
 
       - name: Dist precheck
         run: npm -w @claude-center/worker run dist:check

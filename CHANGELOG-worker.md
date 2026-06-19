@@ -15,18 +15,24 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-19
+
 ### Added
 
-- electron-builder 标准化打包配置：win nsis + portable、mac dmg（x64 + arm64）。
-- CI matrix 跨平台并行打包，artifact 上传到 GitHub Release。
+- 桌面端首次走 CI 标准化打包，产物上传到 GitHub Release Assets：
+  - Windows：`ClaudeCenter-Worker-0.2.0-win-x64.exe`（NSIS 安装包） + `-win-x64-portable.exe`（免安装）
+  - macOS：`ClaudeCenter-Worker-0.2.0-mac-x64.dmg` + `-mac-arm64.dmg`
+- `apps/worker/package.json` 加 electron-builder 配置（`build` 字段）+ `dist:win` / `dist:mac` / `dist:check` scripts。
+- `.github/workflows/release-worker.yml`：`worker-v*` tag 触发 matrix（windows-latest + macos-latest）并行打包，CHANGELOG-worker.md 缺节 → CI 校验红。
+- `apps/worker/scripts/dist-check.mjs`：零副作用配置自检。
 
 ### Changed
 
-- _（空）_
+- worker package.json 的 `version` 字段由 CI runner 在 build 前 patch 成 tag 版本号（避免源码与发版版本漂移）。
 
 ### Fixed
 
-- _（空）_
+- release-worker.yml 调整步骤顺序：`npm ci` 必须在 `Patch worker version` 之前（npm ci 严格比对 lock 与 workspace package.json 版本）。
 
 ## [0.1.0] - 2026-06-19
 
