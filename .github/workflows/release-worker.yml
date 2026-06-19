@@ -80,22 +80,43 @@ jobs:
 
       - name: Install deps
         # 不能 --ignore-scripts：electron 需要 postinstall 拉 binary 才能 packager 跑起来。
-        # 必须在 patch worker version 之前跑——npm ci 严格比对 lock 与 workspace package.json 的 version 字段。
         run: npm ci
 
-      - name: Hoist electron into apps/worker/node_modules
-        # npm workspaces 默认把 electron hoist 到根 node_modules，electron-builder 只在 apps/worker/
-        # 下找 electron 找不到，报「Cannot compute electron version from installed node modules」。
-        # 显式在 worker 目录补装一份本地 electron（--no-save 不改 package.json/lock）。
+      - name: Build workspace deps + worker dist
+        # 先把 packages/{db,relay-client} 与 worker 编译成 dist——下一步 isolated install 要 dist 已存在。
         shell: bash
         run: |
+          npm -w @claude-center/db run build
+          npm -w @claude-center/relay-client run build
+          npm -w @claude-center/worker run build
+
+      - name: Build isolated node_modules in apps/worker
+        # electron-builder 拒绝引用 apps/worker/ 之外的文件（symlink 跟到 packages/db、根 node_modules/pg
+        # 都在 worker 外面）。临时把 @claude-center/* 改成 file: 协议，在 worker 下独立 npm install，
+        # 让 node_modules 是 isolated 真实目录而非 workspace symlink。
+        shell: bash
+        run: |
+          set -e
           cd apps/worker
-          npm install electron@33.3.1 --no-save --prefer-offline --no-audit --no-fund
+          cp package.json package.json.bak
+          node -e "
+            const fs = require('fs');
+            const j = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
+            j.dependencies['@claude-center/db'] = 'file:../../packages/db';
+            j.dependencies['@claude-center/relay-client'] = 'file:../../packages/relay-client';
+            fs.writeFileSync('package.json', JSON.stringify(j, null, 2) + '\n');
+          "
+          rm -rf node_modules
+          # --no-workspaces 让 npm 不当 workspace 处理；prod deps + electron(devDep) 全装本地真实拷贝。
+          npm install --prefer-offline --no-audit --no-fund --no-package-lock --no-workspaces
+          mv package.json.bak package.json
+          echo "== verify isolated install =="
+          ls node_modules/@claude-center/
+          ls -la node_modules/pg/package.json
           ls -la node_modules/electron/package.json
 
       - name: Patch worker version
         # electron-builder 从 apps/worker/package.json 的 version 字段读，把 worker tag 注进去。
-        # patch 必须放在 npm ci 之后：electron-builder 是 build 阶段才读 version，与依赖解析无关。
         shell: bash
         run: |
           version="${{ needs.precheck.outputs.worker_version }}"
@@ -110,13 +131,6 @@ jobs:
 
       - name: Dist precheck
         run: npm -w @claude-center/worker run dist:check
-
-      - name: Build workspace deps + worker dist
-        shell: bash
-        run: |
-          npm -w @claude-center/db run build
-          npm -w @claude-center/relay-client run build
-          npm -w @claude-center/worker run build
 
       - name: electron-builder
         shell: bash
