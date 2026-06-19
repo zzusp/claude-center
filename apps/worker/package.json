@@ -81,7 +81,8 @@
       "gatekeeperAssess": false
     },
     "dmg": {
-      "title": "ClaudeCenter Worker ${version}"
+      "title": "ClaudeCenter-Worker",
+      "writeUpdateInfo": false
     }
   }
 }
