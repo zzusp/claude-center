@@ -47,7 +47,9 @@ RUN addgroup -S app && adduser -S app -G app
 # standalone 目录结构：app/apps/console/server.js + app/node_modules（顶层）+ app/apps/console/.next/...
 COPY --from=build --chown=app:app /app/apps/console/.next/standalone ./
 COPY --from=build --chown=app:app /app/apps/console/.next/static     ./apps/console/.next/static
-COPY --from=build --chown=app:app /app/apps/console/public           ./apps/console/public
+# 注意：apps/console/public/ 在仓库里不存在（本项目无静态资产），故不拷。
+# 如果未来加了静态文件，新建 apps/console/public/ 并放进去，把这行解开：
+# COPY --from=build --chown=app:app /app/apps/console/public         ./apps/console/public
 USER app
 EXPOSE 3000
 # 健康检查走 /api/auth/me：未登录 401 也算服务在线（curl 默认对 4xx 不返回非零，加 --fail-with-body 在 ≥400 才红，
