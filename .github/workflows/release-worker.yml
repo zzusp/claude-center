@@ -64,11 +64,11 @@ jobs:
           - os: macos-latest
             script: dist:mac
             artifact_name: dist-mac
-            # 含 dmg、dmg.blockmap、latest-mac.yml
+            # 只含 dmg + blockmap；latest-mac.yml 是 electron auto-updater 元数据，本项目未用，
+            # build 配置 dmg.writeUpdateInfo: false 抑制生成。
             artifact_pattern: |
               apps/worker/release/*.dmg
               apps/worker/release/*.dmg.blockmap
-              apps/worker/release/latest-mac.yml
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
