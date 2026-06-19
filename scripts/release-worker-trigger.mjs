@@ -21,7 +21,14 @@ if (!version || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) {
 const tag = `worker-v${version}`;
 
 function sh(cmd, opts = {}) {
-  return execSync(cmd, { cwd: repoRoot, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], ...opts }).trim();
+  const useInherit = opts.stdio === "inherit";
+  const result = execSync(cmd, {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: useInherit ? "inherit" : ["ignore", "pipe", "pipe"],
+    ...opts
+  });
+  return useInherit ? "" : (result ?? "").trim();
 }
 
 const issues = [];

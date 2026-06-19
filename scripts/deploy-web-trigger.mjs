@@ -31,7 +31,15 @@ if (!version || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) {
 const tag = `cc-v${version}`;
 
 function sh(cmd, opts = {}) {
-  return execSync(cmd, { cwd: repoRoot, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], ...opts }).trim();
+  // stdio: "inherit" 时 execSync 返回 null（无 stdout 捕获），不能 .trim()。
+  const useInherit = opts.stdio === "inherit";
+  const result = execSync(cmd, {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: useInherit ? "inherit" : ["ignore", "pipe", "pipe"],
+    ...opts
+  });
+  return useInherit ? "" : (result ?? "").trim();
 }
 
 const issues = [];
