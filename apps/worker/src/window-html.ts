@@ -600,6 +600,22 @@ export function windowHtml(): string {
                     </div>
                   </div>
                 </section>
+
+                <section class="card">
+                  <div class="card-head"><h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><circle cx="12" cy="20" r="1"/></svg></span>SSE 中转服务</h2></div>
+                  <div class="card-body">
+                    <div class="term-form">
+                      <span class="term-label">中转服务地址（留空 = 禁用中转、纯数据库轮询，功能不降级）</span>
+                      <input id="relayUrl" class="path-input" placeholder="如 https://relay.your-org.com（留空则禁用）" />
+                      <span class="term-label">发布 token（CLAUDE_CENTER_RELAY_PUBLISH_TOKEN，向 Console 管理员索取）</span>
+                      <input id="relayPublishToken" class="path-input" placeholder="留空 = 不向中转发布事件" />
+                      <span class="term-label">订阅 token（CLAUDE_CENTER_RELAY_WORKER_TOKEN，向 Console 管理员索取）</span>
+                      <input id="relayWorkerToken" class="path-input" placeholder="留空 = 不订阅中转推送" />
+                      <button id="saveRelay" class="btn btn-sm btn-primary term-save" type="button">保存</button>
+                      <span class="term-hint" id="relayHint">保存后即时生效，无需重启；连通状态见顶栏。</span>
+                    </div>
+                  </div>
+                </section>
               </section>
 
               <!-- 日志 -->
@@ -1314,6 +1330,30 @@ export function windowHtml(): string {
             finally { btn.disabled = false; }
           });
 
+          // —— SSE 中转服务地址 / token 配置（持久化进 worker.json，覆盖 env，保存即时重连）——
+          async function loadRelay() {
+            let s = null;
+            try { s = await window.workerApi.getState(); } catch (e) {}
+            if (!s) return;
+            if (document.activeElement !== $("relayUrl")) $("relayUrl").value = s.relayUrl || "";
+            if (document.activeElement !== $("relayPublishToken")) $("relayPublishToken").value = s.relayPublishToken || "";
+            if (document.activeElement !== $("relayWorkerToken")) $("relayWorkerToken").value = s.relayWorkerToken || "";
+          }
+          $("saveRelay").addEventListener("click", async () => {
+            const btn = $("saveRelay"), hint = $("relayHint");
+            btn.disabled = true; hint.textContent = "保存中…";
+            try {
+              await window.workerApi.setRelayConfig({
+                url: $("relayUrl").value.trim(),
+                publishToken: $("relayPublishToken").value.trim(),
+                workerToken: $("relayWorkerToken").value.trim()
+              });
+              hint.textContent = $("relayUrl").value.trim() ? "已保存，即时生效（连通状态见顶栏）" : "已保存，中转已禁用（纯数据库轮询）";
+              await loadRelay();
+            } catch (e) { hint.textContent = "保存失败：" + (e && e.message ? e.message : e); }
+            finally { btn.disabled = false; }
+          });
+
           $("workingToggle").addEventListener("change", async (e) => { await window.workerApi.setWorking(e.target.checked); refresh(); });
           $("remoteToggle").addEventListener("change", async (e) => { await window.workerApi.setAllowRemote(e.target.checked); refresh(); });
           $("maxParallel").addEventListener("change", async (e) => {
@@ -1389,7 +1429,7 @@ export function windowHtml(): string {
           });
 
           showPage("overview");
-          refresh(); loadProjects(); reloadTasks(); reloadConversations(); loadTerminals();
+          refresh(); loadProjects(); reloadTasks(); reloadConversations(); loadTerminals(); loadRelay();
           setInterval(refresh, 15000);
           setInterval(loadProjects, 15000);
           setInterval(() => { if (!isEditingTask()) reloadTasks(); }, 4000);
