@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, Project, Worker } from "@claude-center/db";
-import { ArrowUp, Check, GitBranch, MessageSquare, Pencil, Server, Sparkles, Square, X } from "lucide-react";
+import { ArrowUp, Check, ChevronLeft, GitBranch, MessageSquare, Pencil, Server, Sparkles, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, postJson } from "./shared";
 import { SessionMetaBar } from "./session-meta";
@@ -17,11 +17,14 @@ const jsonlCache = new Map<string, { jsonl: string | null; etag: string | null }
 export function ChatThread({
   conversation,
   canCommand,
-  onChanged
+  onChanged,
+  onBack
 }: {
   conversation: Conversation;
   canCommand: boolean;
   onChanged: () => void;
+  // 移动端主从切换：返回会话列表（桌面端不渲染，由 CSS 隐藏）。
+  onBack?: () => void;
 }) {
   const [jsonl, setJsonl] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -197,6 +200,11 @@ export function ChatThread({
   return (
     <div className="chat-thread">
       <header className="chat-thread-head">
+        {onBack ? (
+          <button type="button" className="chat-back" onClick={onBack} aria-label="返回会话列表">
+            <ChevronLeft size={18} />
+          </button>
+        ) : null}
         <div className="chat-thread-title">
           {editingTitle ? (
             <div className="chat-title-edit">

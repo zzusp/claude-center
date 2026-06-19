@@ -1,11 +1,11 @@
 "use client";
 
 import {
-  Boxes, ExternalLink, FolderGit2, LayoutGrid, ListTodo, LogOut, MessageSquare, Server, UserRound, Users
+  Boxes, ExternalLink, FolderGit2, LayoutGrid, ListTodo, LogOut, Menu, MessageSquare, Server, UserRound, Users, X
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ROLE_LABEL, type CurrentUser } from "./dashboard-shared";
 import Notifications from "./notifications";
 
@@ -50,6 +50,11 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
   const canManageUsers = currentUser.permissions.includes("user.manage");
   const pathname = usePathname();
   const meta = pageMetaFor(pathname);
+  // 移动端导航抽屉开关：路由切换后自动关闭（点导航项即跳转 → 关抽屉）。
+  const [navOpen, setNavOpen] = useState(false);
+  useEffect(() => {
+    setNavOpen(false);
+  }, [pathname]);
 
   async function handleLogout() {
     try {
@@ -63,7 +68,13 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
 
   return (
     <div className="app">
-      <aside className="sidebar">
+      {/* 移动端抽屉遮罩：点击关闭导航抽屉（仅 ≤820 渲染可见，桌面 display:none）。 */}
+      <div
+        className={`sidebar-backdrop${navOpen ? " open" : ""}`}
+        onClick={() => setNavOpen(false)}
+        aria-hidden
+      />
+      <aside className={`sidebar${navOpen ? " open" : ""}`}>
         <div className="brand">
           <span className="brand-mark">
             <Boxes size={18} />
@@ -81,6 +92,15 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
               <ExternalLink size={10} strokeWidth={2} />
             </a>
           </span>
+          {/* 抽屉内关闭按钮：仅移动端显示。 */}
+          <button
+            type="button"
+            className="nav-close"
+            onClick={() => setNavOpen(false)}
+            aria-label="关闭导航"
+          >
+            <X size={18} />
+          </button>
         </div>
 
         <nav className="nav">
@@ -99,6 +119,16 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
 
       <main className="main">
         <header className="app-header">
+          {/* 移动端汉堡：打开导航抽屉（桌面 display:none）。 */}
+          <button
+            type="button"
+            className="nav-toggle"
+            onClick={() => setNavOpen(true)}
+            aria-label="打开导航"
+            aria-expanded={navOpen}
+          >
+            <Menu size={20} />
+          </button>
           <div className="app-header-titles">
             <h1 className="app-header-title">{meta.title}</h1>
             {meta.sub ? <span className="app-header-sub">{meta.sub}</span> : null}

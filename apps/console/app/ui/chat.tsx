@@ -109,7 +109,8 @@ export function ChatView({
   const active = conversations.find((c) => c.id === activeId) ?? null;
 
   return (
-    <div className="chat-wrap">
+    // data-active 驱动移动端主从切换：未选会话(0)显示列表、选中(1)显示消息线（桌面端忽略，双栏并排）。
+    <div className="chat-wrap" data-active={active ? "1" : "0"}>
       <aside className="chat-list">
         <div className="chat-list-head">
           <span>会话</span>
@@ -204,6 +205,7 @@ export function ChatView({
             conversation={active}
             canCommand={canCommand}
             onChanged={() => void loadList(filterQuery)}
+            onBack={() => setActiveId(null)}
           />
         ) : (
           <Empty icon={<MessageSquare size={28} />} text="选择左侧会话，或新建一个对话" />
