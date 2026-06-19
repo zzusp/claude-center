@@ -1590,22 +1590,57 @@ table.table {
   min-width: 0;
 }
 
-/* 能力标签组 */
-.cap-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+/* 能力自检列表（运行配置卡内，参考桌面端：每项 dot + 名称 + 版本 + 路径）。 */
+.ov-cap-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-1);
 }
 
-.cap-tag {
+.ov-cap-head {
+  font-size: 13px;
+  color: var(--text-4);
+  margin-bottom: 10px;
+}
+
+.cap-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.cap-item {
+  display: grid;
+  grid-template-columns: minmax(0, auto) 1fr;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 2px;
+  font-size: 13px;
+}
+
+.cap-name {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  background: var(--bg-2);
+  gap: 7px;
   color: var(--text-2);
-  border: 1px solid var(--border-1);
+}
+
+.cap-version {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+  text-align: right;
+}
+
+.cap-path {
+  grid-column: 1 / -1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 /* 基本信息卡内嵌套用量区 */
@@ -4634,13 +4669,8 @@ a.ds-v:hover {
 /* 套餐用量 full 卡：两个用量窗口并排（窄屏回退单列）。 */
 .usage-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-@media (max-width: 720px) {
-  .usage-grid {
-    grid-template-columns: 1fr;
-  }
+  grid-template-columns: 1fr;
+  gap: 12px;
 }
 
 /* 任务状态快速筛选 chip 行（worker 详情「任务」tab 的 card toolbar 内）：复用 .btn .btn-sm，仅排版。 */

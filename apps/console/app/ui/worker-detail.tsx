@@ -366,22 +366,32 @@ export default function WorkerDetailPage({
                   {worker.claude_pre_command ? <KvRow k="前置命令" v={worker.claude_pre_command} mono /> : null}
                   <KvRow k="创建于" v={fmtDateTime(worker.created_at)} />
                   <KvRow k="更新于" v={fmtDateTime(worker.updated_at)} />
-                  {Object.keys(worker.capabilities).length > 0 ? (
-                    <div className="kv-row">
-                      <span className="kv-k">能力</span>
-                      <div className="cap-tags">
-                        {Object.entries(worker.capabilities).map(([k, v]) => (
-                          <span key={k} className="cap-tag">
-                            {v === true ? k : `${k}: ${String(v)}`}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                  {Object.keys(worker.metadata).length > 0 ? (
-                    <KvRow k="元数据" v={JSON.stringify(worker.metadata)} mono />
-                  ) : null}
                 </div>
+                {Object.keys(worker.capabilities).length > 0 ? (
+                  <div className="ov-cap-section">
+                    <div className="ov-cap-head">能力</div>
+                    <div className="cap-list">
+                      {Object.entries(worker.capabilities).map(([name, raw]) => {
+                        const cap = (raw ?? {}) as { ok?: boolean; version?: string | null; path?: string | null };
+                        const ok = cap.ok === true;
+                        return (
+                          <div className="cap-item" key={name}>
+                            <span className="cap-name">
+                              <span className="dot" data-tone={ok ? "success" : "failed"} />
+                              {name}
+                            </span>
+                            <span className="cap-version">{ok ? cap.version || "—" : "未检出"}</span>
+                            {cap.path ? (
+                              <span className="cap-path" title={cap.path}>
+                                {cap.path}
+                              </span>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
               </OvCard>
 
               <OvCard icon={<Power size={15} />} title="工作状态">
