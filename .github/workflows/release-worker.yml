@@ -83,6 +83,16 @@ jobs:
         # 必须在 patch worker version 之前跑——npm ci 严格比对 lock 与 workspace package.json 的 version 字段。
         run: npm ci
 
+      - name: Hoist electron into apps/worker/node_modules
+        # npm workspaces 默认把 electron hoist 到根 node_modules，electron-builder 只在 apps/worker/
+        # 下找 electron 找不到，报「Cannot compute electron version from installed node modules」。
+        # 显式在 worker 目录补装一份本地 electron（--no-save 不改 package.json/lock）。
+        shell: bash
+        run: |
+          cd apps/worker
+          npm install electron@33.3.1 --no-save --prefer-offline --no-audit --no-fund
+          ls -la node_modules/electron/package.json
+
       - name: Patch worker version
         # electron-builder 从 apps/worker/package.json 的 version 字段读，把 worker tag 注进去。
         # patch 必须放在 npm ci 之后：electron-builder 是 build 阶段才读 version，与依赖解析无关。
