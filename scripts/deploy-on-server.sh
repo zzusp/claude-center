@@ -73,7 +73,7 @@ docker compose up -d console relay
 echo "[deploy] 等待 console 就绪（最多 60s）"
 last_code=000
 for i in $(seq 1 12); do
-  code=$(curl -s -o /dev/null -m 3 -w '%{http_code}' http://127.0.0.1:3000/api/auth/me || echo 000)
+  code=$(curl -s -o /dev/null -m 3 -w '%{http_code}' http://127.0.0.1:3000/api/dashboard || echo 000)
   last_code="$code"
   if [[ "$code" == "200" || "$code" == "401" ]]; then
     echo "[deploy] console OK (HTTP $code)"

@@ -140,7 +140,7 @@ jobs:
           # 401 与 200 都算 OK；500 / 超时 / 拒连 → fail。
           set -e
           for i in 1 2 3 4 5; do
-            code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://${DEPLOY_HOST}:3000/api/auth/me" || echo 000)
+            code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://${DEPLOY_HOST}:3000/api/dashboard" || echo 000)
             if [[ "$code" == "200" || "$code" == "401" ]]; then
               echo "console health OK (HTTP $code)"
               exit 0

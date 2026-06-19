@@ -65,8 +65,8 @@ RUN mkdir -p node_modules/@claude-center && \
 
 USER app
 EXPOSE 3000
-# 健康检查走 /api/auth/me：未登录 401 也算服务在线（curl 默认对 4xx 不返回非零，加 --fail-with-body 在 ≥400 才红，
+# 健康检查走 /api/dashboard：未登录 401 也算服务在线（curl 默认对 4xx 不返回非零，加 --fail-with-body 在 ≥400 才红，
 # 我们要的是「能响应即在线」→ 不加 --fail，只看 connect 是否成功）。
 HEALTHCHECK --interval=20s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -q -O /dev/null --tries=1 --timeout=3 "http://127.0.0.1:3000/api/auth/me" || exit 1
+  CMD wget -q -O /dev/null --tries=1 --timeout=3 "http://127.0.0.1:3000/api/dashboard" || exit 1
 CMD ["node", "apps/console/server.js"]

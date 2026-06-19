@@ -97,7 +97,7 @@ deploy (needs: build, ubuntu-latest)
   │       docker compose up -d console relay
   │       docker image prune -f       # 留最近 3 个
   └─ 健康检查：
-        curl -fsS http://HOST:3000/api/auth/me  → 401（未登录正常态）
+        curl -fsS http://HOST:3000/api/dashboard  → 401（未登录正常态）
         curl -fsS http://HOST:8787/healthz       → 200（如果对外）
         失败 → 任务红、保留旧版本（docker compose up -d 不会停旧服务）
 
@@ -244,7 +244,7 @@ monorepo + npm workspaces 下 electron-builder 的关键约束：
 `deploy-web.yml` 部署后：
 
 ```bash
-curl -fsS -m 5 "http://${DEPLOY_HOST}:3000/api/auth/me" -o /dev/null -w "%{http_code}\n"
+curl -fsS -m 5 "http://${DEPLOY_HOST}:3000/api/dashboard" -o /dev/null -w "%{http_code}\n"
 # 期待 401（未登录正常态）
 ```
 
