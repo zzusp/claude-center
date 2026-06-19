@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-06-19
+
+### Added
+
+- 新增可选环境变量 `CLAUDE_CENTER_RELAY_INTERNAL_URL`：console 服务端 publish + `/api/relay/connections` 代理时优先读这个，未配则回退 `CLAUDE_CENTER_RELAY_URL`。典型用法：docker compose 内 console 容器配 `http://relay:8787`（service name DNS 直连 relay 容器），省去出公网回环；浏览器/Worker 仍走 `RELAY_URL` 公网地址。
+
 ## [0.2.3] - 2026-06-19
 
 ### Internal

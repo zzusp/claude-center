@@ -10,7 +10,12 @@ function publisher(): Publisher | null {
   if (cached) {
     return cached;
   }
-  const url = process.env.CLAUDE_CENTER_RELAY_URL?.trim() || "";
+  // 容器/同机部署：INTERNAL_URL 走内网（如 docker compose service name http://relay:8787）省公网回环；
+  // 未配时回退 RELAY_URL（与浏览器/Worker 共用同一公网 URL，向后兼容、本地 dev 也只配一项）。
+  const url =
+    process.env.CLAUDE_CENTER_RELAY_INTERNAL_URL?.trim() ||
+    process.env.CLAUDE_CENTER_RELAY_URL?.trim() ||
+    "";
   const token = process.env.CLAUDE_CENTER_RELAY_PUBLISH_TOKEN?.trim() || "";
   if (!url || !token) {
     return null;

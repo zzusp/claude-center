@@ -176,7 +176,8 @@ interface RelayEvent {
 
 | 变量 | 用于 | 说明 |
 | --- | --- | --- |
-| `CLAUDE_CENTER_RELAY_URL` | Console + Worker | relay 基址（如 `http://127.0.0.1:8787`）；**留空=禁用 relay、纯轮询** |
+| `CLAUDE_CENTER_RELAY_URL` | Console + Worker | relay 基址（如 `http://127.0.0.1:8787`）；ticket 端点会**透传给浏览器**，必须用浏览器能直连的地址；**留空=禁用 relay、纯轮询** |
+| `CLAUDE_CENTER_RELAY_INTERNAL_URL` | Console（可选） | 服务端 publish + `/connections` 代理走内网时单独配（如 docker compose 内 `http://relay:8787` service name）；未配回退 `RELAY_URL`。**只在容器/同机部署省公网回环时用**，本地 dev 无需配。 |
 | `CLAUDE_CENTER_RELAY_PORT` | relay | 监听端口（默认 8787） |
 | `CLAUDE_CENTER_RELAY_SECRET` | Console + relay | 浏览器 ticket 签发/验签的对称密钥 |
 | `CLAUDE_CENTER_RELAY_PUBLISH_TOKEN` | Console + Worker + relay | 发布鉴权 token |

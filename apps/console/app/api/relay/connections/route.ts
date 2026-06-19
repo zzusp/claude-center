@@ -14,7 +14,11 @@ export async function GET() {
   if (gate.role !== "admin") {
     return NextResponse.json({ error: "仅管理员可查看" }, { status: 403 });
   }
-  const url = process.env.CLAUDE_CENTER_RELAY_URL?.trim() || "";
+  // 同 relay-publish.ts：服务端代理走 INTERNAL_URL 省公网回环，未配回退 RELAY_URL。
+  const url =
+    process.env.CLAUDE_CENTER_RELAY_INTERNAL_URL?.trim() ||
+    process.env.CLAUDE_CENTER_RELAY_URL?.trim() ||
+    "";
   const token = process.env.CLAUDE_CENTER_RELAY_PUBLISH_TOKEN?.trim() || "";
   if (!url || !token) {
     return NextResponse.json({ enabled: false });
