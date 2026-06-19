@@ -2,7 +2,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { ClaudeCenterWorker } from "./runner.js";
+import { fixMacGuiPath } from "./mac-path.js";
 import { windowHtml } from "./window-html.js";
+
+// macOS 从 Finder/Dock 启动时 PATH 是 launchd 最小集，git/gh/claude/node 解析不到 → 必须在任何 spawn
+// （含 worker 启动时的能力自检）之前补回登录 shell 的 PATH。非 darwin 为 no-op。
+fixMacGuiPath();
 
 let worker: ClaudeCenterWorker | null = null;
 
@@ -85,7 +90,22 @@ app.whenReady().then(async () => {
   createWindow();
 });
 
+// macOS 惯例：关闭窗口不退出应用——Worker 是后台执行节点，关窗后应继续跑心跳/领任务，点 Dock 图标重开窗口。
+// 其余平台保持原行为：关窗即退出 Worker。两条路径最终都经 before-quit 收口 worker（清定时器 / 断中转）。
 app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});
+
+// macOS：Dock 图标被点且当前无窗口时重建主窗口。
+app.on("activate", () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createWindow();
+  }
+});
+
+// 真正退出前收口 worker（Windows/Linux 由 window-all-closed→app.quit() 触发；macOS 由 Cmd+Q / 菜单退出触发）。
+app.on("before-quit", () => {
   void worker?.stop();
-  app.quit();
 });
