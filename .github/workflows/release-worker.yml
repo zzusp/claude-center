@@ -107,8 +107,10 @@ jobs:
             fs.writeFileSync('package.json', JSON.stringify(j, null, 2) + '\n');
           "
           rm -rf node_modules
-          # --no-workspaces 让 npm 不当 workspace 处理；prod deps + electron(devDep) 全装本地真实拷贝。
-          npm install --prefer-offline --no-audit --no-fund --no-package-lock --no-workspaces
+          # --no-workspaces 让 npm 不当 workspace 处理；
+          # --install-links=true 强制把 file: 协议依赖 deep copy 而非 symlink（默认 symlink 会让 electron-builder
+          # 又跟到 apps/worker 外触发原错；deep copy 后 packages/db 与其 transitive 全装在 worker 下）。
+          npm install --prefer-offline --no-audit --no-fund --no-package-lock --no-workspaces --install-links=true
           mv package.json.bak package.json
           echo "== verify isolated install =="
           ls node_modules/@claude-center/
