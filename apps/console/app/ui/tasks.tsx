@@ -420,7 +420,8 @@ function TasksView({
                 />
               ) : (
                 <div className="table-wrap scroll-rows-10">
-                  <table className="table table-static">
+                  {/* table-cards：移动端(≤820)把每行 reflow 成卡片，td 的 data-label 作字段名。 */}
+                  <table className="table table-static table-cards">
                     <thead>
                       <tr>
                         {canCreateTask ? (
@@ -466,7 +467,7 @@ function TasksView({
                         return (
                           <tr key={task.id} data-selected={checked || undefined}>
                             {canCreateTask ? (
-                              <td onClick={(event) => event.stopPropagation()}>
+                              <td className="td-select" onClick={(event) => event.stopPropagation()}>
                                 <input
                                   type="checkbox"
                                   aria-label={`选择任务 ${task.title}`}
@@ -475,25 +476,25 @@ function TasksView({
                                 />
                               </td>
                             ) : null}
-                            <td>
+                            <td className="mb-title">
                               <span className="t-title">{task.title}</span>
                             </td>
-                            <td className="t-meta">
+                            <td className="t-meta" data-label="项目">
                               <span className="cell-icon">
                                 <FolderGit2 size={13} className="ico" />
                                 {task.project_name ?? task.project_id}
                               </span>
                             </td>
-                            <td className="mono">
+                            <td className="mono" data-label="分支">
                               <span className="cell-icon">
                                 <GitBranch size={13} className="ico" />
                                 {task.work_branch}
                               </span>
                             </td>
-                            <td>
+                            <td data-label="状态">
                               <StatusBadge status={task.status} />
                             </td>
-                            <td className="t-meta">
+                            <td className="t-meta" data-label="Worker">
                               {task.worker_name ? (
                                 <span className="cell-icon">
                                   <Cpu size={13} className="ico" />
@@ -503,7 +504,7 @@ function TasksView({
                                 <span className="cell-muted">—</span>
                               )}
                             </td>
-                            <td className="t-meta">
+                            <td className="t-meta" data-label="PR">
                               {task.pr_url ? (
                                 <a className="cell-icon" href={task.pr_url} target="_blank" rel="noreferrer">
                                   <GitPullRequest size={13} className="ico" />
@@ -513,9 +514,9 @@ function TasksView({
                                 <span className="cell-muted">—</span>
                               )}
                             </td>
-                            <td className="t-num">{fmtDurationMs(computeTaskDurationMs(task))}</td>
-                            <td className="t-num">{fmtDateTime(task.created_at)}</td>
-                            <td className="t-right">
+                            <td className="t-num" data-label="耗时">{fmtDurationMs(computeTaskDurationMs(task))}</td>
+                            <td className="t-num" data-label="创建">{fmtDateTime(task.created_at)}</td>
+                            <td className="t-right" data-label="操作">
                               <div className="row-actions">
                                 <button
                                   type="button"

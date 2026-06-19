@@ -239,6 +239,14 @@ a:hover {
   color: var(--text-4);
 }
 
+/* 移动端导航/主从原子：桌面隐藏，由 @media (max-width: 820px) 抽屉规则启用。 */
+.nav-toggle,
+.nav-close,
+.sidebar-backdrop,
+.chat-back {
+  display: none;
+}
+
 /* ---------------- Main ---------------- */
 
 .main {
@@ -2807,37 +2815,238 @@ tr[data-selected] {
   }
 }
 
+/* ============================================================
+   移动端（≤820px）：侧滑抽屉导航 + 列表卡片化 + 对话主从切换
+   见 docs/spec/mobile-responsive-console.md
+   ============================================================ */
 @media (max-width: 820px) {
-  .app {
-    flex-direction: column;
-  }
+  /* ---- 导航：桌面固定侧栏 → 左侧滑出抽屉 ---- */
   .sidebar {
-    width: 100%;
-    height: auto;
-    position: static;
-    flex-direction: row;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 60;
+    width: 248px;
+    max-width: 84vw;
+    height: 100dvh;
+    flex-direction: column;
+    overflow-y: auto;
+    background: var(--surface-1);
+    border-right: 1px solid var(--border);
+    box-shadow: 4px 0 28px rgba(0, 0, 0, 0.16);
+    transform: translateX(-100%);
+    transition: transform 240ms ease;
+  }
+  .sidebar.open {
+    transform: translateX(0);
+  }
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgba(28, 25, 23, 0.4);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 200ms ease;
+  }
+  .sidebar-backdrop.open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .nav-toggle {
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 10px 12px;
-    overflow-x: auto;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    margin-right: 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
+    color: var(--text-2);
+    cursor: pointer;
   }
-  .brand {
-    padding: 0 8px 0 4px;
+  .nav-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    margin-left: auto;
+    border: none;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--text-3);
+    cursor: pointer;
   }
-  .nav {
-    flex-direction: row;
-    flex: 1;
+  .nav-close:hover {
+    background: var(--surface-2);
+    color: var(--text-1);
   }
-  .nav-section {
+
+  /* ---- 顶部 header 收紧：隐藏副标题/用户文字，保留头像与通知 ---- */
+  .app-header {
+    padding: 12px 14px;
+    gap: 10px;
+  }
+  .app-header-sub {
     display: none;
   }
-  .nav-label {
+  .app-header-title {
+    font-size: 19px;
+  }
+  .app-header-actions {
+    gap: 8px;
+  }
+  .user-meta {
     display: none;
   }
-  .topbar,
   .view {
-    padding-left: 18px;
-    padding-right: 18px;
+    padding: 8px 14px 40px;
+    gap: 18px;
+  }
+  .notif-panel {
+    width: min(360px, calc(100vw - 24px));
+  }
+
+  /* ---- 列表页右侧统计卡片：手机端省略（用户明确） ---- */
+  .page-grid-aside {
+    display: none;
+  }
+
+  /* ---- 任务列表表格 → 卡片（仅 .table-cards） ---- */
+  /* 解除固定 10 行滚动，改页面自然滚动 */
+  .table-wrap.scroll-rows-10 {
+    max-height: none;
+    overflow: visible;
+  }
+  .table-cards thead {
+    display: none;
+  }
+  .table-cards,
+  .table-cards tbody,
+  .table-cards tbody tr,
+  .table-cards tbody td {
+    display: block;
+    width: 100%;
+  }
+  .table-cards tbody tr {
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+    padding: 10px 14px;
+    margin: 0 0 10px;
+  }
+  .table-cards tbody td {
+    height: auto;
+    border: none;
+    padding: 5px 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    vertical-align: middle;
+  }
+  .table-cards tbody td::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--text-4);
+  }
+  /* 勾选列移动端隐藏（批量为桌面能力；手机用每卡片操作按钮处理单条） */
+  .table-cards tbody td.td-select {
+    display: none;
+  }
+  /* 标题作卡片头：整行、可换行、不截断、无字段名 */
+  .table-cards tbody td.mb-title {
+    display: block;
+    padding: 2px 0 8px;
+    margin-bottom: 6px;
+    border-bottom: 1px dashed var(--border);
+  }
+  .table-cards tbody td.mb-title::before {
+    display: none;
+  }
+  .table-cards tbody td.mb-title .t-title {
+    display: block;
+    max-width: none;
+    white-space: normal;
+    font-size: 14.5px;
+    line-height: 1.45;
+  }
+  /* 值侧允许收缩省略，避免长分支名撑破卡片 */
+  .table-cards tbody td > .cell-icon {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .table-cards tbody td.t-right {
+    padding-top: 8px;
+  }
+  .table-cards tbody td.t-right .row-actions {
+    justify-content: flex-end;
+  }
+
+  /* ---- 工具栏：搜索独占一行，筛选项换行 ---- */
+  .toolbar .tb-search {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  /* ---- 列表卡片网格：单列 ---- */
+  .worker-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* ---- 任务详情：收紧内边距 ---- */
+  .detail-page-body {
+    padding: 16px 14px 40px;
+    gap: 16px;
+  }
+  .detail-page-title {
+    font-size: 20px;
+  }
+  .detail-hero {
+    padding: 16px;
+  }
+
+  /* ---- 实时对话：双栏 → 单列主从切换 ---- */
+  .chat-wrap {
+    grid-template-columns: 1fr;
+    height: calc(100dvh - 132px);
+    min-height: 0;
+  }
+  .chat-wrap[data-active="1"] .chat-list {
+    display: none;
+  }
+  .chat-wrap[data-active="0"] .chat-main {
+    display: none;
+  }
+  /* 返回按钮 + 标题左聚拢，"结束对话" 推到右侧 */
+  .chat-thread-title {
+    flex: 1;
+    min-width: 0;
+  }
+  .chat-back {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    margin-right: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
+    color: var(--text-2);
+    cursor: pointer;
   }
 }
 
