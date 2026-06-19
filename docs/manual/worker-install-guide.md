@@ -194,7 +194,7 @@ Worker 需要知道**本机哪个文件夹对应 Console 哪个项目**才能在
 意思是 `git` / `claude` / `gh` 其中之一不在 PATH。
 
 - 把对应命令装上，确保终端跑 `git --version` / `claude --version` / `gh --version` 三条都有输出
-- macOS 用 brew 装的命令路径在 `/opt/homebrew/bin/`（Apple Silicon）或 `/usr/local/bin/`（Intel）；如果从 Finder 启动 Worker 它继承的 PATH 可能不含 brew，从终端 `open -a "ClaudeCenter Worker"` 启动可解决，或在系统设置改 launchd `PATH`
+- macOS 用 brew 装的命令路径在 `/opt/homebrew/bin/`（Apple Silicon）或 `/usr/local/bin/`（Intel）。从 Finder/Dock 启动的 GUI 应用默认继承的是 launchd 最小 PATH（不含 brew），Worker 启动时会自动拉一次登录 shell（`$SHELL`）的 PATH 合并进来——所以正常情况下从 Finder 双击启动也能找到这些命令。若仍红点：确认 `claude --version` 在你的**登录 shell**（终端新开一个窗口）里有输出（即 PATH 写在 `.zprofile`/`.zshrc` 而非别处）；兜底仍可从终端 `open -a "ClaudeCenter Worker"` 启动，或用 `CLAUDE_CODE_COMMAND` / `GH_COMMAND` 指向可执行文件全路径
 
 ### Console 列表里看不到本机 Worker
 

@@ -1304,6 +1304,10 @@ export function windowHtml(): string {
             opts.push('<option value="' + MANUAL_TERMINAL + '">手动输入路径…</option>');
             opts.unshift('<option value="">默认（' + (s && s.os && s.os.platform === "win32" ? "powershell" : "直接运行 claude") + "）</option>");
             sel.innerHTML = opts.join("");
+            // 前置命令示例按平台给：非 Windows（mac/Linux）用 bash 语法，避免误导用户写 PowerShell。
+            if (s && s.os && s.os.platform !== "win32") {
+              $("preCommand").placeholder = "留空 = 不执行；示例(bash)：export HTTPS_PROXY=http://127.0.0.1:10808";
+            }
             const path = $("terminalPath");
             const matched = (list || []).some((t) => t.command === cur);
             if (!cur) { sel.value = ""; path.value = ""; path.readOnly = true; }
