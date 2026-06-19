@@ -166,8 +166,10 @@ jobs:
     needs: [build, deploy]
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      contents: write
+    # 之前写 `contents: write` 在 cc-v0.2.0 时有效，cc-v0.2.1/0.2.2 同 yaml + repo
+    # default_workflow_permissions=write 仍 403。private repo 上 job-level permissions
+    # 块的解释可能与 cc-v0.2.0 时已不一致；改用 write-all 给全 scope 兜底。
+    permissions: write-all
     steps:
       - name: Checkout
         uses: actions/checkout@v4

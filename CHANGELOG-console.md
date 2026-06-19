@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-06-19
+
+### Internal
+
+- CI release job 改用 `permissions: write-all`：cc-v0.2.1/0.2.2 时 `permissions: contents: write` 在 private repo 上仍 403（同 yaml 在 cc-v0.2.0 时成功），改为 write-all 兜底全 scope。无运行时改动。
+
 ## [0.2.2] - 2026-06-19
 
 ### Internal
