@@ -75,7 +75,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: production
+    environment: DEPLOY
     steps:
       - name: Checkout @ tag
         # 在 runner 上 checkout 当前 tag，作为 release bundle 的来源。runner 在境外能直连 github.com，
