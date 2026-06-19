@@ -8,18 +8,25 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-19
+
 ### Added
 
 - 部署流水线：`cc-v*` tag 触发 GitHub Actions，自动 build + SSH 部署到生产服务器，docker compose 起 console/relay。
 - console 顶栏 brand 区显示当前版本号（CI build 时注入 `NEXT_PUBLIC_APP_VERSION`）。
+- `apps/console/Dockerfile`（Next standalone 多阶段）+ `apps/relay/Dockerfile`（精简 alpine runtime）+ `docker-compose.yml`（host-gateway 走宿主机 pg）。
+- `scripts/deploy-on-server.sh` / `server-bootstrap.sh` / `deploy-web-trigger.mjs` / `extract-changelog.mjs`：服务器部署与本地发版自检脚本。
+- `CHANGELOG-console.md` / `CHANGELOG-worker.md`：发版硬约束（缺 `## [X.Y.Z]` 节 CI 校验红）。
+- 完整方案 `docs/spec/deployment-pipeline.md`。
 
 ### Changed
 
-- `apps/console/next.config.mjs` 启用 `output: "standalone"`，减小 Docker 镜像体积。
+- `apps/console/next.config.mjs` 启用 `output: "standalone"` + `outputFileTracingRoot`，适配 monorepo workspace。
+- 部署架构：CI runner 在境外 checkout tag → `tar czf` → scp 到服务器 `/tmp/` → 解压 rsync 覆盖 `/opt/claude-center/`（保留 `.env`）。服务器**不再 git fetch**——国内服务器对 `github.com:443` 普遍不通。
 
 ### Fixed
 
-- _（空）_
+- _（首版部署流水线，无 fix）_
 
 ## [0.1.0] - 2026-06-19
 
