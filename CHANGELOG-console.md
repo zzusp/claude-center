@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-19
+
+### Internal
+
+- CI 验证版本：跑一次完整 `deploy-web` 流水线，验证 (a) repo Workflow permissions 改为 write 后 release job 不再 403、(b) build job 新增的 `apps/console/.next/cache` 缓存步骤首次落盘可用。无运行时改动。
+
 ## [0.2.1] - 2026-06-19
 
 ### Fixed
