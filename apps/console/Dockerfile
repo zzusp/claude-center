@@ -50,6 +50,19 @@ COPY --from=build --chown=app:app /app/apps/console/.next/static     ./apps/cons
 # 注意：apps/console/public/ 在仓库里不存在（本项目无静态资产），故不拷。
 # 如果未来加了静态文件，新建 apps/console/public/ 并放进去，把这行解开：
 # COPY --from=build --chown=app:app /app/apps/console/public         ./apps/console/public
+
+# instrumentation-node.ts 用 `webpackIgnore: true` 动态 import "@claude-center/db"（避免编译期把
+# pg 的 fs 拖进 edge runtime），Next standalone trace 看不到这条 import 所以不拷 workspace 包。
+# 手动补 packages 目录 + 重建 workspace symlink，让运行时 require resolve 找得到。
+COPY --from=build --chown=app:app /app/packages/db/dist                   ./packages/db/dist
+COPY --from=build --chown=app:app /app/packages/db/package.json           ./packages/db/package.json
+COPY --from=build --chown=app:app /app/packages/relay-client/dist         ./packages/relay-client/dist
+COPY --from=build --chown=app:app /app/packages/relay-client/package.json ./packages/relay-client/package.json
+RUN mkdir -p node_modules/@claude-center && \
+    ln -s ../../packages/db           node_modules/@claude-center/db && \
+    ln -s ../../packages/relay-client node_modules/@claude-center/relay-client && \
+    chown -R app:app node_modules/@claude-center packages
+
 USER app
 EXPOSE 3000
 # 健康检查走 /api/auth/me：未登录 401 也算服务在线（curl 默认对 4xx 不返回非零，加 --fail-with-body 在 ≥400 才红，
