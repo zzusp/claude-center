@@ -79,7 +79,12 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
 async function canRead(
   userId: string,
   role: string,
-  meta: { owner_user_id: string | null; task_id: string | null; task_comment_id: string | null }
+  meta: {
+    owner_user_id: string | null;
+    task_id: string | null;
+    task_comment_id: string | null;
+    conversation_message_id: string | null;
+  }
 ): Promise<boolean> {
   if (role === "admin") {
     return true;
@@ -99,6 +104,14 @@ async function canRead(
     }
     return await userHasProject(getPool(), userId, await projectOfTask(taskId));
   }
+  // 已绑定对话消息：经消息所属 conversation 反查 project。
+  if (meta.conversation_message_id) {
+    const projectId = await projectOfConversationMessage(meta.conversation_message_id);
+    if (!projectId) {
+      return false;
+    }
+    return await userHasProject(getPool(), userId, projectId);
+  }
   // 未绑定且非上传者本人 → 拒。
   return false;
 }
@@ -113,4 +126,16 @@ async function taskOfComment(commentId: string): Promise<string | null> {
     [commentId]
   );
   return result.rows[0]?.task_id ?? null;
+}
+
+async function projectOfConversationMessage(messageId: string): Promise<string | null> {
+  const result = await getPool().query<{ project_id: string }>(
+    `SELECT c.project_id
+       FROM conversation_messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE m.id = $1
+      LIMIT 1`,
+    [messageId]
+  );
+  return result.rows[0]?.project_id ?? null;
 }

@@ -10,6 +10,7 @@ import {
   getPool,
   getTaskLocalPath,
   listAttachmentsForTask,
+  listConversationTurnAttachments,
   listPendingReplyAttachments,
   listProjectRepos,
   listTaskRepos,
@@ -1299,8 +1300,10 @@ export async function executeConversationTurn(
     if (!localPath) {
       throw new Error(`No local path linked for conversation ${conv.id}`);
     }
-    const prompt = await getConversationPrompt(pool, conv.id);
-    if (!prompt) {
+    // 本轮提问 + 本轮 user 消息绑定的附件（锚点与 getConversationPrompt 对齐）。允许「仅附件、无文本」。
+    const basePrompt = (await getConversationPrompt(pool, conv.id)) ?? "";
+    const turnAttachments = await listConversationTurnAttachments(pool, conv.id);
+    if (!basePrompt.trim() && turnAttachments.length === 0) {
       throw new Error(`Conversation ${conv.id} has no pending user prompt`);
     }
 
@@ -1312,6 +1315,12 @@ export async function executeConversationTurn(
       baseRef: `origin/${conv.branch}`,
       fresh: !existsSync(path.join(wtPath, ".git"))
     });
+
+    // 附件落盘到 worktree 内 .claude-attachments/（同 sha256 跨轮跳过），并把相对路径附到 prompt 末尾，
+    // 让本地 claude -p 读到（图片走 vision）。与 task / comment 同一套 §Worker 流程（task-attachments.md）。
+    await materializeAttachments(wtPath, turnAttachments);
+    const prompt =
+      turnAttachments.length > 0 ? [basePrompt, ...attachmentSection(turnAttachments)].join("\n") : basePrompt;
 
     // 执行期间周期 + 终态把 session .jsonl 同步到 conversation_sessions；进程退出后强制最终同步一次保证完整。
     const stopSync = startConversationSessionSync(conv.id, wtPath);

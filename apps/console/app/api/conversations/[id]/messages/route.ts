@@ -1,13 +1,21 @@
-import { addConversationMessage, getConversation, getPool, getWorker } from "@claude-center/db";
+import {
+  addConversationMessage,
+  bindAttachmentsToConversationMessage,
+  getConversation,
+  getPool,
+  getWorker
+} from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "../../../../lib/session";
 import { requireProjectScope } from "../../../../lib/access";
 import { errorResponse, badRequest } from "../../../../lib/api";
 import { projectChannel, publishRelay } from "../../../../lib/relay-publish";
+import { MAX_ATTACHMENTS_PER_OWNER } from "../../../../lib/attachment-config";
 
 export const dynamic = "force-dynamic";
 
 // 发用户消息：插一条 role='user'，worker 下一轮 tick 据「最后一条是 user」认领并流式应答。
+// 可附带 attachmentIds：把已上传的附件绑定到本条消息，Worker 落地到只读 worktree 让 Claude 读（图片走 vision）。
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requirePermission("command.create");
   if (gate instanceof NextResponse) {
@@ -16,9 +24,17 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const user = gate;
   try {
     const { id } = await params;
-    const body = (await request.json()) as { body?: string };
-    if (!body.body?.trim()) {
+    const payload = (await request.json()) as { body?: string; attachmentIds?: string[] };
+    // 允许「仅附件、空文本」——粘一张截图直接发问是常见用法，body 留空字符串入库。
+    const text = payload.body?.trim() ?? "";
+    const attachmentIds = Array.isArray(payload.attachmentIds)
+      ? payload.attachmentIds.filter((v): v is string => typeof v === "string")
+      : [];
+    if (!text && attachmentIds.length === 0) {
       return badRequest("消息内容必填");
+    }
+    if (attachmentIds.length > MAX_ATTACHMENTS_PER_OWNER) {
+      return badRequest(`附件数量超过上限（${MAX_ATTACHMENTS_PER_OWNER}）`);
     }
     const conversation = await getConversation(getPool(), id);
     if (!conversation) {
@@ -36,7 +52,25 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!worker || worker.status !== "online") {
       return badRequest("worker 当前离线，无法继续对话");
     }
-    const message = await addConversationMessage(getPool(), { conversationId: id, role: "user", body: body.body.trim() });
+    // 消息 + 附件绑定原子化：绑定失败要把消息也回滚（否则会看到空消息 + 孤儿附件）。
+    const client = await getPool().connect();
+    let message;
+    try {
+      await client.query("BEGIN");
+      message = await addConversationMessage(client, { conversationId: id, role: "user", body: text });
+      await bindAttachmentsToConversationMessage(
+        client,
+        message.id,
+        attachmentIds,
+        user.role === "admin" ? null : user.id
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
     // 落库后即推到项目频道：会话的 worker 已关联该项目（创建时校验），会收到并立即认领应答。
     publishRelay({
       channel: projectChannel(conversation.project_id),
