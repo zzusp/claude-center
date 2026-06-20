@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, screen, shell } from "electron";
 import { ClaudeCenterWorker } from "./runner.js";
 import { fixMacGuiPath } from "./mac-path.js";
 import { windowHtml } from "./window-html.js";
@@ -14,11 +14,16 @@ let worker: ClaudeCenterWorker | null = null;
 function createWindow(): void {
   // preload 与资产同样按 ../ 解析到 apps/worker 下，dist(electron) 与 src(tsx) 两种运行方式路径一致。
   const appDir = path.dirname(fileURLToPath(import.meta.url));
+  // 默认尺寸按「可用工作区」(已扣菜单栏/Dock)的 90% 取、再用设计上限 1320×900 封顶：小屏(13"/12"，
+  // 工作区约 1280×705)留四周留白、不再贴边铺满；大屏(16"/外接屏)仍开到设计的 1320×900。center 让钳小后居中。
+  // minHeight 由 720 降到 640：720>705 时窗口会被 minHeight 顶到 720、底部 15px 压在 Dock 后且用户无法缩小修复。
+  const { width: workW, height: workH } = screen.getPrimaryDisplay().workAreaSize;
   const window = new BrowserWindow({
-    width: 1320,
-    height: 900,
+    width: Math.min(1320, Math.round(workW * 0.9)),
+    height: Math.min(900, Math.round(workH * 0.9)),
     minWidth: 1080,
-    minHeight: 720,
+    minHeight: 640,
+    center: true,
     backgroundColor: "#f8f8f6",
     title: "ClaudeCenter Worker",
     webPreferences: {
