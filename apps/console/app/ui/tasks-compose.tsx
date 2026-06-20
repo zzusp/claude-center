@@ -1,9 +1,9 @@
 "use client";
 
 import type { AttachmentMeta, Project, ProjectRepo, Task } from "@claude-center/db";
-import { Send } from "lucide-react";
+import { Check, Send } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
-import { basenameFromRepoUrl, metaOf } from "./shared";
+import { basenameFromRepoUrl, StatusBadge } from "./shared";
 import { DateTimePicker, FormModal, Select } from "./controls";
 import { AttachmentUploader } from "./attachment-uploader";
 
@@ -45,8 +45,12 @@ function ComposeTaskForm({
   const [subStates, setSubStates] = useState<SubStatesMap>({});
   // 附件 staging：上传后挂在表单上、submit 时随 attachmentIds 提交。
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
+  // 前置任务选择：受控 id 列表，DependencyPicker 渲染 hidden dependsOn 输入供 FormData 取值。
+  const [dependsOn, setDependsOn] = useState<string[]>([]);
 
   useEffect(() => {
+    // 切换项目后清空前置选择（前置任务限同项目，跨项目的旧选择已失效）。
+    setDependsOn([]);
     if (!selectedProjectId) {
       setBranches([]);
       setBranchState("idle");
@@ -116,205 +120,193 @@ function ComposeTaskForm({
   );
 
   return (
-    <form className="form form-compose" onSubmit={onSubmit}>
-      {/* 宽弹窗下左右分栏：左列「内容」（基本信息 + 调度），右列「配置」（分支 + 执行选项）；窄屏回落单列。 */}
-      <div className="compose-cols">
-        <div className="compose-col">
-          <section className="form-section">
-            <h3 className="form-section-title">基本信息</h3>
-            <div className="form-row">
-              <div className="field">
-                <label className="field-label">项目</label>
-                <Select
-                  value={selectedProjectId}
-                  onChange={onSelectProject}
-                  options={projects.map((project) => ({ value: project.id, label: project.name }))}
-                  placeholder="选择项目"
-                  ariaLabel="项目"
-                />
-              </div>
-              <div className="field">
-                <label className="field-label">标题</label>
-                <input name="title" placeholder="修复登录按钮状态" required />
-              </div>
-            </div>
-            <div className="field">
-              <label className="field-label">
-                目标 <span className="field-hint">可粘贴 / 拖拽 / 选择图片或文件作为补充资料</span>
-              </label>
-              <textarea
-                name="description"
-                rows={6}
-                placeholder="写清期望行为、约束和验收方式"
-                required
-              />
-              <AttachmentUploader attachments={attachments} onChange={setAttachments} />
-              {/* attachmentIds 序列化：父 handler 通过 FormData.get('attachmentIds') 取 JSON */}
-              <input
-                type="hidden"
-                name="attachmentIds"
-                value={JSON.stringify(attachments.map((a) => a.id))}
-                readOnly
-              />
-            </div>
-          </section>
-
-          <section className="form-section">
-            <h3 className="form-section-title">调度</h3>
-            <div className="field">
-              <label className="field-label">
-                定时发布 <span className="field-hint">留空即建为草稿手动发布；设定时间则到点自动进入待处理队列</span>
-              </label>
-              <DateTimePicker name="scheduledAt" minNow placeholder="留空为草稿；选择时间则定时发布" />
-            </div>
-            <div className="field">
-              <label className="field-label">
-                前置任务 <span className="field-hint">同项目，可多选；前置全部「已完成 / 已合并」后才会被领取</span>
-              </label>
-              {dependencyCandidates.length === 0 ? (
-                <span className="field-hint">该项目暂无可作为前置的任务</span>
-              ) : (
-                <select name="dependsOn" multiple size={Math.min(6, Math.max(3, dependencyCandidates.length))}>
-                  {dependencyCandidates.map((task) => (
-                    <option key={task.id} value={task.id}>
-                      [{metaOf(task.status).label}] {task.title}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-          </section>
+    <form className="form" onSubmit={onSubmit}>
+      <section className="form-section">
+        <h3 className="form-section-title">基本信息</h3>
+        <div className="form-row">
+          <div className="field">
+            <label className="field-label">项目</label>
+            <Select
+              value={selectedProjectId}
+              onChange={onSelectProject}
+              options={projects.map((project) => ({ value: project.id, label: project.name }))}
+              placeholder="选择项目"
+              ariaLabel="项目"
+            />
+          </div>
+          <div className="field">
+            <label className="field-label">标题</label>
+            <input name="title" placeholder="修复登录按钮状态" required />
+          </div>
         </div>
-
-        <div className="compose-col">
-          <section className="form-section">
-            <h3 className="form-section-title">
-              分支配置
-              <span className="form-section-title-hint">{branchHint}</span>
-            </h3>
-            <div className="form-row">
-              <div className="field">
-                <label className="field-label">签出分支</label>
-                <input name="baseBranch" list="cc-branch-list" defaultValue="main" placeholder="main" />
-              </div>
-              <div className="field">
-                <label className="field-label">
-                  PR 目标分支 <span className="field-hint">留空同签出分支</span>
-                </label>
-                <input name="targetBranch" list="cc-branch-list" placeholder="main" />
-              </div>
-            </div>
-            <datalist id="cc-branch-list">
-              {branches.map((branch) => (
-                <option key={branch} value={branch} />
-              ))}
-            </datalist>
-            <div className="form-row">
-              <div className="field">
-                <label className="field-label">
-                  工作分支 <span className="field-hint">留空自动生成</span>
-                </label>
-                <input name="workBranch" placeholder="cc/..." />
-              </div>
-              <div className="field">
-                <label className="field-label">提交模式</label>
-                <Select
-                  name="submitMode"
-                  value={submitMode}
-                  onChange={(value) => setSubmitMode(value as "pr" | "push")}
-                  options={[
-                    { value: "pr", label: "创建 PR" },
-                    { value: "push", label: "直接提交推送" }
-                  ]}
-                  ariaLabel="提交模式"
-                />
-              </div>
-            </div>
-          </section>
-
-          <section className="form-section">
-            <h3 className="form-section-title">执行选项</h3>
-            <div className="form-row">
-              {submitMode === "pr" ? (
-                <div className="field">
-                  <label className="field-label">
-                    自动合并 PR <span className="field-hint">由 Worker 自动 gh pr merge --merge</span>
-                  </label>
-                  <Select
-                    name="autoMergePr"
-                    value={autoMergePr ? "on" : "off"}
-                    onChange={(value) => setAutoMergePr(value === "on")}
-                    options={[
-                      { value: "off", label: "否 · 仅创建 PR" },
-                      { value: "on", label: "是 · 创建后自动合并" }
-                    ]}
-                    ariaLabel="自动合并 PR"
-                  />
-                </div>
-              ) : (
-                <div className="field" aria-hidden />
-              )}
-              <div className="field">
-                <label className="field-label">
-                  执行模型 <span className="field-hint">默认跟随 Worker</span>
-                </label>
-                <Select
-                  name="model"
-                  value={model}
-                  onChange={(value) => setModel(value as "default" | "opus" | "sonnet" | "haiku")}
-                  options={[
-                    { value: "default", label: "默认 · 跟随 Worker" },
-                    { value: "opus", label: "Opus" },
-                    { value: "sonnet", label: "Sonnet" },
-                    { value: "haiku", label: "Haiku" }
-                  ]}
-                  ariaLabel="执行模型"
-                />
-              </div>
-            </div>
-            <div className="form-row">
-              <div className="field">
-                <label className="field-label">
-                  自动回复（兜底） <span className="field-hint">真停了：零改动→失败，有改动→自动续接最多 2 轮</span>
-                </label>
-                <Select
-                  name="autoReply"
-                  value={autoReply ? "on" : "off"}
-                  onChange={(value) => setAutoReply(value === "on")}
-                  options={[
-                    { value: "off", label: "否 · 等人回复（默认）" },
-                    { value: "on", label: "是 · 无人值守，按规则兜底" }
-                  ]}
-                  ariaLabel="自动回复"
-                />
-              </div>
-              <div className="field">
-                <label className="field-label">
-                  动态工作流 <span className="field-hint">Claude Code Workflows：多代理编排</span>
-                </label>
-                <Select
-                  name="dynamicWorkflow"
-                  value={dynamicWorkflow ? "on" : "off"}
-                  onChange={(value) => setDynamicWorkflow(value === "on")}
-                  options={[
-                    { value: "off", label: "否 · 关闭（默认）" },
-                    { value: "on", label: "是 · 启用动态工作流" }
-                  ]}
-                  ariaLabel="动态工作流"
-                />
-              </div>
-            </div>
-            {autoReply ? (
-              <div className="field">
-                <label className="field-label">
-                  决策预案 <span className="field-hint">可选，喂给 Claude 当决策偏好（如"优先最小改动，跳过测试"）</span>
-                </label>
-                <textarea name="autoDecisionHints" rows={2} placeholder="prefer minimal change; keep existing patterns; ..." />
-              </div>
-            ) : null}
-          </section>
+        <div className="field">
+          <label className="field-label">
+            目标 <span className="field-hint">可粘贴 / 拖拽 / 选择图片或文件作为补充资料</span>
+          </label>
+          <textarea
+            name="description"
+            rows={6}
+            placeholder="写清期望行为、约束和验收方式"
+            required
+          />
+          <AttachmentUploader attachments={attachments} onChange={setAttachments} />
+          {/* attachmentIds 序列化：父 handler 通过 FormData.get('attachmentIds') 取 JSON */}
+          <input
+            type="hidden"
+            name="attachmentIds"
+            value={JSON.stringify(attachments.map((a) => a.id))}
+            readOnly
+          />
         </div>
-      </div>
+      </section>
+
+      <section className="form-section">
+        <h3 className="form-section-title">
+          分支配置
+          <span className="form-section-title-hint">{branchHint}</span>
+        </h3>
+        <div className="form-row">
+          <div className="field">
+            <label className="field-label">签出分支</label>
+            <input name="baseBranch" list="cc-branch-list" defaultValue="main" placeholder="main" />
+          </div>
+          <div className="field">
+            <label className="field-label">
+              PR 目标分支 <span className="field-hint">留空同签出分支</span>
+            </label>
+            <input name="targetBranch" list="cc-branch-list" placeholder="main" />
+          </div>
+        </div>
+        <datalist id="cc-branch-list">
+          {branches.map((branch) => (
+            <option key={branch} value={branch} />
+          ))}
+        </datalist>
+        <div className="form-row">
+          <div className="field">
+            <label className="field-label">
+              工作分支 <span className="field-hint">留空自动生成</span>
+            </label>
+            <input name="workBranch" placeholder="cc/..." />
+          </div>
+          <div className="field">
+            <label className="field-label">提交模式</label>
+            <Select
+              name="submitMode"
+              value={submitMode}
+              onChange={(value) => setSubmitMode(value as "pr" | "push")}
+              options={[
+                { value: "pr", label: "创建 PR" },
+                { value: "push", label: "直接提交推送" }
+              ]}
+              ariaLabel="提交模式"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="form-section">
+        <h3 className="form-section-title">执行选项</h3>
+        <div className="form-row">
+          {submitMode === "pr" ? (
+            <div className="field">
+              <label className="field-label">
+                自动合并 PR <span className="field-hint">由 Worker 自动 gh pr merge --merge</span>
+              </label>
+              <Select
+                name="autoMergePr"
+                value={autoMergePr ? "on" : "off"}
+                onChange={(value) => setAutoMergePr(value === "on")}
+                options={[
+                  { value: "off", label: "否 · 仅创建 PR" },
+                  { value: "on", label: "是 · 创建后自动合并" }
+                ]}
+                ariaLabel="自动合并 PR"
+              />
+            </div>
+          ) : (
+            <div className="field" aria-hidden />
+          )}
+          <div className="field">
+            <label className="field-label">
+              执行模型 <span className="field-hint">默认跟随 Worker</span>
+            </label>
+            <Select
+              name="model"
+              value={model}
+              onChange={(value) => setModel(value as "default" | "opus" | "sonnet" | "haiku")}
+              options={[
+                { value: "default", label: "默认 · 跟随 Worker" },
+                { value: "opus", label: "Opus" },
+                { value: "sonnet", label: "Sonnet" },
+                { value: "haiku", label: "Haiku" }
+              ]}
+              ariaLabel="执行模型"
+            />
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="field">
+            <label className="field-label">
+              自动回复（兜底） <span className="field-hint">真停了：零改动→失败，有改动→自动续接最多 2 轮</span>
+            </label>
+            <Select
+              name="autoReply"
+              value={autoReply ? "on" : "off"}
+              onChange={(value) => setAutoReply(value === "on")}
+              options={[
+                { value: "off", label: "否 · 等人回复（默认）" },
+                { value: "on", label: "是 · 无人值守，按规则兜底" }
+              ]}
+              ariaLabel="自动回复"
+            />
+          </div>
+          <div className="field">
+            <label className="field-label">
+              动态工作流 <span className="field-hint">Claude Code Workflows：多代理编排</span>
+            </label>
+            <Select
+              name="dynamicWorkflow"
+              value={dynamicWorkflow ? "on" : "off"}
+              onChange={(value) => setDynamicWorkflow(value === "on")}
+              options={[
+                { value: "off", label: "否 · 关闭（默认）" },
+                { value: "on", label: "是 · 启用动态工作流" }
+              ]}
+              ariaLabel="动态工作流"
+            />
+          </div>
+        </div>
+        {autoReply ? (
+          <div className="field">
+            <label className="field-label">
+              决策预案 <span className="field-hint">可选，喂给 Claude 当决策偏好（如"优先最小改动，跳过测试"）</span>
+            </label>
+            <textarea name="autoDecisionHints" rows={2} placeholder="prefer minimal change; keep existing patterns; ..." />
+          </div>
+        ) : null}
+      </section>
+
+      <section className="form-section">
+        <h3 className="form-section-title">调度</h3>
+        <div className="field">
+          <label className="field-label">
+            定时发布 <span className="field-hint">留空即建为草稿手动发布；设定时间则到点自动进入待处理队列</span>
+          </label>
+          <DateTimePicker name="scheduledAt" minNow placeholder="留空为草稿；选择时间则定时发布" />
+        </div>
+        <div className="field">
+          <label className="field-label">
+            前置任务 <span className="field-hint">同项目，可多选；前置全部「已完成 / 已合并」后才会被领取</span>
+          </label>
+          <DependencyPicker
+            candidates={dependencyCandidates}
+            value={dependsOn}
+            onChange={setDependsOn}
+            name="dependsOn"
+          />
+        </div>
+      </section>
 
       {subRepos.length > 0 ? (
         <section className="form-section">
@@ -336,6 +328,56 @@ function ComposeTaskForm({
         </button>
       </div>
     </form>
+  );
+}
+
+// 前置任务多选器：替代原生 <select multiple>（样式不可控、交互生硬）。受控 value(id 列表) + onChange。
+// 每个候选任务一行：勾选态 + 状态徽标 + 标题，整行可点；带 name 时为每个选中项渲染隐藏 input 供 FormData 取值。
+// 新建表单走 name（FormData.getAll），编辑表单不传 name、改由父组件读 value 拼进 JSON body。
+export function DependencyPicker({
+  candidates,
+  value,
+  onChange,
+  name,
+  emptyHint = "该项目暂无可作为前置的任务"
+}: {
+  candidates: Task[];
+  value: string[];
+  onChange: (ids: string[]) => void;
+  name?: string;
+  emptyHint?: string;
+}) {
+  if (candidates.length === 0) {
+    return <span className="field-hint">{emptyHint}</span>;
+  }
+  function toggle(id: string) {
+    onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
+  }
+  return (
+    <div className="dep-picker">
+      {name ? value.map((id) => <input key={id} type="hidden" name={name} value={id} readOnly />) : null}
+      <div className="dep-picker-list">
+        {candidates.map((task) => {
+          const checked = value.includes(task.id);
+          return (
+            <button
+              type="button"
+              key={task.id}
+              className={`dep-option${checked ? " selected" : ""}`}
+              onClick={() => toggle(task.id)}
+              aria-pressed={checked}
+            >
+              <span className={`dep-check${checked ? " on" : ""}`} aria-hidden>
+                {checked ? <Check size={11} strokeWidth={3} /> : null}
+              </span>
+              <StatusBadge status={task.status} />
+              <span className="dep-option-title">{task.title}</span>
+            </button>
+          );
+        })}
+      </div>
+      {value.length > 0 ? <span className="field-hint">已选 {value.length} 个前置任务</span> : null}
+    </div>
   );
 }
 
@@ -454,7 +496,7 @@ export function TaskComposeModal({
 }) {
   // 仅用于「发布任务」表单；任务详情已迁至独立路由页 /tasks/[id]。
   return (
-    <FormModal open={open && canCreateTask} title="发布任务" size="xl" onClose={onClose}>
+    <FormModal open={open && canCreateTask} title="发布任务" onClose={onClose}>
       {canCreateTask ? (
         <ComposeTaskForm
           projects={projects}

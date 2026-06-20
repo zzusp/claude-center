@@ -1822,35 +1822,6 @@ select:focus {
   gap: 12px;
 }
 
-/* 发布任务表单（modal-xl）：左右分栏，缩短纵向长度。每列各自堆叠 form-section，
-   section 间沿用既有 border-top 分隔；窄屏（≤820px）回落单列。 */
-.compose-cols {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0 28px;
-  align-items: start;
-}
-
-.compose-col {
-  display: grid;
-  gap: 0;
-  align-content: start;
-  /* 防止长内容（datalist 选项 / 长分支名）撑破网格列。 */
-  min-width: 0;
-}
-
-@media (max-width: 820px) {
-  .compose-cols {
-    grid-template-columns: 1fr;
-  }
-  /* 单列堆叠时，右列首个 section 恢复分隔线（两列并排时它是列首、本不需要）。 */
-  .compose-col:nth-child(2) .form-section:first-child {
-    padding-top: 14px;
-    margin-top: 14px;
-    border-top: 1px dashed var(--border);
-  }
-}
-
 .btn {
   display: inline-flex;
   align-items: center;
@@ -2230,6 +2201,24 @@ tr[data-selected] {
   animation: cc-select-in 120ms ease;
 }
 
+/* 向上展开变体：贴近容器底部（如 DateTimePicker 时间行）时改向上，避免被弹窗滚动区裁切。 */
+.cc-select-panel.up {
+  top: auto;
+  bottom: calc(100% + 6px);
+  animation: cc-select-in-up 120ms ease;
+}
+
+@keyframes cc-select-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @keyframes cc-select-in {
   from {
     opacity: 0;
@@ -2525,6 +2514,92 @@ tr[data-selected] {
   text-transform: none;
 }
 
+/* ---------------- Dependency picker（前置任务多选） ----------------
+   替代原生 <select multiple>：一个带边框的可滚动列表，每行=勾选态 + 状态徽标 + 标题，整行可点。 */
+.dep-picker {
+  display: grid;
+  gap: 6px;
+}
+
+.dep-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 196px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+}
+
+.dep-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+
+.dep-option:hover {
+  background: var(--surface-2);
+}
+
+.dep-option.selected {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text-1);
+}
+
+.dep-check {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface-1);
+  color: var(--surface-1);
+  transition: background 100ms ease, border-color 100ms ease;
+}
+
+.dep-check.on {
+  background: var(--running);
+  border-color: var(--running);
+}
+
+.dep-option-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.dep-picker-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.dep-picker-list::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 8px;
+  border: 2px solid var(--surface-1);
+}
+
+.dep-picker-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;
@@ -2735,12 +2810,39 @@ tr[data-selected] {
   margin-right: 2px;
 }
 
-.dt-time-select {
+/* 时间行的小时/分钟用自定义 Select（cc-select），这里压成紧凑尺寸 + 等宽数字，向上展开（direction="up"）。 */
+.dt-time-row .cc-select.dt-time-cc {
   width: auto;
-  padding: 4px 6px;
+}
+
+.dt-time-row .dt-time-cc .cc-select-trigger {
+  min-height: 30px;
+  width: 58px;
+  padding: 4px 8px;
+  gap: 4px;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
-  border-radius: var(--r-sm);
+}
+
+.dt-time-row .dt-time-cc .cc-select-caret {
+  width: 13px;
+  height: 13px;
+}
+
+.dt-time-row .dt-time-cc .cc-select-panel {
+  min-width: 58px;
+  max-height: 196px;
+}
+
+.dt-time-row .dt-time-cc .cc-select-option {
+  justify-content: center;
+  padding: 6px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 选中态用加粗 + trigger 回显表达，窄下拉里不再塞勾选图标（58px 放不下两位数 + 勾）。 */
+.dt-time-row .dt-time-cc .cc-select-check {
+  display: none;
 }
 
 .dt-time-colon {
