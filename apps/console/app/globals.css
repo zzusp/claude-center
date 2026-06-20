@@ -5433,10 +5433,16 @@ a.ds-v:hover {
   }
 
   /* 实时对话：双栏 → 单列主从切换（未选显示会话列表、选中显示消息线，各自铺满列宽）。 */
+  /* 内容显示卡片加高：偏移量由 132px 减半至 66px，使消息区可用高度提升约 66px。 */
   .chat-wrap {
     grid-template-columns: 1fr;
-    height: calc(100dvh - 132px);
+    height: calc(100dvh - 66px);
     min-height: 0;
+  }
+  /* view 底部留白退让：chat-wrap 加高后原 40px bottom-padding 会导致页面下溢；
+     用 :has() 仅对含 chat-wrap 的视图页去除底部留白，其余页面不受影响。 */
+  .view:has(.chat-wrap) {
+    padding-bottom: 0;
   }
   .chat-wrap[data-active="1"] .chat-list {
     display: none;
