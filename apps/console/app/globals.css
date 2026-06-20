@@ -3016,38 +3016,6 @@ tr[data-selected] {
   .detail-hero {
     padding: 16px;
   }
-
-  /* ---- 实时对话：双栏 → 单列主从切换 ---- */
-  .chat-wrap {
-    grid-template-columns: 1fr;
-    height: calc(100dvh - 132px);
-    min-height: 0;
-  }
-  .chat-wrap[data-active="1"] .chat-list {
-    display: none;
-  }
-  .chat-wrap[data-active="0"] .chat-main {
-    display: none;
-  }
-  /* 返回按钮 + 标题左聚拢，"结束对话" 推到右侧 */
-  .chat-thread-title {
-    flex: 1;
-    min-width: 0;
-  }
-  .chat-back {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    flex-shrink: 0;
-    margin-right: 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    background: var(--surface-1);
-    color: var(--text-2);
-    cursor: pointer;
-  }
 }
 
 @media (max-width: 560px) {
@@ -5295,6 +5263,53 @@ a.ds-v:hover {
   .ov-scroll-region .ov-body {
     position: static;
     max-height: 360px;
+  }
+}
+
+/* ============================================================
+   移动端（≤820px）卡片同宽补充：必须排在 .detail-tab-content /
+   .chat-wrap 的基础定义之后才生效——同优先级下后写者胜，靠前的
+   820 块会被这两个基础规则反盖。统一让各 Tab / 实时对话卡片与
+   任务详情「概览」Tab 同宽（铺满 .view 内容区，左右各 14px 留白）。
+   见 docs/spec/mobile-responsive-console.md
+   ============================================================ */
+@media (max-width: 820px) {
+  /* 非「概览」Tab 去掉左右内补白，卡片与「概览」Tab 同宽（概览靠 --wide 已去补白）。 */
+  .detail-tab-content {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  /* 实时对话：双栏 → 单列主从切换（未选显示会话列表、选中显示消息线，各自铺满列宽）。 */
+  .chat-wrap {
+    grid-template-columns: 1fr;
+    height: calc(100dvh - 132px);
+    min-height: 0;
+  }
+  .chat-wrap[data-active="1"] .chat-list {
+    display: none;
+  }
+  .chat-wrap[data-active="0"] .chat-main {
+    display: none;
+  }
+  /* 返回按钮 + 标题左聚拢，"结束对话" 推到右侧。 */
+  .chat-thread-title {
+    flex: 1;
+    min-width: 0;
+  }
+  .chat-back {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    margin-right: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
+    color: var(--text-2);
+    cursor: pointer;
   }
 }
 
