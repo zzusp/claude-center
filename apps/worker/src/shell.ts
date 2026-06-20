@@ -74,7 +74,10 @@ export function getProcessStartTime(pid: number): Promise<number | null> {
             ],
             { windowsHide: true }
           )
-        : spawn("ps", ["-o", "lstart=", "-p", String(pid)]);
+        : // LC_ALL/LC_TIME=C：强制 ps 的 lstart 用稳定英文格式（"Sat Jun 20 18:55:08 2026"），否则在
+          // fr_FR/ru_RU 等 locale 下输出本地化日期，JS Date.parse → NaN → isSameProcessAlive 误判进程已退，
+          // 导致重连轮被提前收尾 / 取消时漏杀（实测：de/es/ja 可解析，fr/ru 不可）。
+          spawn("ps", ["-o", "lstart=", "-p", String(pid)], { env: { ...process.env, LC_ALL: "C", LC_TIME: "C" } });
     let out = "";
     child.stdout?.on("data", (d: Buffer) => {
       out += d.toString("utf8");
@@ -129,6 +132,12 @@ export function runCommand(
     // 用于对话轮的 claude「关机存活」（实测见 docs/spec/conversation-turn-survive-restart.md）。
     // 代价：stdio 被忽略，stdout/stderr 拿不到——detached 调用方靠 .jsonl 取结果，不读 stdout。
     detached?: boolean;
+    // newProcessGroup（仅 POSIX 有意义）：让子进程成为新进程组组长（setpgid），但【保留管道 stdio、不 unref】。
+    // 目的：取消时 killProcessTree 的 process.kill(-pid) 能命中整组、连同 claude 派生的 git/gh/npm/MCP/子代理
+    // 一并杀掉。不设时子进程继承 worker 的进程组，-pid 命中的是「以子 pid 为组 id 的不存在组」→ ESRCH，
+    // 回退 child.kill 只杀直接子进程、孙进程泄漏（实测见 docs/acceptance/worker-mac-adaptation）。
+    // 与 detached 区别：detached 还会 ignore stdio + unref（为关机存活），newProcessGroup 只要进程组、仍读 stdout。
+    newProcessGroup?: boolean;
   } = {}
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
@@ -144,10 +153,12 @@ export function runCommand(
       windowsHide: true,
       env: options.env ?? process.env,
       // detached 下 stdio 必须 ignore：保留管道会让子进程在父退出后随断管而亡（也是实测结论）。
-      detached: options.detached ?? false,
+      // detached 或 newProcessGroup 任一为真都让子进程成为新进程组组长；但仅 detached 时 ignore stdio。
+      detached: Boolean(options.detached || options.newProcessGroup),
       stdio: options.detached ? "ignore" : undefined
     });
-    // detached：从父事件循环 unref，使父（worker）可独立退出而不等子进程；子进程继续后台运行。
+    // 仅 detached（关机存活）才从父事件循环 unref，使父（worker）可独立退出而不等子进程；
+    // newProcessGroup 不 unref——它要继续被 await（读 stdout/退出码），只是为了可整组 kill。
     if (options.detached) {
       child.unref();
     }
@@ -158,7 +169,9 @@ export function runCommand(
     let settled = false;
     const timer = options.timeoutMs
       ? setTimeout(() => {
-          child.kill();
+          // 超时也要按进程树杀：claude（newProcessGroup）超时若只 child.kill 会漏掉其派生子进程。
+          // killProcessTree 对非组长子进程（普通 git/gh 等）自动回退 child.kill，无回归。
+          killProcessTree(child);
           settled = true;
           reject(new Error(`Command timed out: ${command} ${args.join(" ")}`));
         }, options.timeoutMs)

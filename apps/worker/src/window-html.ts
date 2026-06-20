@@ -1434,6 +1434,10 @@ export function windowHtml(): string {
 
           showPage("overview");
           refresh(); loadProjects(); reloadTasks(); reloadConversations(); loadTerminals(); loadRelay();
+          // 冷启动预热：主进程现在窗口先于 worker.start() 渲染（DB 不可达也能出窗口），但能力自检/OS/用量要等
+          // start() 完成后才有值；只靠 15s 常规轮询会让能力区空窗最长 15s。开局再快轮询几次，start() 一就绪
+          //（通常 1-3s）能力即显示，之后回落到 15s 常规节奏。
+          [1200, 2500, 5000, 9000].forEach(function(ms) { setTimeout(refresh, ms); });
           setInterval(refresh, 15000);
           setInterval(loadProjects, 15000);
           setInterval(() => { if (!isEditingTask()) reloadTasks(); }, 4000);

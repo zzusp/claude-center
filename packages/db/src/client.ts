@@ -19,7 +19,10 @@ export function getPool(explicitUrl?: string): pg.Pool {
   if (!pool) {
     pool = new Pool({
       connectionString: getDatabaseUrl(explicitUrl),
-      max: POOL_MAX
+      max: POOL_MAX,
+      // 连接建立上限：DB 主机不可达时若不设，pg 走 OS TCP 默认（macOS 约 75s）才失败——
+      // 桌面 Worker 的状态查询会被拖死。8s 足够区分「慢」与「连不上」，让调用方尽快走容错分支。
+      connectionTimeoutMillis: 8_000
     });
   }
   return pool;
