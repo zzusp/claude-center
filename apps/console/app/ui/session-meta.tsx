@@ -183,15 +183,17 @@ export type SessionMetaProps = {
   worker: Worker | null;
   // Claude Code session transcript（NDJSON）。null/空时不显示 token chip。
   jsonl: string | null;
+  // 手机端折叠开关：false 时移动端 CSS 收起本条（data-open="0"）；省略/true 则常驻（桌面端忽略）。
+  open?: boolean;
 };
 
-export function SessionMetaBar({ planModel, worker, jsonl }: SessionMetaProps) {
+export function SessionMetaBar({ planModel, worker, jsonl, open }: SessionMetaProps) {
   const usage = extractSessionUsage(jsonl);
   const planUsage = worker?.usage;
   const isPlan = worker ? isPlanSubscription(worker.subscription_type) : false;
 
   return (
-    <div className="session-meta-bar">
+    <div className="session-meta-bar" data-open={open === false ? "0" : "1"}>
       <RelayChannelBadge />
 
       <span className="sm-chip" title="本会话计划模型；下面尖括号内为 jsonl 解析的实际模型 ID">

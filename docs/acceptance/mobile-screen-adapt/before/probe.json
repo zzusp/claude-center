@@ -1,0 +1,89 @@
+{
+  "task-detail@360": {
+    "innerWidth": 418,
+    "docScrollWidth": 418,
+    "hOverflow": 0,
+    "cardLefts": [
+      14
+    ],
+    "cardRights": [
+      346
+    ],
+    "cardLeftMargin": 14,
+    "cardRightMargin": 72,
+    "tabsScrollW": 404,
+    "tabsClientW": 332,
+    "tabsOverflow": 72
+  },
+  "task-detail@390": {
+    "innerWidth": 418,
+    "docScrollWidth": 418,
+    "hOverflow": 0,
+    "cardLefts": [
+      14
+    ],
+    "cardRights": [
+      376
+    ],
+    "cardLeftMargin": 14,
+    "cardRightMargin": 42,
+    "tabsScrollW": 404,
+    "tabsClientW": 362,
+    "tabsOverflow": 42
+  },
+  "task-detail@414": {
+    "innerWidth": 419,
+    "docScrollWidth": 419,
+    "hOverflow": 0,
+    "cardLefts": [
+      14
+    ],
+    "cardRights": [
+      400
+    ],
+    "cardLeftMargin": 14,
+    "cardRightMargin": 19,
+    "tabsScrollW": 404,
+    "tabsClientW": 386,
+    "tabsOverflow": 18
+  },
+  "chat@360": {
+    "innerWidth": 360,
+    "innerHeight": 844,
+    "docScrollWidth": 360,
+    "hOverflow": 0,
+    "metaVisible": true,
+    "metaBarHeight": 128,
+    "metaToggleVisible": false,
+    "msgsHeight": 296,
+    "msgsScrollbar": "auto",
+    "composerBottom": 697,
+    "gapBelowComposer": 147
+  },
+  "chat@390": {
+    "innerWidth": 390,
+    "innerHeight": 844,
+    "docScrollWidth": 390,
+    "hOverflow": 0,
+    "metaVisible": true,
+    "metaBarHeight": 128,
+    "metaToggleVisible": false,
+    "msgsHeight": 316,
+    "msgsScrollbar": "auto",
+    "composerBottom": 697,
+    "gapBelowComposer": 147
+  },
+  "chat@414": {
+    "innerWidth": 414,
+    "innerHeight": 844,
+    "docScrollWidth": 414,
+    "hOverflow": 0,
+    "metaVisible": true,
+    "metaBarHeight": 128,
+    "metaToggleVisible": false,
+    "msgsHeight": 336,
+    "msgsScrollbar": "auto",
+    "composerBottom": 697,
+    "gapBelowComposer": 147
+  }
+}

@@ -243,7 +243,8 @@ a:hover {
 .nav-toggle,
 .nav-close,
 .sidebar-backdrop,
-.chat-back {
+.chat-back,
+.chat-meta-toggle {
   display: none;
 }
 
@@ -5411,6 +5412,26 @@ a.ds-v:hover {
     padding-right: 0;
   }
 
+  /* Tab 条横向自滚：长 Tab（"Claude Code 执行"）原本撑宽整页布局视口，使卡片右边距
+     随屏宽变化（360/390/414 实测右边距 72/42/19px）。条内自滚 + 按钮不收缩后，页面不再
+     横向溢出，卡片左右边距在各屏宽下恒为 .view 的 14px。见 docs/acceptance/mobile-screen-adapt。 */
+  .detail-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .detail-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .detail-tab-btn {
+    flex-shrink: 0;
+    padding: 12px 11px;
+  }
+  /* summary bar 的值过长（长分支名）也会撑破视口：收紧上限，超出省略。 */
+  .detail-summary-bar .ds-v {
+    max-width: 56vw;
+  }
+
   /* 实时对话：双栏 → 单列主从切换（未选显示会话列表、选中显示消息线，各自铺满列宽）。 */
   .chat-wrap {
     grid-template-columns: 1fr;
@@ -5441,6 +5462,51 @@ a.ds-v:hover {
     background: var(--surface-1);
     color: var(--text-2);
     cursor: pointer;
+  }
+  /* 标题子信息（worker · 分支 · 项目）单行省略，避免长分支名换行挤乱头部。 */
+  .chat-thread-sub {
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  /* 会话信息条折叠：手机端默认收起（data-open="0"），点头部 ⓘ 切换；展开后照常换行平铺。
+     原本一条占 ~128px(4 行 chip) 把消息区挤到只剩一小条，收起后高度让给消息区。
+     [data-open] 属性选择器 (0,2,0) 高于基础 .session-meta-bar (0,1,0)，稳过其后定义的基础规则。 */
+  .chat-meta-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    margin-left: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
+    color: var(--text-2);
+    cursor: pointer;
+  }
+  .chat-meta-toggle.is-open {
+    color: var(--running);
+    border-color: color-mix(in srgb, var(--running) 40%, var(--border));
+  }
+  .session-meta-bar[data-open="0"] {
+    display: none;
+  }
+
+  /* 消息区：隐藏滚动条更接近原生 App 体验（仍可触摸/惯性滚动），并略收内补白给内容更多宽度。 */
+  .chat-msgs {
+    padding: 14px 12px;
+    scrollbar-width: none;
+  }
+  .chat-msgs::-webkit-scrollbar {
+    display: none;
+  }
+  /* 输入框收紧外边距，给消息区更多纵向空间。 */
+  .chat-composer {
+    margin: 8px 10px 10px;
   }
 }
 
