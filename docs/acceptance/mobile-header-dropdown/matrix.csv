@@ -1,0 +1,4 @@
+case,desc,round-1,evidence
+title-left,标题贴左挨着汉堡按钮(390px视口),PASS,round-1/after.png 标题「任务调度」紧邻汉堡按钮
+notif-no-overflow,通知下拉不溢出屏幕(390px视口),PASS,"round-1/after.png + 探针 innerWidth=390/panelLeft=12/panelRight=378(改前 panelLeft=-97 越界)"
+css-build,globals.css 在 next build 编译通过,PASS,npm -w @claude-center/console run build 绿
