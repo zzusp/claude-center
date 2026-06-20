@@ -1,0 +1,128 @@
+{
+  "task-detail@360": {
+    "innerWidth": 360,
+    "docScrollWidth": 360,
+    "hOverflow": 0,
+    "cardLefts": [
+      14
+    ],
+    "cardRights": [
+      346
+    ],
+    "cardLeftMargin": 14,
+    "cardRightMargin": 14,
+    "tabsScrollW": 380,
+    "tabsClientW": 332,
+    "tabsOverflow": 48
+  },
+  "task-detail@390": {
+    "innerWidth": 390,
+    "docScrollWidth": 390,
+    "hOverflow": 0,
+    "cardLefts": [
+      14
+    ],
+    "cardRights": [
+      376
+    ],
+    "cardLeftMargin": 14,
+    "cardRightMargin": 14,
+    "tabsScrollW": 380,
+    "tabsClientW": 362,
+    "tabsOverflow": 18
+  },
+  "task-detail@414": {
+    "innerWidth": 414,
+    "docScrollWidth": 414,
+    "hOverflow": 0,
+    "cardLefts": [
+      14
+    ],
+    "cardRights": [
+      400
+    ],
+    "cardLeftMargin": 14,
+    "cardRightMargin": 14,
+    "tabsScrollW": 386,
+    "tabsClientW": 386,
+    "tabsOverflow": 0
+  },
+  "chat@360": {
+    "innerWidth": 360,
+    "innerHeight": 844,
+    "docScrollWidth": 360,
+    "hOverflow": 0,
+    "metaVisible": false,
+    "metaBarHeight": 0,
+    "metaToggleVisible": true,
+    "msgsHeight": 471,
+    "msgsScrollbar": "none",
+    "composerBottom": 701,
+    "gapBelowComposer": 143
+  },
+  "chat@390": {
+    "innerWidth": 390,
+    "innerHeight": 844,
+    "docScrollWidth": 390,
+    "hOverflow": 0,
+    "metaVisible": false,
+    "metaBarHeight": 0,
+    "metaToggleVisible": true,
+    "msgsHeight": 471,
+    "msgsScrollbar": "none",
+    "composerBottom": 701,
+    "gapBelowComposer": 143
+  },
+  "chat@414": {
+    "innerWidth": 414,
+    "innerHeight": 844,
+    "docScrollWidth": 414,
+    "hOverflow": 0,
+    "metaVisible": false,
+    "metaBarHeight": 0,
+    "metaToggleVisible": true,
+    "msgsHeight": 471,
+    "msgsScrollbar": "none",
+    "composerBottom": 701,
+    "gapBelowComposer": 143
+  },
+  "chat-open@360": {
+    "innerWidth": 360,
+    "innerHeight": 844,
+    "docScrollWidth": 360,
+    "hOverflow": 0,
+    "metaVisible": true,
+    "metaBarHeight": 128,
+    "metaToggleVisible": true,
+    "msgsHeight": 343,
+    "msgsScrollbar": "none",
+    "composerBottom": 701,
+    "gapBelowComposer": 143
+  },
+  "chat-open@390": {
+    "innerWidth": 390,
+    "innerHeight": 844,
+    "docScrollWidth": 390,
+    "hOverflow": 0,
+    "metaVisible": true,
+    "metaBarHeight": 128,
+    "metaToggleVisible": true,
+    "msgsHeight": 343,
+    "msgsScrollbar": "none",
+    "composerBottom": 701,
+    "gapBelowComposer": 143
+  },
+  "chat-open@414": {
+    "innerWidth": 414,
+    "innerHeight": 844,
+    "docScrollWidth": 414,
+    "hOverflow": 0,
+    "metaVisible": true,
+    "metaBarHeight": 128,
+    "metaToggleVisible": true,
+    "msgsHeight": 343,
+    "msgsScrollbar": "none",
+    "composerBottom": 701,
+    "gapBelowComposer": 143
+  }
+}

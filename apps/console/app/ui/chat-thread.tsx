@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, Project, Worker } from "@claude-center/db";
-import { ArrowUp, Check, ChevronLeft, GitBranch, MessageSquare, Pencil, Server, Sparkles, Square, X } from "lucide-react";
+import { ArrowUp, Check, ChevronLeft, GitBranch, Info, MessageSquare, Pencil, Server, Sparkles, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, postJson } from "./shared";
 import { SessionMetaBar } from "./session-meta";
@@ -37,6 +37,8 @@ export function ChatThread({
   // 顶部 SessionMetaBar 用：worker 的 claude_version / subscription / usage 由 /api/conversations/[id] 顺路返回。
   // 单连同长度仅 worker 一项变化（5h/7d 利用率 + 重置时间随时间漂移），3s 节奏太重，复用 usePolling 默认间隔即可。
   const [worker, setWorker] = useState<Worker | null>(null);
+  // 移动端：会话信息条（通道/模型/套餐用量/上下文）默认折叠，点头部 ⓘ 展开；桌面端 CSS 始终展示、忽略此态。
+  const [metaOpen, setMetaOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const doneRef = useRef(false);
   const id = conversation.id;
@@ -254,6 +256,16 @@ export function ChatThread({
             {conversation.project_name}
           </span>
         </div>
+        <button
+          type="button"
+          className={`chat-meta-toggle${metaOpen ? " is-open" : ""}`}
+          onClick={() => setMetaOpen((v) => !v)}
+          aria-expanded={metaOpen}
+          aria-label="会话信息"
+          title="会话信息（通道 / 模型 / 套餐用量 / 上下文）"
+        >
+          <Info size={16} />
+        </button>
         {canCommand && !closed ? (
           <button className="btn btn-sm" type="button" onClick={closeConv}>
             结束对话
@@ -261,7 +273,7 @@ export function ChatThread({
         ) : null}
       </header>
 
-      <SessionMetaBar planModel={conversation.model} worker={worker} jsonl={jsonl} />
+      <SessionMetaBar planModel={conversation.model} worker={worker} jsonl={jsonl} open={metaOpen} />
 
       <div className="chat-msgs" ref={scrollRef}>
         {loaded && items.length === 0 && pending.length === 0 ? (

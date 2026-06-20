@@ -1,0 +1,8 @@
+case,描述,round-1
+T1,任务详情卡片左右边距在 360/390/414 各屏宽下恒为 14px,PASS
+T2,任务详情无横向溢出（hOverflow=0，innerWidth=设备宽，Tab 条内自滚不撑页）,PASS
+C1,实时对话 session-meta-bar 手机端默认折叠（data-open=0、metaVisible=false），ⓘ 可展开,PASS
+C2,实时对话消息区高度增大（296→471px @360）且滚动条隐藏（scrollbarWidth=none）,PASS
+C3,标题子信息单行省略、实时对话无横向溢出（hOverflow=0）,PASS
+B1,typecheck 5 包通过,PASS
+B2,console build（webpack）通过,PASS
