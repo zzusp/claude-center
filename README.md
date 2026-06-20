@@ -22,6 +22,8 @@ Web 中控台（Next.js）+ 桌面 Worker（Electron）+ PostgreSQL 协同，可
 
 ## 截图预览
 
+### Web Console
+
 **总览** — 在线 Worker 数、今日任务统计、系统健康（DB / 调度器 / SSE 实时线）、最近任务流：
 
 <img src="docs/screenshots/overview.png" width="720" alt="总览页">
@@ -41,6 +43,31 @@ Web 中控台（Next.js）+ 桌面 Worker（Electron）+ PostgreSQL 协同，可
 **实时对话** — 不经任务队列，直接指定 Worker 与项目分支的多轮对话：
 
 <img src="docs/screenshots/chat.png" width="720" alt="实时对话">
+
+### Web Console（手机端）
+
+任何设备打开浏览器即可使用，移动端自适应布局：
+
+<table><tr>
+<td><img src="docs/screenshots/mobile-overview.png" width="220" alt="手机端总览"></td>
+<td><img src="docs/screenshots/mobile-tasks.png" width="220" alt="手机端任务列表"></td>
+<td><img src="docs/screenshots/mobile-task-detail.png" width="220" alt="手机端任务详情"></td>
+<td><img src="docs/screenshots/mobile-chat.png" width="220" alt="手机端实时对话"></td>
+</tr></table>
+
+### Worker 桌面应用
+
+**总览** — 工作状态、在途任务、套餐用量（5h / 7d 窗口）、能力自检（git / gh / claude）：
+
+<img src="docs/screenshots/worker-app.png" width="720" alt="Worker 桌面端总览">
+
+**关联项目** — 可视化管理本机项目与本地路径的绑定，无需手写 JSON：
+
+<img src="docs/screenshots/worker-projects.png" width="720" alt="Worker 关联项目">
+
+**设置** — 工作状态开关、并发上限、运行终端与前置命令（代理 / VPN）、SSE 中转地址：
+
+<img src="docs/screenshots/worker-settings.png" width="720" alt="Worker 设置">
 
 ## 快速开始
 

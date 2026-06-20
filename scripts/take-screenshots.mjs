@@ -1,5 +1,5 @@
 /**
- * 截取 Console 各主要页面真实截图，存入 docs/screenshots/
+ * 截取 Console 各主要页面截图（桌面 + 手机端），存入 docs/screenshots/
  * 用法: node scripts/take-screenshots.mjs
  * 前置: dev server 须在 http://127.0.0.1:3000 运行
  */
@@ -23,44 +23,50 @@ const { username, password } = readEnv();
 
 await mkdir(OUT, { recursive: true });
 
-const browser = await chromium.launch({ headless: true });
-const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+async function runCaptures(viewport, prefix) {
+  const browser = await chromium.launch({ headless: true });
+  const ctx = await browser.newContext({ viewport });
 
-// 登录
-const loginResp = await ctx.request.post(`${BASE}/api/auth/login`, {
-  data: { username, password },
-  headers: { 'Content-Type': 'application/json' },
-});
-if (loginResp.status() !== 200) {
-  console.error('login failed:', await loginResp.text());
+  const loginResp = await ctx.request.post(`${BASE}/api/auth/login`, {
+    data: { username, password },
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (loginResp.status() !== 200) {
+    console.error(`[${prefix}] login failed:`, await loginResp.text());
+    await browser.close();
+    return;
+  }
+
+  const tasksResp = await ctx.request.get(`${BASE}/api/tasks?limit=1`);
+  const tasksData = await tasksResp.json();
+  const firstTaskId = tasksData?.tasks?.[0]?.id;
+
+  const page = await ctx.newPage();
+
+  async function shot(url, name, delay = 2500) {
+    await page.goto(`${BASE}${url}`);
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(delay);
+    const file = path.join(OUT, prefix ? `${prefix}-${name}` : name);
+    await page.screenshot({ path: file, fullPage: false });
+    console.log(`✓ ${path.basename(file)}`);
+  }
+
+  await shot('/', 'overview.png');
+  await shot('/tasks', 'tasks.png');
+  if (firstTaskId) await shot(`/tasks/${firstTaskId}`, 'task-detail.png');
+  await shot('/workers', 'workers.png');
+  await shot('/chat', 'chat.png');
+
   await browser.close();
-  process.exit(1);
-}
-console.log('login ok');
-
-// 拿一个任务 ID 用于详情截图
-const tasksResp = await ctx.request.get(`${BASE}/api/tasks?limit=1`);
-const tasksData = await tasksResp.json();
-const firstTaskId = tasksData?.tasks?.[0]?.id;
-console.log('first task id:', firstTaskId);
-
-const page = await ctx.newPage();
-
-async function shot(url, name, delay = 2500) {
-  await page.goto(`${BASE}${url}`);
-  await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(delay);
-  await page.screenshot({ path: path.join(OUT, name), fullPage: false });
-  console.log(`✓ ${name}`);
 }
 
-await shot('/', 'overview.png');
-await shot('/tasks', 'tasks.png');
-if (firstTaskId) {
-  await shot(`/tasks/${firstTaskId}`, 'task-detail.png');
-}
-await shot('/workers', 'workers.png');
-await shot('/chat', 'chat.png');
+// 桌面端
+console.log('\n── 桌面端 (1440×900) ──');
+await runCaptures({ width: 1440, height: 900 }, '');
 
-await browser.close();
-console.log(`\n截图已保存至 ${OUT}`);
+// 手机端（iPhone 14 尺寸）
+console.log('\n── 手机端 (390×844) ──');
+await runCaptures({ width: 390, height: 844 }, 'mobile');
+
+console.log(`\n✓ 全部截图已保存至 ${OUT}`);
