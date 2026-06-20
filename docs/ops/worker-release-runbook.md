@@ -204,6 +204,7 @@ env:
 | 3 | `must be under apps/worker/` | workspace symlink 跟到 packages/db / 根 pg 等 worker 外文件 | 改 `@claude-center/*` 为 `file:` 协议 + `npm install --no-workspaces` |
 | 4 | `pg/package.json` 不存在 | npm 默认 `file:` 协议建 symlink 而非 deep copy | 加 `--install-links=true` |
 | 5 | macOS `hdiutil detach` 反复 Exit code 1 | `dmg.title` 含空格 + 版本号点；`latest-mac.yml` 没生成但 workflow 要 | dmg.title 改 `ClaudeCenter-Worker`、`writeUpdateInfo: false`、artifact_pattern 删 `latest-mac.yml` |
+| 6 | macOS dmg `FileNotFoundError: .background/background.tiff` → `hdiutil detach -quiet /dev/diskN` Exit code 1（**偶发**，windows 包正常） | `dmg-builder` 在 runner 上挂载 DMG 设背景图时的竞态：volume 未就绪 `mac_alias.statfs` 就读 `.background/background.tiff`。**非配置错**——worker-v0.2.1 与成功的 v0.2.0 同 `os=24.6.0`、同 electron-builder 25.1.8、同配置，一过一挂 | **重跑失败 job 即可**（详见 §5.4），不改 tag / 配置 |
 
 每个坑都对应一个 commit 在 main 历史里能查到。
 
@@ -244,6 +245,24 @@ no such tag
 ```
 
 → 在 `gh release create` 之前 `git push origin <tag>` 还没传过来——重试。
+
+### 5.4 macOS build 偶发挂（dmg 挂载竞态）
+
+症状：`build (macos-latest)` 在 `electron-builder` 步骤红，日志含
+`FileNotFoundError: ... /Volumes/ClaudeCenter-Worker/.background/background.tiff`
+紧跟 `Command failed: hdiutil detach -quiet /dev/diskN`（Exit code 1）；同一个 run 的 windows 包正常。
+
+这是 GitHub macOS runner 上 `dmg-builder` 的**偶发**竞态（§4 #6），**不是配置错**——别急着改 `package.json` / tag。
+**直接重跑失败的 job**（tag 已在、Windows 与 release-notes 产物还挂在原 run 上，macOS 重建成功后 `release` job 会自动接力出包，无需新 tag）：
+
+```bash
+# gh 走代理会 connection refused，本机要清代理环境变量（见本机网络坑记忆）
+env -u HTTPS_PROXY -u HTTP_PROXY gh run rerun <run-id> --failed
+env -u HTTPS_PROXY -u HTTP_PROXY gh run view <run-id> --json jobs \
+  -q '.jobs[] | "\(.name|.[0:42]) => \(.status)/\(.conclusion)"'
+```
+
+若**连续多次重跑都挂同一处**才视为确定性问题，再考虑加固 dmg 配置（如关背景图 / 加挂载重试）。worker-v0.2.1 一次重跑即全绿。
 
 ## 6. 本地复现 CI 跑（不推 tag）
 
