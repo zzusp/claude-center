@@ -2898,8 +2898,10 @@ tr[data-selected] {
   .app-header-title {
     font-size: 19px;
   }
+  /* 标题贴左挨着汉堡按钮：操作区用 auto margin 推到最右，吃掉 space-between 的中间空隙 */
   .app-header-actions {
     gap: 8px;
+    margin-left: auto;
   }
   .user-meta {
     display: none;
@@ -2908,8 +2910,18 @@ tr[data-selected] {
     padding: 8px 14px 40px;
     gap: 18px;
   }
-  .notif-panel {
-    width: min(360px, calc(100vw - 24px));
+  /* 通知下拉：桌面是相对铃铛 absolute(right:0)，但铃铛不在屏幕右缘（右侧还有头像），
+     宽面板会顶出屏外。手机端改 fixed 贴视口左右各留 12px，宽度自适应，不再溢出。
+     基础 .notif-panel 规则在本 @media 之后，同特异性下会反盖——故用 .notif .notif-panel
+     (0,2,0) 提高特异性稳定覆盖 position/right/width。 */
+  .notif .notif-panel {
+    position: fixed;
+    top: 60px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-width: none;
+    max-height: calc(100dvh - 76px);
   }
 
   /* ---- 列表页右侧统计卡片：手机端省略（用户明确） ---- */
