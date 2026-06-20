@@ -6,9 +6,10 @@ import {
   PlugZap, ServerCrash, ServerOff, Wifi, WifiOff, XCircle
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { usePolling } from "../lib/use-polling";
 import { useRelayStatus, type RelayStatus } from "../lib/use-relay";
+import { playNotifySound } from "../lib/notify-sound";
 import { fmtAgo } from "./dashboard-shared";
 import { FormModal } from "./controls";
 
@@ -30,6 +31,10 @@ type Item = Notification;
 const HOVER_LIMIT = 8;
 const MODAL_PAGE = 10;
 const MODAL_MAX = 200;
+
+// 需要声音提醒的通知类型：任务完成 / 失败 / 等待回复（与任务直接相关、用户多半在等的结果）。
+// worker 上下线 / PR 已建 / 任务被领取等过程性通知不响铃，避免提示音泛滥。
+const SOUND_TYPES = new Set<NotificationType>(["task_success", "task_failed", "task_waiting"]);
 
 // 前端合成的瞬时类型——加在原 NotificationType 之外，仅在 UI 内部使用。
 type EphemeralType = "sse_disconnect" | "db_disconnect";
@@ -140,20 +145,46 @@ export default function Notifications() {
   const [modalLimit, setModalLimit] = useState(MODAL_PAGE);
   const [modalLoading, setModalLoading] = useState(false);
 
-  const refresh = useCallback(async (isActive: () => boolean) => {
-    try {
-      const res = await fetch(`/api/notifications?limit=${HOVER_LIMIT}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`status ${res.status}`);
-      const data = (await res.json()) as { items: Item[]; unread: number };
-      if (!isActive()) return;
-      setItems(data.items ?? []);
-      setUnread(data.unread ?? 0);
-      setDbFailures(0);
-    } catch {
-      if (!isActive()) return;
-      setDbFailures((n) => n + 1);
+  // 声音提醒去重：记录已见过的通知 id，仅对「本次新出现 + 未读 + 属 SOUND_TYPES」的通知响铃。
+  // 首次拉取只播种 seen（seeded=false→true），不为页面加载前就存在的旧通知补响。
+  const seenIdsRef = useRef<Set<string>>(new Set());
+  const seededRef = useRef(false);
+
+  const maybeChime = useCallback((list: Item[]) => {
+    const seen = seenIdsRef.current;
+    if (!seededRef.current) {
+      for (const it of list) seen.add(it.id);
+      seededRef.current = true;
+      return;
     }
+    let hasNew = false;
+    for (const it of list) {
+      if (seen.has(it.id)) continue;
+      seen.add(it.id);
+      if (it.read_at === null && SOUND_TYPES.has(it.type)) hasNew = true;
+    }
+    if (hasNew) playNotifySound();
   }, []);
+
+  const refresh = useCallback(
+    async (isActive: () => boolean) => {
+      try {
+        const res = await fetch(`/api/notifications?limit=${HOVER_LIMIT}`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const data = (await res.json()) as { items: Item[]; unread: number };
+        if (!isActive()) return;
+        const list = data.items ?? [];
+        maybeChime(list);
+        setItems(list);
+        setUnread(data.unread ?? 0);
+        setDbFailures(0);
+      } catch {
+        if (!isActive()) return;
+        setDbFailures((n) => n + 1);
+      }
+    },
+    [maybeChime]
+  );
 
   // 弹窗拉取：每次按当前 limit 全量重取（最多 200 条，重取成本可忽略），
   // 顺带刷新红点未读数，避免与轮询不一致。
