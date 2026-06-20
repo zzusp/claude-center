@@ -4145,10 +4145,17 @@ a.dep-item:hover {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  flex: 1;
+  min-width: 0;
+  /* overflow 只放在 strong 上处理省略号，父级不能 hidden 否则编辑态的 input/按钮会被裁 */
 }
 .chat-thread-title strong {
   font-size: 15px;
   color: var(--text-1);
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .chat-title-show {
   display: inline-flex;
@@ -4163,15 +4170,17 @@ a.dep-item:hover {
   opacity: 1;
 }
 .chat-title-edit {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 .chat-title-edit input {
   font-size: 14px;
   font-weight: 600;
   padding: 4px 8px;
-  min-width: 220px;
+  flex: 1;
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--surface-1);
@@ -4188,6 +4197,73 @@ a.dep-item:hover {
   gap: 5px;
   font-size: 12px;
   color: var(--text-3);
+}
+.chat-head-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+.chat-head-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.chat-head-more:hover {
+  color: var(--text-1);
+  background: var(--surface-2);
+}
+.chat-head-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 130px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+}
+.chat-head-dropdown button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  border-radius: var(--r-sm);
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text-1);
+  cursor: pointer;
+  white-space: nowrap;
+  text-align: left;
+  transition: background 100ms ease;
+}
+.chat-head-dropdown button svg {
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.chat-head-dropdown button:hover {
+  background: var(--surface-2);
+}
+.chat-head-dropdown button.danger {
+  color: #dc2626;
+}
+.chat-head-dropdown button.danger svg {
+  color: #dc2626;
+}
+.chat-head-dropdown button.danger:hover {
+  background: rgba(220, 38, 38, 0.08);
 }
 .chat-msgs {
   flex: 1;
@@ -4340,13 +4416,17 @@ a.dep-item:hover {
 .chat-composer-input {
   width: 100%;
   resize: none;
-  padding: 4px 4px 0;
+  padding: 8px 4px;
   font: inherit;
   font-size: 13.5px;
   line-height: 1.5;
   border: none;
   background: transparent;
   color: var(--text-1);
+  field-sizing: content;
+  min-height: calc(1lh + 16px);
+  max-height: 160px;
+  overflow-y: auto;
 }
 .chat-composer-input:focus {
   outline: none;
@@ -5433,15 +5513,16 @@ a.ds-v:hover {
   }
 
   /* 实时对话：双栏 → 单列主从切换（未选显示会话列表、选中显示消息线，各自铺满列宽）。 */
-  /* 内容显示卡片加高：偏移量由 132px 减半至 66px，使消息区可用高度提升约 66px。 */
+  /* 内容显示卡片加高：偏移量 58px = nav 高度，view 顶部 padding 已由 :has() 规则消除。 */
   .chat-wrap {
     grid-template-columns: 1fr;
-    height: calc(100dvh - 66px);
+    height: calc(100dvh - 58px);
     min-height: 0;
   }
-  /* view 底部留白退让：chat-wrap 加高后原 40px bottom-padding 会导致页面下溢；
-     用 :has() 仅对含 chat-wrap 的视图页去除底部留白，其余页面不受影响。 */
+  /* view 上下留白退让：chat-wrap 贴满可用区；顶部 8px 和底部 40px 同时去掉，
+     chat-wrap 高度偏移量对应减 8px（66→58），与 :has() 规则保持一致。 */
   .view:has(.chat-wrap) {
+    padding-top: 0;
     padding-bottom: 0;
   }
   .chat-wrap[data-active="1"] .chat-list {
@@ -5449,6 +5530,10 @@ a.ds-v:hover {
   }
   .chat-wrap[data-active="0"] .chat-main {
     display: none;
+  }
+  /* header 收紧内补白，把纵向空间还给消息区。 */
+  .chat-thread-head {
+    padding: 8px 12px;
   }
   /* 返回按钮 + 标题左聚拢，"结束对话" 推到右侧。 */
   .chat-thread-title {
@@ -5469,12 +5554,9 @@ a.ds-v:hover {
     color: var(--text-2);
     cursor: pointer;
   }
-  /* 标题子信息（worker · 分支 · 项目）单行省略，避免长分支名换行挤乱头部。 */
+  /* 标题子信息（worker · 分支 · 项目）手机端隐藏：信息可通过 ⓘ SessionMetaBar 查看，保留头部单行紧凑。 */
   .chat-thread-sub {
-    max-width: 100%;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
+    display: none;
   }
 
   /* 会话信息条折叠：手机端默认收起（data-open="0"），点头部 ⓘ 切换；展开后照常换行平铺。

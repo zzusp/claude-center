@@ -1,7 +1,7 @@
 "use client";
 
 import type { Conversation, Project, Worker } from "@claude-center/db";
-import { ArrowUp, Check, ChevronLeft, GitBranch, Info, MessageSquare, Pencil, Server, Sparkles, Square, X } from "lucide-react";
+import { ArrowUp, Check, ChevronLeft, GitBranch, Info, MessageSquare, MoreHorizontal, Pencil, Server, Sparkles, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, postJson } from "./shared";
 import { SessionMetaBar } from "./session-meta";
@@ -39,7 +39,9 @@ export function ChatThread({
   const [worker, setWorker] = useState<Worker | null>(null);
   // 移动端：会话信息条（通道/模型/套餐用量/上下文）默认折叠，点头部 ⓘ 展开；桌面端 CSS 始终展示、忽略此态。
   const [metaOpen, setMetaOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const doneRef = useRef(false);
   const id = conversation.id;
   const closed = conversation.status !== "active";
@@ -126,6 +128,19 @@ export function ChatThread({
     if (!jsonl) return;
     setPending((p) => p.filter((t) => !jsonl.includes(t)));
   }, [jsonl]);
+
+  // 点菜单外区域关闭下拉。
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handler(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [menuOpen]);
+
 
   const items = useMemo(() => (jsonl ? parseTranscript(jsonl) : []), [jsonl]);
 
@@ -242,35 +257,60 @@ export function ChatThread({
               </button>
             </div>
           ) : (
-            <div className="chat-title-show">
-              <strong>{conversation.title || "未命名对话"}</strong>
-              {canCommand ? (
-                <button className="icon-btn chat-title-pen" type="button" title="重命名" onClick={() => setEditingTitle(true)}>
-                  <Pencil size={13} />
-                </button>
-              ) : null}
-            </div>
+            <strong>{conversation.title || "未命名对话"}</strong>
           )}
           <span className="chat-thread-sub">
             <Server size={12} /> {conversation.worker_name} <GitBranch size={12} /> {conversation.branch} ·{" "}
             {conversation.project_name}
           </span>
         </div>
-        <button
-          type="button"
-          className={`chat-meta-toggle${metaOpen ? " is-open" : ""}`}
-          onClick={() => setMetaOpen((v) => !v)}
-          aria-expanded={metaOpen}
-          aria-label="会话信息"
-          title="会话信息（通道 / 模型 / 套餐用量 / 上下文）"
-        >
-          <Info size={16} />
-        </button>
-        {canCommand && !closed ? (
-          <button className="btn btn-sm" type="button" onClick={closeConv}>
-            结束对话
+        <div className="chat-head-menu" ref={menuRef}>
+          <button
+            type="button"
+            className="chat-head-more"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-label="更多操作"
+            title="更多操作"
+          >
+            <MoreHorizontal size={16} />
           </button>
-        ) : null}
+          {menuOpen ? (
+            <div className="chat-head-dropdown">
+              {canCommand ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingTitle(true);
+                    setMenuOpen(false);
+                  }}
+                >
+                  <Pencil size={13} /> 重命名
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  setMetaOpen((v) => !v);
+                  setMenuOpen(false);
+                }}
+              >
+                <Info size={13} /> 会话信息
+              </button>
+              {canCommand && !closed ? (
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={() => {
+                    void closeConv();
+                    setMenuOpen(false);
+                  }}
+                >
+                  <Square size={13} /> 结束对话
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </header>
 
       <SessionMetaBar planModel={conversation.model} worker={worker} jsonl={jsonl} open={metaOpen} />
@@ -321,7 +361,7 @@ export function ChatThread({
               }
             }}
             placeholder="输入消息…"
-            rows={2}
+            rows={1}
           />
           <div className="chat-composer-bar">
             <span className="chat-composer-hint">Enter 发送 · Shift+Enter 换行</span>
