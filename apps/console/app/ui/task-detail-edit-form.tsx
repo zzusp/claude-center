@@ -2,9 +2,10 @@
 
 import type { Task } from "@claude-center/db";
 import { Check, Send } from "lucide-react";
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useAsyncAction } from "../lib/use-async-action";
 import { DateTimePicker, formatLocal, Select } from "./controls";
+import { DependencyPicker } from "./tasks-compose";
 
 // 任务编辑表单：详情页 + 任务流列表的编辑弹窗共用（仅草稿/定时态可编辑）。
 // 按「基本信息 / 分支配置 / 执行选项 / 调度」分区排版，与新建表单 ComposeTaskForm 保持一致。
@@ -24,6 +25,12 @@ export function TaskEditForm({
   const [autoDecisionHints, setAutoDecisionHints] = useState(task.auto_decision_hints);
   const [model, setModel] = useState(task.model);
   const [dynamicWorkflow, setDynamicWorkflow] = useState(task.dynamic_workflow);
+  // 前置任务编辑：候选任务（同项目）按需拉取；dependsOn 受控；depsReady 防止「未加载完就保存」误清空依赖。
+  // depsReady=false 时提交不带 dependsOn 字段，后端按 undefined 保持原依赖不动。
+  const [depCandidates, setDepCandidates] = useState<Task[]>([]);
+  const [candidatesLoaded, setCandidatesLoaded] = useState(false);
+  const [dependsOn, setDependsOn] = useState<string[]>([]);
+  const [depsReady, setDepsReady] = useState(false);
   // 提交意图：save 仅保存编辑（保留 draft/scheduled），publish 保存后立刻发布为 pending（待处理）。
   // 用 ref 而非 state，避免点击「保存并发布」后 setState 异步导致 handleSubmit 拿到旧值。
   const submitIntentRef = useRef<"save" | "publish">("save");
@@ -33,6 +40,42 @@ export function TaskEditForm({
   // 回到正确 UTC。曾经直接 slice(0,16) 取 UTC 墙钟当本地用，保存会把时刻按时区偏移整体提前（东八区 -8h），
   // 导致定时任务没到点就被提升认领（见 docs/spec/task-scheduled.md）。
   const scheduledAtDefault = task.scheduled_at ? formatLocal(new Date(task.scheduled_at)) : "";
+
+  // 拉前置任务候选（同项目）+ 当前依赖。当前依赖优先用 task.depends_on（详情页已带），
+  // 列表页传入的 task 不含该字段时回退到单任务详情端点取。两者就绪后置 depsReady=true。
+  useEffect(() => {
+    let active = true;
+    // 候选：同项目、排除自身、排除已取消（取消的前置永不达成、会永久阻塞本任务）。
+    void fetch(`/api/tasks?projectId=${task.project_id}&pageSize=100`, { cache: "no-store" })
+      .then((r) => (r.ok ? (r.json() as Promise<{ tasks: Task[] }>) : null))
+      .then((data) => {
+        if (!active) return;
+        if (data) setDepCandidates(data.tasks.filter((t) => t.id !== task.id && t.status !== "cancelled"));
+        setCandidatesLoaded(true);
+      })
+      .catch(() => {
+        if (active) setCandidatesLoaded(true);
+      });
+
+    if (Array.isArray(task.depends_on)) {
+      setDependsOn(task.depends_on);
+      setDepsReady(true);
+    } else {
+      void fetch(`/api/tasks/${task.id}`, { cache: "no-store" })
+        .then((r) => (r.ok ? (r.json() as Promise<{ task: Task }>) : null))
+        .then((data) => {
+          if (!active) return;
+          setDependsOn(data?.task.depends_on ?? []);
+          setDepsReady(true);
+        })
+        .catch(() => {
+          if (active) setDepsReady(true);
+        });
+    }
+    return () => {
+      active = false;
+    };
+  }, [task.id, task.project_id, task.depends_on]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -57,6 +100,8 @@ export function TaskEditForm({
           autoDecisionHints,
           model,
           dynamicWorkflow,
+          // 仅在依赖加载完成后才下发 dependsOn，避免「未加载完即保存」把原依赖清空（后端 undefined=保持不变）。
+          dependsOn: depsReady ? dependsOn : undefined,
           scheduledAt: scheduledAtRaw ? new Date(scheduledAtRaw).toISOString() : null
         })
       });
@@ -227,6 +272,16 @@ export function TaskEditForm({
             disabled={busy}
             placeholder="留空为草稿；选择时间则定时发布"
           />
+        </div>
+        <div className="field">
+          <label className="field-label">
+            前置任务 <span className="field-hint">同项目，可多选；前置全部「已完成 / 已合并」后才会被领取</span>
+          </label>
+          {depsReady && candidatesLoaded ? (
+            <DependencyPicker candidates={depCandidates} value={dependsOn} onChange={setDependsOn} />
+          ) : (
+            <span className="field-hint">加载候选任务中…</span>
+          )}
         </div>
       </section>
 

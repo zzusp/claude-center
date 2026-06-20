@@ -64,7 +64,8 @@ function Select({
   placeholder,
   required,
   disabled,
-  ariaLabel
+  ariaLabel,
+  direction = "down"
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -75,6 +76,8 @@ function Select({
   required?: boolean;
   disabled?: boolean;
   ariaLabel?: string;
+  // 弹出面板方向：默认向下；时间行（小时/分钟）等贴近容器底部的场景用 "up" 向上展开避免被裁切。
+  direction?: "down" | "up";
 }) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -148,7 +151,7 @@ function Select({
         <ChevronDown size={15} className="cc-select-caret" aria-hidden />
       </button>
       {open ? (
-        <div className="cc-select-panel" role="listbox">
+        <div className={`cc-select-panel${direction === "up" ? " up" : ""}`} role="listbox">
           {options.map((option, index) => (
             <div
               key={option.value}
@@ -617,35 +620,27 @@ function DateTimePicker({
           </div>
           <div className="dt-time-row">
             <Clock size={14} className="dt-time-ico" aria-hidden />
-            <select
-              className="dt-time-select"
-              value={parsed ? parsed.getHours() : ""}
-              onChange={(event) => setHour(Number(event.target.value))}
+            <Select
+              className="dt-time-cc"
+              direction="up"
+              value={parsed ? String(parsed.getHours()) : ""}
+              onChange={(next) => setHour(Number(next))}
+              options={hours.map((h) => ({ value: String(h), label: pad2(h) }))}
               disabled={!parsed}
-              aria-label="小时"
-            >
-              {!parsed ? <option value="">--</option> : null}
-              {hours.map((h) => (
-                <option key={h} value={h}>
-                  {pad2(h)}
-                </option>
-              ))}
-            </select>
+              placeholder="--"
+              ariaLabel="小时"
+            />
             <span className="dt-time-colon">:</span>
-            <select
-              className="dt-time-select"
-              value={parsed ? parsed.getMinutes() - (parsed.getMinutes() % 5) : ""}
-              onChange={(event) => setMinute(Number(event.target.value))}
+            <Select
+              className="dt-time-cc"
+              direction="up"
+              value={parsed ? String(parsed.getMinutes() - (parsed.getMinutes() % 5)) : ""}
+              onChange={(next) => setMinute(Number(next))}
+              options={minutes.map((m) => ({ value: String(m), label: pad2(m) }))}
               disabled={!parsed}
-              aria-label="分钟"
-            >
-              {!parsed ? <option value="">--</option> : null}
-              {minutes.map((m) => (
-                <option key={m} value={m}>
-                  {pad2(m)}
-                </option>
-              ))}
-            </select>
+              placeholder="--"
+              ariaLabel="分钟"
+            />
             <div className="dt-time-actions">
               <button type="button" className="dt-time-link" onClick={selectNow}>
                 现在

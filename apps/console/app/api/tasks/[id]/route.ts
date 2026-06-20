@@ -12,6 +12,7 @@ import {
   reactivateTask,
   requestTaskCancellation,
   requestTaskRetry,
+  setTaskDependencies,
   unpublishTask,
   updateTask,
   type TaskRepoInput
@@ -97,6 +98,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       model?: TaskModel;
       dynamicWorkflow?: boolean;
       scheduledAt?: string | null;
+      // 前置任务（spec docs/spec/task-acceptance-dependencies.md）：编辑时整批替换 task_dependencies。
+      // 显式数组才替换；undefined 时保持原依赖不动（兼容不带依赖 UI 的旧前端）。
+      dependsOn?: string[];
       // 多仓任务（spec docs/spec/task-multi-repo.md）：编辑时整批替换 task_repos。
       // 缺省时按主仓单行重新生成、其它子仓 skipped（兼容旧前端）。
       taskRepos?: TaskRepoUserInput[];
@@ -153,6 +157,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         if (!task) {
           await client.query("ROLLBACK");
           return NextResponse.json({ error: "任务不存在或已开始执行，无法编辑" }, { status: 409 });
+        }
+        // 前置任务：显式数组才整批替换（编辑表单编辑过依赖）；undefined 时保持原依赖不动。
+        if (Array.isArray(body.dependsOn)) {
+          await setTaskDependencies(
+            client,
+            task.id,
+            body.dependsOn.filter((dep): dep is string => typeof dep === "string")
+          );
         }
         // task_repos 处理策略：
         // - body.taskRepos 显式数组 → 整批替换（用户在 UI 上编辑过多仓配置）

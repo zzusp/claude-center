@@ -455,6 +455,17 @@ export async function addTaskDependencies(
   );
 }
 
+// 整批替换任务的前置依赖（编辑表单用）：先清空再插入新集合，复用 addTaskDependencies 的同项目 / 非自身校验。
+// 在调用方事务内执行，保证「删旧 + 插新」原子。dependsOnIds 为空数组即清空所有前置。
+export async function setTaskDependencies(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  dependsOnIds: string[]
+): Promise<void> {
+  await client.query(`DELETE FROM task_dependencies WHERE task_id = $1`, [taskId]);
+  await addTaskDependencies(client, taskId, dependsOnIds);
+}
+
 // 任务流列表固定按更新时间排序，方向由列表头切换（默认 desc）。
 export type SortDir = "asc" | "desc";
 
