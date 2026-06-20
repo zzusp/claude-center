@@ -286,6 +286,7 @@ export type AttachmentMeta = {
 export type Attachment = AttachmentMeta & {
   task_id: string | null;
   task_comment_id: string | null;
+  conversation_message_id: string | null;
   owner_user_id: string | null;
 };
 

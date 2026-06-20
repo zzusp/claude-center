@@ -2701,7 +2701,7 @@ const ATTACHMENT_META_COLS =
 
 // Attachment 行不暴露 bytea；元数据列固定，避免 SELECT * 习惯性误拖大对象。
 const ATTACHMENT_ROW_COLS =
-  `id, task_id, task_comment_id, owner_user_id, ${ATTACHMENT_META_COLS}`;
+  `id, task_id, task_comment_id, conversation_message_id, owner_user_id, ${ATTACHMENT_META_COLS}`;
 
 export async function createAttachment(
   client: pg.Pool | pg.PoolClient,
@@ -2854,6 +2854,7 @@ export async function bindAttachmentsToTask(
       WHERE id = ANY($1::uuid[])
         AND task_id IS NULL
         AND task_comment_id IS NULL
+        AND conversation_message_id IS NULL
         ${ownerClause}`,
     params
   );
@@ -2884,6 +2885,39 @@ export async function bindAttachmentsToComment(
       WHERE id = ANY($1::uuid[])
         AND task_id IS NULL
         AND task_comment_id IS NULL
+        AND conversation_message_id IS NULL
+        ${ownerClause}`,
+    params
+  );
+  if ((result.rowCount ?? 0) !== unique.length) {
+    throw new Error("部分附件不存在、已被绑定或无权使用");
+  }
+}
+
+// 绑定附件到对话消息（实时对话发用户消息时）：同 bindAttachmentsToTask。
+// 仅未绑定 + 归属本用户的行才能绑（admin 通过 ownerUserId=null 绕过 owner 检查）。命中 < ids.length 抛错（事务回滚）。
+export async function bindAttachmentsToConversationMessage(
+  client: pg.Pool | pg.PoolClient,
+  messageId: string,
+  attachmentIds: string[],
+  ownerUserId: string | null
+): Promise<void> {
+  if (attachmentIds.length === 0) {
+    return;
+  }
+  const unique = [...new Set(attachmentIds)];
+  const ownerClause = ownerUserId ? `AND owner_user_id = $3` : "";
+  const params: unknown[] = [unique, messageId];
+  if (ownerUserId) {
+    params.push(ownerUserId);
+  }
+  const result = await client.query(
+    `UPDATE attachments
+        SET conversation_message_id = $2
+      WHERE id = ANY($1::uuid[])
+        AND task_id IS NULL
+        AND task_comment_id IS NULL
+        AND conversation_message_id IS NULL
         ${ownerClause}`,
     params
   );
@@ -2909,6 +2943,7 @@ export async function deleteUnboundAttachment(
       WHERE id = $1
         AND task_id IS NULL
         AND task_comment_id IS NULL
+        AND conversation_message_id IS NULL
         ${ownerClause}`,
     params
   );
@@ -2927,6 +2962,7 @@ export async function deleteOrphanedAttachments(
         SELECT id FROM attachments
          WHERE task_id IS NULL
            AND task_comment_id IS NULL
+           AND conversation_message_id IS NULL
            AND created_at < now() - ($1 || ' hours')::interval
          ORDER BY created_at ASC
          LIMIT $2
@@ -3075,6 +3111,30 @@ export async function listPendingReplyAttachments(
       )
       ORDER BY a.created_at ASC`,
     [taskId]
+  );
+  return result.rows;
+}
+
+// 本轮对话用户消息的附件。与 getConversationPrompt 的锚点对齐（同一组「上一已闭合 assistant 之后」的 user 消息）：
+// 那边返回拼接 prompt，这边返回该批 user 消息绑定的附件，供 Worker 落地到 worktree 的 .claude-attachments/。
+export async function listConversationTurnAttachments(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string
+): Promise<AttachmentMeta[]> {
+  const result = await client.query<AttachmentMeta>(
+    `SELECT ${ATTACHMENT_META_COLS}
+       FROM attachments a
+      WHERE a.conversation_message_id IN (
+        SELECT id FROM conversation_messages
+         WHERE conversation_id = $1
+           AND role = 'user'
+           AND seq > COALESCE(
+             (SELECT max(seq) FROM conversation_messages
+               WHERE conversation_id = $1 AND role = 'assistant' AND status IN ('done', 'failed')),
+             -1)
+      )
+      ORDER BY a.created_at ASC`,
+    [conversationId]
   );
   return result.rows;
 }

@@ -1,12 +1,16 @@
 "use client";
 
-import type { Conversation, Project, Worker } from "@claude-center/db";
+import type { AttachmentMeta, Conversation, Project, Worker } from "@claude-center/db";
 import { ArrowUp, Check, ChevronLeft, GitBranch, Info, MessageSquare, MoreHorizontal, Pencil, Server, Sparkles, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, postJson } from "./shared";
+import { AttachmentList, AttachmentUploader } from "./attachment-uploader";
 import { SessionMetaBar } from "./session-meta";
 import { TranscriptView, parseTranscript } from "./transcript";
 import { usePolling } from "../lib/use-polling";
+
+// 乐观气泡：发送后到 worker 把该轮写进 jsonl transcript 之间有延迟窗，先本地显示文本 + 附件。
+type PendingMsg = { text: string; attachments: AttachmentMeta[] };
 
 // 模块级 jsonl 缓存：跨 ChatThread 卸载/重挂保留，切换回老会话时立即出内容（无空白等待）。
 // 仅进程内有效（刷新页面重建）；不进 sessionStorage 是因为单 jsonl 可达 MB 级、storage 配额有限。
@@ -28,8 +32,10 @@ export function ChatThread({
 }) {
   const [jsonl, setJsonl] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [pending, setPending] = useState<string[]>([]);
+  const [pending, setPending] = useState<PendingMsg[]>([]);
   const [input, setInput] = useState("");
+  // 待发送附件（已上传、未绑定）。send 时把 id 一并 POST、绑定到本条 user 消息。
+  const [draftAtts, setDraftAtts] = useState<AttachmentMeta[]>([]);
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
@@ -123,10 +129,17 @@ export function ChatThread({
     3000
   );
 
-  // 乐观消息：发送后到 worker 把该轮写进 jsonl 之间有延迟窗，先本地显示；jsonl 收录后清掉避免重复。
+  // 乐观消息：jsonl 收录该轮后清掉避免重复。文本消息按正文匹配；仅附件消息无正文，
+  // 按 worker 注入 prompt 的附件路径片段（sha256 前 8 位）匹配——命中即说明本轮已落库。
   useEffect(() => {
     if (!jsonl) return;
-    setPending((p) => p.filter((t) => !jsonl.includes(t)));
+    setPending((p) =>
+      p.filter((m) => {
+        const textSeen = m.text.length > 0 && jsonl.includes(m.text);
+        const attSeen = m.attachments.some((a) => jsonl.includes(a.sha256.slice(0, 8)));
+        return !(textSeen || attSeen);
+      })
+    );
   }, [jsonl]);
 
   // 点菜单外区域关闭下拉。
@@ -175,15 +188,19 @@ export function ChatThread({
 
   async function send(): Promise<void> {
     const text = input.trim();
-    if (!text || sending) {
+    if ((!text && draftAtts.length === 0) || sending) {
       return;
     }
     setSending(true);
     setErr("");
     try {
-      await postJson(`/api/conversations/${id}/messages`, { body: text });
+      await postJson(`/api/conversations/${id}/messages`, {
+        body: text,
+        attachmentIds: draftAtts.map((a) => a.id)
+      });
       setInput("");
-      setPending((p) => [...p, text]);
+      setPending((p) => [...p, { text, attachments: draftAtts }]);
+      setDraftAtts([]);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "发送失败");
     } finally {
@@ -321,10 +338,11 @@ export function ChatThread({
         ) : (
           <>
             <TranscriptView items={items} />
-            {pending.map((t, i) => (
+            {pending.map((m, i) => (
               <div className="tx-row user" key={`p${i}`}>
                 <div className="tx-msg user">
-                  <div className="tx-text">{t}</div>
+                  {m.text ? <div className="tx-text">{m.text}</div> : null}
+                  <AttachmentList attachments={m.attachments} />
                 </div>
               </div>
             ))}
@@ -350,6 +368,7 @@ export function ChatThread({
         <div className="chat-closed">该 worker 当前离线，无法继续对话（恢复在线后可继续）</div>
       ) : canCommand ? (
         <div className="chat-composer">
+          <AttachmentUploader attachments={draftAtts} onChange={setDraftAtts} disabled={sending} />
           <textarea
             className="chat-composer-input"
             value={input}
@@ -379,7 +398,7 @@ export function ChatThread({
               <button
                 className="chat-send"
                 type="button"
-                disabled={sending || !input.trim()}
+                disabled={sending || (!input.trim() && draftAtts.length === 0)}
                 onClick={send}
                 title="发送消息（Enter）"
                 aria-label="发送消息"
