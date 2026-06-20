@@ -31,9 +31,14 @@ function createWindow(): void {
   void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(windowHtml())}`);
 }
 
-app.whenReady().then(async () => {
+// 未捕获的 Promise 拒绝（如某轮 DB 查询失败、relay 抖动）不应静默拖垮主进程：记一行日志即可，
+// 窗口与轮询照常。曾因 worker.start() 在窗口创建前抛错而出现「只有 Dock 图标、无窗口」的死状。
+process.on("unhandledRejection", (reason) => {
+  console.error("[worker] unhandledRejection:", reason instanceof Error ? reason.stack ?? reason.message : reason);
+});
+
+app.whenReady().then(() => {
   worker = new ClaudeCenterWorker();
-  await worker.start();
 
   // 桌面端控制面 → worker。
   ipcMain.handle("worker:getState", () => worker?.getStatusSnapshot() ?? null);
@@ -87,7 +92,14 @@ app.whenReady().then(async () => {
     return result.canceled || !result.filePaths.length ? null : result.filePaths[0];
   });
 
+  // 先建窗口，再启动 worker —— 窗口渲染不依赖 DB/网络。
+  // 此前是 `await worker.start()` 在 createWindow 之前：DB 缺失/不可达时 start() 抛错，窗口永不创建，
+  // 用户只看到 Dock 图标、无任何窗口或报错（与安装手册 §11「窗口显示 DB 健康度红点」矛盾）。
+  // 现在窗口立即起，worker.start() 不阻塞窗口；失败落进 worker 日志面板（getStatusSnapshot 已对 DB 失败容错）。
   createWindow();
+  worker.start().catch((error) => {
+    console.error("[worker] start failed:", error instanceof Error ? error.stack ?? error.message : error);
+  });
 });
 
 // macOS 惯例：关闭窗口不退出应用——Worker 是后台执行节点，关窗后应继续跑心跳/领任务，点 Dock 图标重开窗口。

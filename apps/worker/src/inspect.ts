@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -69,13 +70,26 @@ export async function detectCapabilities(config: WorkerConfig): Promise<Capabili
   return { git, gh, claude, nodejs, python };
 }
 
-// worker 所在机器的操作系统概览，桌面端展示用。label 形如 "Windows 10.0.26200 (x64)"。
+// macOS 上 os.release() 返回的是 Darwin 内核版本（如 "22.6.0"），不是用户认知的 macOS 产品版本
+//（如 "13.7.8"）——直接展示会出现「macOS 22.6.0」这种不存在的版本号。用 sw_vers 取产品版本；
+// 取不到（极端环境无 sw_vers）回退到内核版本，不影响其它字段。仅 darwin 走这条，一次性同步调用、开销可忽略。
+function macProductVersion(): string | null {
+  try {
+    const r = spawnSync("/usr/bin/sw_vers", ["-productVersion"], { encoding: "utf8", timeout: 3_000 });
+    const v = (r.stdout ?? "").trim();
+    return v || null;
+  } catch {
+    return null;
+  }
+}
+
+// worker 所在机器的操作系统概览，桌面端展示用。label 形如 "Windows 10.0.26200 (x64)" / "macOS 13.7.8 (x64)"。
 export type OsInfo = { platform: NodeJS.Platform; release: string; arch: string; label: string };
 export function inspectOs(): OsInfo {
   const platform = process.platform;
   const name =
     platform === "win32" ? "Windows" : platform === "darwin" ? "macOS" : platform === "linux" ? "Linux" : platform;
-  const release = os.release();
+  const release = platform === "darwin" ? macProductVersion() ?? os.release() : os.release();
   const arch = os.arch();
   return { platform, release, arch, label: `${name} ${release} (${arch})` };
 }

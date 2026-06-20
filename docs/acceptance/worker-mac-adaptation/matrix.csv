@@ -1,0 +1,16 @@
+case,description,round-1,evidence
+build,"5 包 typecheck + build（含 console next build）在 macOS 通过",PASS,round-1.md#build
+distcheck,"electron-builder mac 配置自检（dmg x64+arm64）",PASS,round-1.md#distcheck
+path-fix,"fixMacGuiPath 从登录 shell 补回 PATH（Finder 启动可解析 claude/git/gh/node）",PASS,round-1.md#caps
+capabilities,"detectCapabilities 在 macOS 全绿（git/gh/claude/node/python，解析出 mac 真实路径）",PASS,round-1.md#caps
+register,"worker 注册 + 心跳写入共享 DB（online，实时心跳）",PASS,round-1.md#register
+gui-render,"Electron 窗口在 macOS 渲染完整仪表盘（capturePage 证据）",PASS,round-1/overview-macos-populated.png
+os-label,"系统版本显示为产品版本 macOS 13.7.8 而非 Darwin 22.6.0",PASS,round-1/overview-macos-populated.png
+b1-window-db-down,"DB 不可达时窗口仍渲染（修复前只有 Dock 图标无窗口）",PASS,round-1/db-down-window-renders.png
+b1-conn-timeout,"DB 死主机 8s 超时失败（非 75s），start() 失败被 catch、app 不崩",PASS,round-1.md#b1
+b1-warmup,"冷启动快轮询让能力区 ~2-9s 填充（非空窗 15s）",PASS,round-1.md#b1
+m1-killtree,"newProcessGroup 下 killProcessTree 杀净 claude 子+孙；对照组复现孙进程泄漏",PASS,round-1.md#m1
+m1-timeout-path,"超时路径改用 killProcessTree（编译+逻辑覆盖）",PASS,round-1.md#m1
+m2-printenv-path,"printenv 提取在 zsh 下输出冒号分隔 PATH（修复未破坏正常路径）；fish correct-by-construction",PASS,round-1.md#m2
+m1-locale,"getProcessStartTime 在 fr_FR locale 下返回有限值（LC_ALL=C 生效）",PASS,round-1.md#locale
+final-clean,"移除诊断后最终生产构建端到端：窗口渲染 + 实时心跳，日志无异常",PASS,round-1.md#final

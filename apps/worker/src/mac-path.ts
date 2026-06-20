@@ -22,10 +22,14 @@ export function fixMacGuiPath(): void {
       shell,
       // -ilc：交互式(-i)登录(-l) shell 执行命令(-c)，确保 .zprofile/.zshrc/.bash_profile 里对 PATH
       // 的修改都被 source 到；DISABLE_AUTO_UPDATE 防 oh-my-zsh 等启动时挂在更新提示上拖死。
-      ["-ilc", `printf '%s' '${begin}'; printf '%s' "$PATH"; printf '%s' '${end}'`],
+      // 用 `printenv PATH` 而非 `"$PATH"`：fish 把 $PATH 当列表、字符串化为【空格】分隔，会让下面按 ":" 切分的
+      // mergePath 收到一个含空格的伪目录、真目录全丢（fish 用户从 Finder 启动仍解析不到 claude/git）。
+      // printenv 读的是【真实环境变量】PATH，任何 shell（含 fish）都是冒号分隔，且目录名含空格也安全。
+      ["-ilc", `printf '%s' '${begin}'; /usr/bin/printenv PATH; printf '%s' '${end}'`],
       {
         encoding: "utf8",
-        timeout: 8_000,
+        // 5s：PATH 提取在正常情况下近乎瞬时，留足 source profile 的余量即可；过长只会在 shell 卡死时拖慢首屏。
+        timeout: 5_000,
         env: { ...process.env, DISABLE_AUTO_UPDATE: "true" }
       }
     );

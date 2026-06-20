@@ -208,6 +208,9 @@ function spawnClaude(config: WorkerConfig, opts: ClaudeCallOpts): Promise<Comman
       timeoutMs: CLAUDE_TIMEOUT_MS,
       onSpawn: opts.onSpawn,
       detached: opts.detached,
+      // POSIX：让 claude 成新进程组组长，取消/超时时可整组杀掉它派生的 git/gh/npm/MCP/子代理
+      //（Windows 走 taskkill /T 杀树，不需要）。detached 的对话轮已自带新组，置此无副作用。
+      newProcessGroup: process.platform !== "win32",
       env: { ...process.env, ...wfEnv }
     });
   }
@@ -245,6 +248,9 @@ function spawnClaude(config: WorkerConfig, opts: ClaudeCallOpts): Promise<Comman
     onSpawn: opts.onSpawn,
     shell: false,
     env,
+    // POSIX：终端形态下让终端进程（bash/zsh…）成新进程组组长，取消时整组杀掉终端 + 其内的 claude 及派生进程。
+    // 否则终端形态取消是「完全 no-op」（-pid ESRCH 回退只杀终端壳、claude 仍活）。
+    newProcessGroup: process.platform !== "win32",
     detached: opts.detached
   });
 }
