@@ -45,12 +45,22 @@ export function TaskEditForm({
   // 列表页传入的 task 不含该字段时回退到单任务详情端点取。两者就绪后置 depsReady=true。
   useEffect(() => {
     let active = true;
-    // 候选：同项目、排除自身、排除已取消（取消的前置永不达成、会永久阻塞本任务）。
+    // 候选：同项目、排除自身、排除已取消（取消的前置永不达成、会永久阻塞本任务），
+    // 并排除已完成 / 已合并（这两态已等同完成,加为前置只是干扰；与新建表单逻辑一致）。
     void fetch(`/api/tasks?projectId=${task.project_id}&pageSize=100`, { cache: "no-store" })
       .then((r) => (r.ok ? (r.json() as Promise<{ tasks: Task[] }>) : null))
       .then((data) => {
         if (!active) return;
-        if (data) setDepCandidates(data.tasks.filter((t) => t.id !== task.id && t.status !== "cancelled"));
+        if (data)
+          setDepCandidates(
+            data.tasks.filter(
+              (t) =>
+                t.id !== task.id &&
+                t.status !== "cancelled" &&
+                t.status !== "merged" &&
+                t.status !== "success"
+            )
+          );
         setCandidatesLoaded(true);
       })
       .catch(() => {
