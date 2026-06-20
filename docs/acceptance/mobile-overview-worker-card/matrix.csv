@@ -1,0 +1,4 @@
+case,description,round-1
+overflow-fixed,"390px 视口下 Worker 概览行内并发条/计数不再溢出卡片（usage 右缘 357 < 卡片右缘 375）",PASS
+layout-readable,"两行布局：名字+工作态徽章一行，claude 版本+并发条一行，全部落在卡片内",PASS
+desktop-unchanged,">560px（平板/桌面）保持原 4 栏等分行内布局，未受影响",PASS

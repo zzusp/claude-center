@@ -3156,6 +3156,23 @@ tr[data-selected] {
     right: 0;
     min-width: 0;
   }
+
+  /* 总览 Worker 概览：窄屏下 5 栏等分会让固定宽的并发条(80px)+不换行徽章撑破卡片与屏幕。
+     改两行布局——首行「名字 + 工作态徽章」，次行「claude 版本 + 并发条」，状态点跨两行竖向居中。
+     基础 .worker-row[data-layout="split"] 规则(line ~1497)在本 @media 之前，同特异性下后者胜，可直接覆盖。 */
+  .worker-row[data-layout="split"] {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "dot name  badge"
+      "dot ver   usage";
+    column-gap: 8px;
+    row-gap: 3px;
+  }
+  .worker-row[data-layout="split"] > :nth-child(1) { grid-area: dot; }
+  .worker-row[data-layout="split"] > :nth-child(2) { grid-area: name; }
+  .worker-row[data-layout="split"] > :nth-child(3) { grid-area: ver; }
+  .worker-row[data-layout="split"] > :nth-child(4) { grid-area: badge; }
+  .worker-row[data-layout="split"] > :nth-child(5) { grid-area: usage; }
 }
 
 /* Task conversation (comment ↔ reply) */
