@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Claude Code terminal — promo</title>
+<style>
+  /* 配色全部取自项目 Claude Light 设计系统 apps/console/app/globals.css */
+  :root{
+    --bg:#f8f8f6; --grid:rgba(231,229,228,.55);
+    --term-bg:#1c1917; --bar:#292524; --term-border:#e7e5e4;
+    --fg:#fafaf9; --dim:#a8a29e; --branch:#a8a29e;
+    --ctx:#93c5fd; --prompt:#93c5fd; --cmd:#fafaf9; --tool:#93c5fd; --path:#d6d3d1;
+    --del:#fca5a5; --add:#86efac; --ok:#86efac; --pr:#6ee7b7; --cur:#93c5fd;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:1920px;height:1080px;overflow:hidden}
+  body{
+    display:flex;align-items:center;justify-content:center;
+    background:
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 64px 64px,
+      linear-gradient(180deg, var(--grid) 1px, transparent 1px) 0 0 / 64px 64px,
+      var(--bg);
+    font-family:'JetBrains Mono','Cascadia Code',Consolas,'Courier New',monospace;
+  }
+  .win{
+    width:1480px;border-radius:14px;overflow:hidden;
+    background:var(--term-bg);border:1px solid var(--term-border);
+    box-shadow:0 24px 60px rgba(28,25,23,.14), 0 2px 8px rgba(28,25,23,.06);
+  }
+  .bar{
+    height:52px;display:flex;align-items:center;gap:12px;padding:0 22px;
+    background:var(--bar);border-bottom:1px solid rgba(255,255,255,.06);
+    font-family:'Inter','Segoe UI',system-ui,sans-serif;
+  }
+  .bar-dot{width:10px;height:10px;border-radius:50%;background:#2563eb;
+           box-shadow:0 0 0 3px rgba(37,99,235,.2)}
+  .bar-title{color:#d6d3d1;font-size:17px;font-weight:600;letter-spacing:.2px}
+  .bar-right{margin-left:auto;color:#a8a29e;font-size:15px}
+  .term{padding:30px 38px 38px;font-size:30px;line-height:1.72;min-height:560px}
+  .line{white-space:pre;color:var(--fg)}
+  .ctx{color:var(--ctx);font-weight:600}
+  .branch{color:var(--branch)}
+  .prompt{color:var(--prompt);font-weight:700}
+  .cmd{color:var(--cmd)}
+  .dim{color:var(--dim)}
+  .tool{color:var(--tool);font-weight:600}
+  .path{color:var(--path)}
+  .del{color:var(--del)}
+  .add{color:var(--add)}
+  .ok{color:var(--ok);font-weight:600}
+  .pr{color:var(--pr);font-weight:700}
+  .cur{color:var(--cur);font-weight:700}
+  .cur.off{opacity:0}
+</style>
+</head>
+<body>
+  <div class="win">
+    <div class="bar">
+      <span class="bar-dot"></span>
+      <span class="bar-title">Claude Code terminal</span>
+      <span class="bar-right">pwsh · worker</span>
+    </div>
+    <div class="term" id="term"></div>
+  </div>
+<script>
+const cmd = 'claude "修复登录页 401 报错"';
+const CMD_START = 0.35, CMD_DUR = 1.35;
+const CMD_END = CMD_START + CMD_DUR;
+const lines = [
+  {t:2.05, html:'<span class="dim">● Thinking… 定位 401 来源</span>'},
+  {t:2.45, html:'<span class="tool">● Read</span>   <span class="path">apps/console/app/login/page.tsx</span>'},
+  {t:2.78, html:'<span class="tool">● Read</span>   <span class="path">apps/console/lib/auth.ts</span>'},
+  {t:3.18, html:'<span class="tool">● Edit</span>   <span class="path">apps/console/lib/auth.ts</span>'},
+  {t:3.40, html:'<span class="del">  - const token = cookies.get(SESSION)</span>'},
+  {t:3.60, html:'<span class="add">  + const token = await readSession(req)</span>'},
+  {t:4.00, html:'<span class="tool">● Bash</span>   <span class="path">npm run verify:console</span>'},
+  {t:4.55, html:'<span class="ok">  ✓ 401 → 200   scheduler.ok: true</span>'},
+  {t:5.05, html:'<span class="tool">● Bash</span>   <span class="path">gh pr create</span>'},
+  {t:5.60, html:'<span class="pr">  ✔ Pushed · PR #128 opened</span>'},
+];
+const TOTAL = 6.4;
+const term = document.getElementById('term');
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function render(t){
+  const frac = Math.max(0, Math.min(1, (t-CMD_START)/CMD_DUR));
+  const n = Math.floor(frac*cmd.length);
+  const shownCmd = (t < CMD_START) ? '' : cmd.slice(0,n);
+  const blink = Math.floor(t*2)%2===0;
+  let html = '';
+  html += '<div class="line"><span class="ctx">claude-center</span> <span class="branch">on  main</span></div>';
+  html += '<div class="line"><span class="prompt">&#10095;</span> <span class="cmd">'+esc(shownCmd)+'</span>'
+        + '<span class="cur'+(blink?'':' off')+'">&#9608;</span></div>';
+  for(const ln of lines){
+    if(t>=ln.t){ const op=Math.max(0,Math.min(1,(t-ln.t)/0.16)); html += '<div class="line" style="opacity:'+op.toFixed(3)+'">'+ln.html+'</div>'; }
+  }
+  term.innerHTML = html;
+}
+const seekMode = new URLSearchParams(location.search).get('mode')==='seek';
+if(seekMode){ render(0); window.__seek = render; }
+else { const s=performance.now(); (function loop(){ const t=((performance.now()-s)/1000)%(TOTAL+0.9); render(t); requestAnimationFrame(loop); })(); }
+</script>
+</body>
+</html>
