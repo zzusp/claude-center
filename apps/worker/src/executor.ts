@@ -1,6 +1,7 @@
 import {
   addTaskComment,
   addTaskEvent,
+  emitTaskNotification,
   failConversationTurn,
   finalizeConversationTurn,
   getAttachmentBlob,
@@ -58,6 +59,7 @@ import {
   worktreePathFor
 } from "./worktree.js";
 import { findSessionInfo, startConversationSessionSync, startTaskSessionSync } from "./session.js";
+import { parseTestPlan, type TestPlanResult } from "./test-plan.js";
 
 const CLAUDE_TIMEOUT_MS = 60 * 60_000;
 // 定向 shell 指令的执行上限（沿用原 runPowerShell 的 20 分钟）。
@@ -456,26 +458,50 @@ function retryPrompt(task: Task, attachments: AttachmentMeta[], wtPath: string):
   return [...worktreeAnchor(wtPath), ...head, ...attachmentSection(attachments), "", ...replyDirective(task)].join("\n");
 }
 
+// GitHub PR body 上限 65536 字符；正文主体（Claude 的结构化产出）留足额度，超长才从尾部截断
+// （Summary/Changes 在前，优先保留）。Test Plan 门禁解析用的是未截断全量文本，不受这里影响。
+const PR_BODY_OUTPUT_CAP = 55_000;
+const PR_BODY_REQUEST_CAP = 8_000;
+
+function clampForPr(text: string, cap: number): string {
+  const t = text.trim();
+  if (t.length <= cap) return t;
+  return `${t.slice(0, cap)}\n\n_…（内容过长已截断）_`;
+}
+
+// PR body：直接渲染 Claude 的 Markdown 产出（含 Summary / Changes / Test Plan），不再包代码块。
+// 原始任务需求收进折叠块，末尾加 Worker 署名脚注。
 function prBody(task: Task, claudeOutput: string): string {
+  const summary = clampForPr(claudeOutput, PR_BODY_OUTPUT_CAP) || "_(Claude 未产出结构化总结)_";
   return [
-    `ClaudeCenter task: ${task.id}`,
+    summary,
     "",
-    "## Request",
-    task.description,
+    "---",
     "",
-    "## Worker Evidence",
-    "Claude Code finished locally. The PR was created by the assigned desktop Worker.",
+    "<details>",
+    "<summary>原始任务需求</summary>",
     "",
-    "## Claude Output",
-    "```text",
-    claudeOutput.slice(-6000),
-    "```"
+    clampForPr(task.description, PR_BODY_REQUEST_CAP) || "_(无)_",
+    "",
+    "</details>",
+    "",
+    `<sub>🤖 本 PR 由 ClaudeCenter 桌面 Worker 自动创建（task ${task.id}）。Claude Code 在本地完成改动。</sub>`
   ].join("\n");
 }
 
 function extractPrUrl(output: string): string | null {
   const match = output.match(/https:\/\/github\.com\/\S+\/pull\/\d+/);
   return match?.[0] ?? null;
+}
+
+// 复用已存在 PR 时刷新其正文（`gh pr edit --body`）。PR 正文原仅在 create 时写一次，打回重跑 / 续接不更新，
+// 正文会停在首轮内容；本函数让正文始终反映最新结构化产出。best-effort：失败只告警、不阻塞收尾。
+async function refreshPrBody(config: WorkerConfig, subWt: string, prUrl: string, body: string): Promise<void> {
+  try {
+    await runCommand(config.ghCommand, ["pr", "edit", prUrl, "--body", body], { cwd: subWt, timeoutMs: 5 * 60_000 });
+  } catch (error) {
+    console.warn(`[pr] 刷新 PR 正文失败（${prUrl}，不阻塞）：${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 // ====== 多仓任务（docs/spec/task-multi-repo.md）======
@@ -766,7 +792,8 @@ async function findExistingPrUrl(
 // 多仓 finalize（spec §7）：循环 task_repos 各自 commit/push/PR；强语义聚合（任一仓 failed → 任务整体 failed）。
 // 单仓任务（task_repos 仅一行 main）→ 循环只跑 1 次，行为完全等价于改造前的 finalizeTask。
 // 自动合并采用强一致策略：所有 PR 都 mergeable 才统一合，子仓先合 / 主仓最后合。
-async function finalizeTaskMultiRepo(
+// 导出供端到端验证直接驱动（docs/acceptance/pr-testplan-gate/scripts/e2e-finalize-gate.mjs）。
+export async function finalizeTaskMultiRepo(
   config: WorkerConfig,
   task: Task,
   localPath: string,
@@ -864,23 +891,35 @@ async function finalizeTaskMultiRepo(
       });
 
       // 打回重跑时该仓的 PR 已存在：push 已自动更新；跳过 gh pr create（与原 finalize 同理）。
+      // 但 PR 正文原仅在 create 时写一次，重跑不刷新 → 正文会停在首轮内容（旧 worker 建的还是代码块格式）。
+      // 这里 best-effort 重写正文，让它反映本轮最新的结构化产出。
       if (ctx.pr_url) {
+        await refreshPrBody(config, subWt, ctx.pr_url, prBody(task, claudeOutput));
         await updateTaskRepoStatus(pool, ctx.id, "pr_created");
+        await addTaskEvent(pool, task.id, config.workerId, "pr_created", `${repoLabel} 复用已存在 PR（已刷新正文）`, {
+          repoRole: ctx.role,
+          relativePath: ctx.relative_path,
+          prUrl: ctx.pr_url,
+          reused: true,
+          bodyRefreshed: true
+        });
         results.push({ ctx, sub: "pr_created", prUrl: ctx.pr_url, reused: true });
         continue;
       }
 
       // 幂等建 PR：首轮可能已 `gh pr create` 成功、却在落 pr_url 前失败（task_repos.pr_url 仍空）。
-      // 此时再 create 会因「a pull request already exists」整仓判失败。先查同 head/base 的已开 PR，命中即复用。
+      // 此时再 create 会因「a pull request already exists」整仓判失败。先查同 head/base 的已开 PR，命中即复用（并刷新正文）。
       const existingPrUrl = await findExistingPrUrl(config, subWt, ctx.work_branch, ctx.target_branch);
       if (existingPrUrl) {
+        await refreshPrBody(config, subWt, existingPrUrl, prBody(task, claudeOutput));
         await updateTaskRepoPrUrl(pool, ctx.id, existingPrUrl);
         await updateTaskRepoStatus(pool, ctx.id, "pr_created");
-        await addTaskEvent(pool, task.id, config.workerId, "pr_created", `${repoLabel} 复用已存在 PR`, {
+        await addTaskEvent(pool, task.id, config.workerId, "pr_created", `${repoLabel} 复用已存在 PR（已刷新正文）`, {
           repoRole: ctx.role,
           relativePath: ctx.relative_path,
           prUrl: existingPrUrl,
-          reused: true
+          reused: true,
+          bodyRefreshed: true
         });
         results.push({ ctx, sub: "pr_created", prUrl: existingPrUrl, reused: true });
         continue;
@@ -979,15 +1018,59 @@ async function finalizeTaskMultiRepo(
 
   // 强一致自动合并（spec 抉择 2）：所有 PR 都 mergeable 才统一合，否则全不合 + 告警事件。
   // 顺序：子仓先合、主仓最后（主仓往往引用子仓改动，反向合并 CI 易撞）。
+  // 门禁前置（docs/spec/pr-body-testplan-merge-gate.md）：先看 Claude 产出的 Test Plan——只有全部
+  // case 打勾（通过）才放行自动合并；存在未通过 / 未测试 case → 不合并 + 通知用户人工裁决。
   if (task.auto_merge_pr) {
     const prResults = results.filter(
       (r): r is { ctx: TaskRepoCtx; sub: "pr_created"; prUrl: string | null; reused: boolean } =>
         r.sub === "pr_created" && Boolean(r.prUrl)
     );
     if (prResults.length > 0) {
-      await tryAutoMergeAllOrNone(config, task, prResults);
+      const testPlan = parseTestPlan(claudeOutput);
+      if (testPlan.allPassed) {
+        await tryAutoMergeAllOrNone(config, task, prResults);
+      } else {
+        await blockAutoMergeForTestPlan(config, task, mainPrUrl, testPlan);
+      }
     }
   }
+}
+
+// Test Plan 门禁未通过：不自动合并，落 auto_merge_blocked 事件 + 给项目可见用户发 task_review_required
+// 通知（任务保持 success，PR 已建待人工处理——用户据通知决定手动合并还是续接任务）。
+async function blockAutoMergeForTestPlan(
+  config: WorkerConfig,
+  task: Task,
+  mainPrUrl: string | null,
+  testPlan: TestPlanResult
+): Promise<void> {
+  const pool = getPool();
+  const reason = testPlan.found
+    ? `Test Plan ${testPlan.passed}/${testPlan.total} 通过，存在未通过 / 未测试项`
+    : "产出中未找到 Test Plan";
+  const failing = testPlan.items.filter((i) => !i.passed).map((i) => i.label);
+  await addTaskEvent(
+    pool,
+    task.id,
+    config.workerId,
+    "auto_merge_blocked",
+    `${reason}，已跳过自动合并，待人工裁决`,
+    { total: testPlan.total, passed: testPlan.passed, found: testPlan.found, failing: failing.slice(0, 20) }
+  );
+  await notifyReviewRequired(task, mainPrUrl ?? `/tasks/${task.id}`, reason);
+}
+
+// 自动合并被跳过 → 发「需人工确认」通知给项目可见用户（Test Plan 未全通过 / PR 不可合并两路共用）。
+// 任务保持 success（PR 已建待人工处理），用户据通知决定手动合并还是续接任务。
+async function notifyReviewRequired(task: Task, link: string, reason: string): Promise<void> {
+  await emitTaskNotification(getPool(), {
+    type: "task_review_required",
+    taskId: task.id,
+    projectId: task.project_id,
+    title: `任务「${task.title}」需人工确认`,
+    body: `${reason}，已跳过自动合并。请人工确认后手动合并，或继续完善任务。`,
+    link
+  });
 }
 
 // 多仓 PR 标题：单仓时返回 task.title（与单仓行为一致）；多仓时加 `[main]` / `[<rel>]` 后缀
@@ -1062,6 +1145,10 @@ async function tryAutoMergeAllOrNone(
         }))
       }
     );
+    // 不可合并（冲突 / CI 未过等）同样通知用户人工裁决，链到主仓 PR（无主仓取首个）。
+    const link =
+      prResults.find((r) => r.ctx.role === "main")?.prUrl ?? prResults[0]?.prUrl ?? `/tasks/${task.id}`;
+    await notifyReviewRequired(task, link, `${notMergeable.length}/${checks.length} 个 PR 不可合并`);
     return;
   }
 

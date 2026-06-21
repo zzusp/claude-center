@@ -3043,7 +3043,10 @@ export async function deleteOrphanedAttachments(
 // 写入失败 / 表不存在不抛错——通知是辅助信号，不该把主路径拖崩；调用方一律忽略返回值。
 
 type EmitTaskNotificationInput = {
-  type: Extract<NotificationType, "task_claimed" | "task_waiting" | "task_success" | "task_failed" | "task_pr_created">;
+  type: Extract<
+    NotificationType,
+    "task_claimed" | "task_waiting" | "task_success" | "task_failed" | "task_pr_created" | "task_review_required"
+  >;
   taskId: string;
   projectId: string;
   title: string;

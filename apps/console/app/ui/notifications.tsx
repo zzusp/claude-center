@@ -2,7 +2,7 @@
 
 import type { Notification, NotificationType } from "@claude-center/db";
 import {
-  AlertTriangle, Bell, BellRing, CheckCircle2, FileEdit, MessageCircleQuestion,
+  AlertTriangle, Bell, BellRing, CheckCircle2, FileEdit, Gavel, MessageCircleQuestion,
   PlugZap, ServerCrash, ServerOff, Wifi, WifiOff, XCircle
 } from "lucide-react";
 import Link from "next/link";
@@ -13,11 +13,11 @@ import { playNotifySound } from "../lib/notify-sound";
 import { fmtAgo } from "./dashboard-shared";
 import { FormModal } from "./controls";
 
-// 顶栏「铃铛」消息中心：聚合 9 类通知。
+// 顶栏「铃铛」消息中心：聚合 10 类通知。
 //
-// 持久化部分（7 种，来自 DB notifications 表）：
+// 持久化部分（8 种，来自 DB notifications 表）：
 //   task_claimed / task_waiting / task_success / task_failed / task_pr_created /
-//   worker_online / worker_offline
+//   task_review_required / worker_online / worker_offline
 //
 // 瞬时部分（2 种，前端合成、不入 DB）：
 //   sse_disconnect：useRelayStatus 监到 disabled / reconnecting 持续 ≥5s 时合成一条；恢复后自动撤
@@ -32,9 +32,9 @@ const HOVER_LIMIT = 8;
 const MODAL_PAGE = 10;
 const MODAL_MAX = 200;
 
-// 需要声音提醒的通知类型：任务完成 / 失败 / 等待回复（与任务直接相关、用户多半在等的结果）。
+// 需要声音提醒的通知类型：任务完成 / 失败 / 等待回复 / 待人工确认（与任务直接相关、用户多半在等的结果）。
 // worker 上下线 / PR 已建 / 任务被领取等过程性通知不响铃，避免提示音泛滥。
-const SOUND_TYPES = new Set<NotificationType>(["task_success", "task_failed", "task_waiting"]);
+const SOUND_TYPES = new Set<NotificationType>(["task_success", "task_failed", "task_waiting", "task_review_required"]);
 
 // 前端合成的瞬时类型——加在原 NotificationType 之外，仅在 UI 内部使用。
 type EphemeralType = "sse_disconnect" | "db_disconnect";
@@ -53,6 +53,7 @@ const TYPE_LABEL: Record<AnyType, string> = {
   task_success: "任务完成",
   task_failed: "任务失败",
   task_pr_created: "PR 已建",
+  task_review_required: "PR 待人工确认",
   worker_online: "Worker 上线",
   worker_offline: "Worker 下线",
   sse_disconnect: "SSE 中断",
@@ -72,6 +73,8 @@ function iconFor(type: AnyType): ReactNode {
       return <XCircle size={size} strokeWidth={1.6} />;
     case "task_pr_created":
       return <PlugZap size={size} strokeWidth={1.6} />;
+    case "task_review_required":
+      return <Gavel size={size} strokeWidth={1.6} />;
     case "worker_online":
       return <Wifi size={size} strokeWidth={1.6} />;
     case "worker_offline":
@@ -98,6 +101,7 @@ function toneFor(type: AnyType): string {
     case "task_pr_created":
       return "merged";
     case "task_waiting":
+    case "task_review_required":
       return "waiting";
     case "task_claimed":
       return "running";
