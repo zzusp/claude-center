@@ -151,6 +151,14 @@ export function fmtDurationMs(ms: number | null): string {
   return rest === 0 ? `${h} 小时` : `${h}h ${rest}m`;
 }
 
+// token 用量人读：紧凑千/百万缩写（1.2k / 3.4M）。任务列表「Token」列用；0 / 缺失显示「—」。
+export function fmtTokens(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n) || n <= 0) return "—";
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
 // 列表「耗时」：起点优先 started_at（Worker 实际开工），无则退到 claimed_at；
 // 终点优先 finished_at，未结束则取 now（轮询周期内随刷新自然走动）。三者都缺即 null。
 export function computeTaskDurationMs(task: Task): number | null {
