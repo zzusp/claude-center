@@ -39,5 +39,12 @@ auto-merge: if **any** case is unchecked (failed or not run), it will NOT auto-m
 will notify the requester to review. So run the relevant verification and check the boxes you
 actually verified; leave the rest unchecked rather than guessing.
 
+**Do not skip a verification you can actually run.** If the change is end-to-end testable in this
+environment (a script/command exists, a service can be started, the repo ships an e2e/integration
+harness), run it and check the box — don't list it as "not run" out of convenience. Only leave a
+case unchecked when running it is genuinely infeasible here (needs external creds/hardware/network
+you don't have), and say so briefly in the case text. An untested case blocks auto-merge, so the
+incentive is to verify, not to defer.
+
 (This applies only when you finish the task. If you must stop for input, use the stopping protocol
 described in the task prompt instead — that path does not open a PR.)

@@ -19,7 +19,17 @@ matrix.csv 全 PASS（round-1）。结论：两项需求均已实现并验证。
 - 通知类型 `task_review_required`：迁移 035 扩约束并在真库验证「接受新类型 / 拒绝未知类型(23514)」；
   Console 铃铛与时间线均已登记标签 / 图标 / 配色。
 
+## 追加需求（round-2）
+
+- **需求②** 同族事件 `auto_merge_skipped`（PR 不可合并旧路径）已在 `task-detail-shared.tsx` `EVENT_META`
+  登记中文标签。
+- **需求③** PR 不可合并导致跳过自动合并时，除 `auto_merge_skipped` 事件外，新增 `task_review_required`
+  用户通知（与 Test Plan 门禁共用 `notifyReviewRequired`）。
+
 ## 验证强度说明
 
-DB 改动用一次性临时库真值 round-trip；解析逻辑用 tsx 单测；typecheck/build 五包全绿。端到端
-（真任务建 PR）受限于 worktree 未跑，已在 round-1.md「未覆盖」标注。
+DB 改动用一次性临时库真值 round-trip；解析逻辑用 tsx 单测；typecheck/build 五包全绿。
+**端到端已补齐**（round-2）：
+- E2E-1（确定性）：真 `finalizeTaskMultiRepo` + 真 git push + 真临时库 + 假 gh，三场景覆盖门禁放行/拦截/
+  不可合并 + PR body 渲染 + 通知。
+- E2E-2（真模型）：真 `executeTask` 跑真实 claude，证 center-rules.md 契约让真模型产出结构化 PR 描述。

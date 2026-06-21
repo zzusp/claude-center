@@ -782,7 +782,8 @@ async function findExistingPrUrl(
 // 多仓 finalize（spec §7）：循环 task_repos 各自 commit/push/PR；强语义聚合（任一仓 failed → 任务整体 failed）。
 // 单仓任务（task_repos 仅一行 main）→ 循环只跑 1 次，行为完全等价于改造前的 finalizeTask。
 // 自动合并采用强一致策略：所有 PR 都 mergeable 才统一合，子仓先合 / 主仓最后合。
-async function finalizeTaskMultiRepo(
+// 导出供端到端验证直接驱动（docs/acceptance/pr-testplan-gate/scripts/e2e-finalize-gate.mjs）。
+export async function finalizeTaskMultiRepo(
   config: WorkerConfig,
   task: Task,
   localPath: string,
@@ -1034,13 +1035,19 @@ async function blockAutoMergeForTestPlan(
     `${reason}，已跳过自动合并，待人工裁决`,
     { total: testPlan.total, passed: testPlan.passed, found: testPlan.found, failing: failing.slice(0, 20) }
   );
-  await emitTaskNotification(pool, {
+  await notifyReviewRequired(task, mainPrUrl ?? `/tasks/${task.id}`, reason);
+}
+
+// 自动合并被跳过 → 发「需人工确认」通知给项目可见用户（Test Plan 未全通过 / PR 不可合并两路共用）。
+// 任务保持 success（PR 已建待人工处理），用户据通知决定手动合并还是续接任务。
+async function notifyReviewRequired(task: Task, link: string, reason: string): Promise<void> {
+  await emitTaskNotification(getPool(), {
     type: "task_review_required",
     taskId: task.id,
     projectId: task.project_id,
     title: `任务「${task.title}」需人工确认`,
     body: `${reason}，已跳过自动合并。请人工确认后手动合并，或继续完善任务。`,
-    link: mainPrUrl ?? `/tasks/${task.id}`
+    link
   });
 }
 
@@ -1116,6 +1123,10 @@ async function tryAutoMergeAllOrNone(
         }))
       }
     );
+    // 不可合并（冲突 / CI 未过等）同样通知用户人工裁决，链到主仓 PR（无主仓取首个）。
+    const link =
+      prResults.find((r) => r.ctx.role === "main")?.prUrl ?? prResults[0]?.prUrl ?? `/tasks/${task.id}`;
+    await notifyReviewRequired(task, link, `${notMergeable.length}/${checks.length} 个 PR 不可合并`);
     return;
   }
 
