@@ -458,6 +458,8 @@ export function NewConversationPanel({
       .catch(() => {
         setBranches([]);
         setBranchState("error");
+        // 拉取失败时回退到项目默认分支作为初值，用户仍可在输入框里手动改成别的分支。
+        setBranch(projects.find((p) => p.id === projectId)?.default_branch ?? "");
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
@@ -514,19 +516,25 @@ export function NewConversationPanel({
           <label className="chat-field">
             <span>
               分支
-              {branchState === "loading" ? "（加载中…）" : branchState === "error" ? "（加载失败）" : ""}
+              {branchState === "loading"
+                ? "（加载中…）"
+                : branchState === "error"
+                  ? "（加载失败，可手动输入）"
+                  : ""}
             </span>
-            <select value={branch} onChange={(e) => setBranch(e.target.value)} disabled={branches.length === 0}>
-              {branches.length === 0 ? (
-                <option value="">—</option>
-              ) : (
-                branches.map((b) => (
-                  <option key={b} value={b}>
-                    {b}
-                  </option>
-                ))
-              )}
-            </select>
+            {/* 用 input + datalist 而非 select：分支列表拉取失败时仍可手动输入分支名，
+                成功时 datalist 给出远程分支下拉建议。与发布任务表单的分支输入一致。 */}
+            <input
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              list="cc-conv-branch-list"
+              placeholder="输入或选择分支"
+            />
+            <datalist id="cc-conv-branch-list">
+              {branches.map((b) => (
+                <option key={b} value={b} />
+              ))}
+            </datalist>
           </label>
           <label className="chat-field">
             <span>Worker（在线）</span>
