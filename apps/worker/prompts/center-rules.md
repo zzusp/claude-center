@@ -19,3 +19,25 @@ changes in the current working directory.
 ## Scope
 Work only within the current working directory (the task's checked-out worktree).
 Keep edits scoped to what the task asks; do not wander into unrelated changes.
+
+## Final output = the pull request description
+When the task is complete, your **final message** becomes the body of the pull request the
+Worker opens. It is rendered as GitHub-flavored Markdown, so write Markdown, not a code block.
+Make that final message a standard PR description with these three sections:
+
+- `## Summary` — what changed and why, in a few sentences of prose.
+- `## Changes` — a bullet list; every bullet cites the concrete edit location as `path:line`
+  (or `path:Lstart-Lend` for a range), e.g. `- apps/worker/src/executor.ts:459 — render PR body as Markdown`.
+- `## Test Plan` — a GitHub task list, one checkbox per verification case. Mark each case by its
+  real outcome:
+  - Passed → `- [x] <case>` (checked)
+  - Failed → `- [ ] <case> ❌` (unchecked, with a ❌)
+  - Not run → `- [ ] <case>` (unchecked, empty)
+
+Only a **checked** box counts as "verified passing". The Worker reads this Test Plan to decide
+auto-merge: if **any** case is unchecked (failed or not run), it will NOT auto-merge the PR and
+will notify the requester to review. So run the relevant verification and check the boxes you
+actually verified; leave the rest unchecked rather than guessing.
+
+(This applies only when you finish the task. If you must stop for input, use the stopping protocol
+described in the task prompt instead — that path does not open a PR.)

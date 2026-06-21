@@ -320,8 +320,8 @@ export type Conversation = {
   generating?: boolean;
 };
 
-// ===== 用户消息通知（029）。详见 packages/db/migrations/029_notifications.sql。 =====
-// 七种类型按 RBAC 范围 fanout 给收件人：task_* 给项目可见者（admin + 项目分配用户），
+// ===== 用户消息通知（029；035 增 task_review_required）。详见对应迁移。 =====
+// 八种类型按 RBAC 范围 fanout 给收件人：task_* 给项目可见者（admin + 项目分配用户），
 // worker_* 给全部 admin。SSE / DB 中断不在此持久化（DB 断时也写不进），由前端瞬时合成展示。
 export type NotificationType =
   | "task_claimed"
@@ -329,6 +329,8 @@ export type NotificationType =
   | "task_success"
   | "task_failed"
   | "task_pr_created"
+  // PR 已建但 Test Plan 未全通过 → 自动合并被门禁拦下，需用户人工裁决（手动合并 / 续接任务）。
+  | "task_review_required"
   | "worker_online"
   | "worker_offline";
 

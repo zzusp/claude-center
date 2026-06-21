@@ -41,6 +41,7 @@ export const EVENT_META: Record<string, EventMeta> = {
   pr_created: { label: "已创建 PR", tone: "merged" },
   auto_merged: { label: "PR 自动合并", tone: "merged" },
   auto_merge_failed: { label: "PR 自动合并失败", tone: "failed" },
+  auto_merge_blocked: { label: "Test Plan 未全通过·待人工确认", tone: "waiting" },
   success: { label: "执行完成", tone: "success" },
   failed: { label: "执行失败", tone: "failed" },
   cancel_requested: { label: "请求取消", tone: "cancelled" },

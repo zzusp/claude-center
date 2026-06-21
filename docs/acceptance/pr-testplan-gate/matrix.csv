@@ -1,0 +1,15 @@
+case,round-1
+parseTestPlan-全勾放行,PASS
+parseTestPlan-含未测试拦截,PASS
+parseTestPlan-含未通过(❌)拦截,PASS
+parseTestPlan-勾选带❌判未通过,PASS
+parseTestPlan-无TestPlan拦截,PASS
+parseTestPlan-后续标题不误收,PASS
+parseTestPlan-大小写+星号bullet,PASS
+parseTestPlan-CRLF,PASS
+migration035-全量迁移链应用,PASS
+constraint-含8类型,PASS
+constraint-接受task_review_required,PASS
+constraint-拒绝未知类型(23514),PASS
+typecheck-五包,PASS
+build-五包(含next),PASS
