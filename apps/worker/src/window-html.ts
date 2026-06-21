@@ -446,6 +446,7 @@ export function windowHtml(): string {
                 <span class="app-header-sub" id="pageSub">本机运行状态、能力与套餐用量</span>
               </div>
               <div class="app-header-actions">
+                <span class="relay-pill"><span class="live-dot" id="dbDot" title="数据库连接状态"></span><span id="dbStat">数据库…</span></span>
                 <span class="relay-pill"><span class="live-dot" id="relayDot" title="SSE 连接状态"></span><span id="relay">连接中…</span></span>
                 <span class="badge" id="state" data-tone="cancelled"><span class="glyph">·</span>—</span>
               </div>
@@ -582,6 +583,18 @@ export function windowHtml(): string {
                     <div class="set-row">
                       <span class="set-label">并发上限<span class="set-hint">同时执行的在途任务数</span></span>
                       <input type="number" id="maxParallel" class="num-input" min="1" max="16" />
+                    </div>
+                  </div>
+                </section>
+
+                <section class="card">
+                  <div class="card-head"><h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.66 3.13 3 7 3s7-1.34 7-3V6"/><path d="M5 12v6c0 1.66 3.13 3 7 3s7-1.34 7-3v-6"/></svg></span>数据库连接</h2></div>
+                  <div class="card-body">
+                    <div class="term-form">
+                      <span class="term-label">PostgreSQL 连接串（与 Console 共享同一库，向管理员索取）</span>
+                      <input id="databaseUrl" class="path-input" placeholder="postgresql://user:password@host:5432/claude_center" />
+                      <button id="saveDatabase" class="btn btn-sm btn-primary term-save" type="button">保存并连接</button>
+                      <span class="term-hint" id="databaseHint">保存后即时连接并重新注册，无需重启；连通状态见顶栏。覆盖环境变量 DATABASE_URL，持久化到 ~/.claude-center/worker.json。</span>
                     </div>
                   </div>
                 </section>
@@ -1213,6 +1226,17 @@ export function windowHtml(): string {
             relayDot.classList.toggle("pulse", relayMeta.pulse);
             $("relay").textContent = relayMeta.text;
 
+            // 顶栏数据库连通性：connected 绿且脉冲；未配置灰；连不上红。
+            const dbMeta = {
+              connected: { color: "var(--success)", text: "数据库已连接", pulse: true },
+              unconfigured: { color: "var(--cancelled)", text: "数据库未配置", pulse: false },
+              error: { color: "var(--failed)", text: "数据库连不上", pulse: false }
+            }[s.dbState] || { color: "var(--cancelled)", text: "数据库未配置", pulse: false };
+            const dbDot = $("dbDot");
+            dbDot.style.background = dbMeta.color;
+            dbDot.classList.toggle("pulse", dbMeta.pulse);
+            $("dbStat").textContent = dbMeta.text;
+
             // 顶栏工作态徽标
             const state = $("state");
             state.setAttribute("data-tone", working ? "success" : "pending");
@@ -1358,6 +1382,28 @@ export function windowHtml(): string {
             finally { btn.disabled = false; }
           });
 
+          // —— 数据库连接串配置（持久化进 worker.json，覆盖 env，保存即时连接并重启循环）——
+          async function loadDb() {
+            let s = null;
+            try { s = await window.workerApi.getState(); } catch (e) {}
+            if (!s) return;
+            if (document.activeElement !== $("databaseUrl")) $("databaseUrl").value = s.databaseUrl || "";
+          }
+          $("saveDatabase").addEventListener("click", async () => {
+            const btn = $("saveDatabase"), hint = $("databaseHint");
+            const url = $("databaseUrl").value.trim();
+            btn.disabled = true; hint.textContent = "保存并连接中…";
+            try {
+              const r = await window.workerApi.setDatabaseConfig(url);
+              if (!url) hint.textContent = "已清空数据库配置（Worker 将停止接活）";
+              else if (r && r.ok) hint.textContent = "已保存，数据库连接成功，已重新注册";
+              else hint.textContent = "已保存，但连接失败：" + ((r && r.error) || "未知原因") + "（检查连接串 / 网络后重试）";
+              await loadDb();
+              refresh();
+            } catch (e) { hint.textContent = "保存失败：" + (e && e.message ? e.message : e); }
+            finally { btn.disabled = false; }
+          });
+
           $("workingToggle").addEventListener("change", async (e) => { await window.workerApi.setWorking(e.target.checked); refresh(); });
           $("remoteToggle").addEventListener("change", async (e) => { await window.workerApi.setAllowRemote(e.target.checked); refresh(); });
           $("maxParallel").addEventListener("change", async (e) => {
@@ -1433,7 +1479,7 @@ export function windowHtml(): string {
           });
 
           showPage("overview");
-          refresh(); loadProjects(); reloadTasks(); reloadConversations(); loadTerminals(); loadRelay();
+          refresh(); loadProjects(); reloadTasks(); reloadConversations(); loadTerminals(); loadRelay(); loadDb();
           // 冷启动预热：主进程现在窗口先于 worker.start() 渲染（DB 不可达也能出窗口），但能力自检/OS/用量要等
           // start() 完成后才有值；只靠 15s 常规轮询会让能力区空窗最长 15s。开局再快轮询几次，start() 一就绪
           //（通常 1-3s）能力即显示，之后回落到 15s 常规节奏。

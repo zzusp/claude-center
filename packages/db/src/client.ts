@@ -6,9 +6,25 @@ const { Pool } = pg;
 const POOL_MAX = 10;
 
 let pool: pg.Pool | null = null;
+// 进程内显式配置的连接串（桌面端在 UI 里填、持久化进 worker.json 后注入）。
+// 优先级高于 process.env.DATABASE_URL，让桌面端配置覆盖 env；为空时回退 env，保持 Console / 脚本的纯 env 工作流不变。
+let configuredUrl: string | null = null;
+
+// 设置（或清空）进程内连接串。仅改后续 getPool 的取串来源，不动已建连接池——
+// 运行时换库请用 reconfigureDatabase（它会关掉旧池，下次 getPool 按新串重建）。
+export function setDatabaseUrl(url: string | null): void {
+  const trimmed = url?.trim();
+  configuredUrl = trimmed ? trimmed : null;
+}
+
+// 运行时切换连接串：设新串 + 关旧连接池，下一次 getPool 用新串重建。桌面端保存数据库配置后调用。
+export async function reconfigureDatabase(url: string | null): Promise<void> {
+  setDatabaseUrl(url);
+  await closePool();
+}
 
 export function getDatabaseUrl(explicitUrl?: string): string {
-  const databaseUrl = explicitUrl ?? process.env.DATABASE_URL;
+  const databaseUrl = explicitUrl ?? configuredUrl ?? process.env.DATABASE_URL;
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is required");
   }
