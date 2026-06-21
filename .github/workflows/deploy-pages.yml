@@ -1,0 +1,61 @@
+# 把对外介绍页（docs/manual/promo/claude-center-intro.html）发布到 GitHub Pages，
+# 站点根即 https://zzusp.github.io/claude-center 。
+# 介绍页本地用 ../../screenshots 引用截图（便于本地预览）；构建时拷成根 index.html +
+# 同级 screenshots/，并把 ../../screenshots/ 改写成 screenshots/，源文件保持不动。
+name: deploy-pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/manual/promo/claude-center-intro.html'
+      - 'docs/screenshots/**'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一个 Pages 部署，新推送取消在途构建。
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Assemble site
+        run: |
+          set -e
+          mkdir -p _site/screenshots
+          cp docs/manual/promo/claude-center-intro.html _site/index.html
+          cp docs/screenshots/*.png _site/screenshots/
+          # 站点根 index.html 与 screenshots/ 同级：把 ../../screenshots/ 改写成 screenshots/
+          sed -i 's#\.\./\.\./screenshots/#screenshots/#g' _site/index.html
+          echo "── 改写后残留的 ../../screenshots（应为 0）──"
+          ! grep -q '\.\./\.\./screenshots' _site/index.html
+          ls -la _site _site/screenshots | head -40
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

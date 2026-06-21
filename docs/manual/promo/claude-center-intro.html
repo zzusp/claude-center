@@ -1,0 +1,1617 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ClaudeCenter · AI 编码任务中枢调度台</title>
+    <meta
+      name="description"
+      content="ClaudeCenter：浏览器随时发任务、看进度、回复提问；桌面 Worker 在本地连接 Claude Code 终端，用 git worktree 隔离并发执行，自动形成 PR 闭环。"
+    />
+    <style>
+      /* ClaudeCenter 介绍页 · 配色取自 apps/console/app/globals.css 的 Claude Light 设计系统
+         哲学：信息 > 视觉，状态 > 装饰，结构 > 风格 —— 亮色、克制、干净。 */
+      :root {
+        --bg: #f8f8f6;
+        --surface-1: #ffffff;
+        --surface-2: #f5f5f4;
+        --surface-3: #fafaf9;
+        --border: #e7e5e4;
+        --border-strong: #d6d3d1;
+        --text-1: #1c1917;
+        --text-2: #44403c;
+        --text-3: #78716c;
+        --text-4: #a8a29e;
+        --success: #16a34a;
+        --merged: #059669;
+        --running: #2563eb;
+        --pending: #f59e0b;
+        --waiting: #0891b2;
+        --scheduled: #7c3aed;
+        --failed: #dc2626;
+        --r-sm: 8px;
+        --r-md: 10px;
+        --r-lg: 12px;
+        --r-xl: 16px;
+        --shadow-1: 0 1px 2px rgba(28, 25, 23, 0.04);
+        --shadow-2: 0 4px 16px rgba(28, 25, 23, 0.08);
+        --shadow-3: 0 24px 60px rgba(28, 25, 23, 0.12);
+        --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+        --nav-h: 60px;
+        --maxw: 1180px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: var(--bg);
+        color: var(--text-1);
+        font-family: var(--font-sans);
+        font-size: 15px;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+
+      a {
+        color: var(--running);
+        text-decoration: none;
+      }
+
+      ::selection {
+        background: rgba(37, 99, 235, 0.16);
+      }
+
+      .wrap {
+        width: 100%;
+        max-width: var(--maxw);
+        margin: 0 auto;
+        padding: 0 28px;
+      }
+
+      section {
+        scroll-margin-top: calc(var(--nav-h) + 16px);
+      }
+
+      /* ---------------- 顶部滚动进度条 ---------------- */
+      .scroll-progress {
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 60;
+        height: 2px;
+        width: 100%;
+        transform: scaleX(0);
+        transform-origin: 0 50%;
+        background: linear-gradient(90deg, var(--running), var(--merged));
+      }
+
+      /* ---------------- 顶栏（毛玻璃，滚动后加描边） ---------------- */
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 50;
+        height: var(--nav-h);
+        background: rgba(248, 248, 246, 0.72);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid transparent;
+        transition: border-color 200ms ease, background 200ms ease, box-shadow 200ms ease;
+      }
+      .nav.scrolled {
+        border-bottom-color: var(--border);
+        background: rgba(248, 248, 246, 0.85);
+        box-shadow: var(--shadow-1);
+      }
+      .nav-inner {
+        height: 100%;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        margin-right: auto;
+      }
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 9px;
+        background: var(--text-1);
+        color: var(--surface-1);
+        font-weight: 800;
+        font-size: 14px;
+        letter-spacing: -0.03em;
+      }
+      .brand-copy {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.15;
+      }
+      .brand-title {
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      .brand-sub {
+        font-size: 11.5px;
+        color: var(--text-3);
+      }
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .nav-link {
+        padding: 7px 12px;
+        border-radius: var(--r-sm);
+        color: var(--text-2);
+        font-size: 13.5px;
+        font-weight: 500;
+        transition: background 120ms ease, color 120ms ease;
+      }
+      .nav-link:hover {
+        background: #efeeeb;
+        color: var(--text-1);
+      }
+      .nav-cta {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 8px 15px;
+        border-radius: var(--r-sm);
+        background: var(--text-1);
+        color: var(--surface-1);
+        font-size: 13.5px;
+        font-weight: 600;
+        transition: background 120ms ease, transform 120ms ease;
+      }
+      .nav-cta:hover {
+        background: #000;
+        transform: translateY(-1px);
+      }
+
+      /* ---------------- 通用：live 呼吸点 / pill / 按钮 ---------------- */
+      .dot {
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: currentColor;
+        flex-shrink: 0;
+      }
+      .dot.pulse {
+        position: relative;
+      }
+      .dot.pulse::after {
+        content: "";
+        position: absolute;
+        inset: -4px;
+        border-radius: 999px;
+        background: currentColor;
+        opacity: 0.18;
+        animation: cc-ring 1.8s ease-in-out infinite;
+      }
+      @keyframes cc-breathe {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+      @keyframes cc-ring {
+        0% { transform: scale(0.7); opacity: 0.25; }
+        70% { transform: scale(1.7); opacity: 0; }
+        100% { opacity: 0; }
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: var(--surface-2);
+        color: var(--text-2);
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .pill[data-tone="running"] { background: rgba(37, 99, 235, 0.1); color: var(--running); }
+      .pill[data-tone="success"] { background: rgba(22, 163, 74, 0.1); color: var(--success); }
+      .pill[data-tone="waiting"] { background: rgba(8, 145, 178, 0.1); color: var(--waiting); }
+      .pill[data-tone="merged"] { background: rgba(5, 150, 105, 0.12); color: var(--merged); }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 44px;
+        padding: 0 22px;
+        border: 1px solid var(--border);
+        border-radius: var(--r-md);
+        background: var(--surface-1);
+        color: var(--text-1);
+        font-size: 14.5px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 140ms ease, border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+      }
+      .btn:hover {
+        border-color: var(--border-strong);
+        box-shadow: var(--shadow-2);
+        transform: translateY(-1px);
+      }
+      .btn-primary {
+        background: var(--text-1);
+        border-color: var(--text-1);
+        color: var(--surface-1);
+      }
+      .btn-primary:hover {
+        background: #000;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 12px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.7);
+        color: var(--text-2);
+        font-size: 12.5px;
+        font-weight: 600;
+      }
+
+      .section-head {
+        max-width: 680px;
+        margin: 0 0 36px;
+      }
+      .section-head h2 {
+        margin: 14px 0 0;
+        font-size: 32px;
+        line-height: 1.15;
+        letter-spacing: -0.03em;
+      }
+      .section-head p {
+        margin: 12px 0 0;
+        color: var(--text-2);
+        font-size: 16px;
+        line-height: 1.7;
+      }
+
+      /* ---------------- Hero ---------------- */
+      .hero {
+        position: relative;
+        overflow: hidden;
+        padding: 72px 0 64px;
+      }
+      .hero-bg {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(90deg, rgba(231, 229, 228, 0.45) 1px, transparent 1px) 0 0 / 64px 64px,
+          linear-gradient(180deg, rgba(231, 229, 228, 0.45) 1px, transparent 1px) 0 0 / 64px 64px;
+        mask-image: radial-gradient(circle at 50% 30%, #000 55%, transparent 100%);
+        -webkit-mask-image: radial-gradient(circle at 50% 30%, #000 55%, transparent 100%);
+      }
+      .hero-glow {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        background:
+          radial-gradient(closest-side at 18% 18%, rgba(37, 99, 235, 0.1), transparent),
+          radial-gradient(closest-side at 84% 22%, rgba(22, 163, 74, 0.1), transparent);
+        animation: cc-glow-drift 16s ease-in-out infinite alternate;
+      }
+      @keyframes cc-glow-drift {
+        from { transform: translate3d(-12px, -6px, 0) scale(1); }
+        to { transform: translate3d(16px, 10px, 0) scale(1.08); }
+      }
+      .hero-inner {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 56px;
+        align-items: center;
+      }
+      .hero h1 {
+        margin: 18px 0 0;
+        font-size: 50px;
+        line-height: 1.06;
+        letter-spacing: -0.035em;
+      }
+      .hero .lead {
+        margin: 20px 0 0;
+        max-width: 540px;
+        color: var(--text-2);
+        font-size: 17px;
+        line-height: 1.72;
+      }
+      .hero-actions {
+        margin-top: 30px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .stat-band {
+        margin-top: 40px;
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+        max-width: 560px;
+      }
+      .stat {
+        padding: 2px 0;
+      }
+      .stat-v {
+        font-size: 30px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+      }
+      .stat-v .u {
+        font-size: 15px;
+        color: var(--text-3);
+        margin-left: 2px;
+      }
+      .stat-k {
+        margin-top: 7px;
+        color: var(--text-3);
+        font-size: 12.5px;
+        line-height: 1.4;
+      }
+
+      /* Hero 视觉：浏览器壳 + 手机 */
+      .hero-visual {
+        position: relative;
+      }
+      .browser-shell {
+        position: relative;
+        border: 1px solid var(--border-strong);
+        border-radius: var(--r-lg);
+        background: var(--surface-1);
+        box-shadow: var(--shadow-3);
+        overflow: hidden;
+      }
+      .browser-bar {
+        height: 32px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 12px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface-3);
+      }
+      .browser-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--border-strong);
+      }
+      .browser-bar .url {
+        margin-left: 10px;
+        flex: 1;
+        height: 18px;
+        border-radius: 6px;
+        background: var(--surface-2);
+      }
+      .browser-shell img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 10;
+        object-fit: cover;
+        object-position: left top;
+      }
+      .phone {
+        position: absolute;
+        right: -18px;
+        bottom: -26px;
+        width: 122px;
+        padding: 5px;
+        border-radius: 22px;
+        background: var(--text-1);
+        box-shadow: 0 22px 46px rgba(28, 25, 23, 0.26);
+      }
+      .phone img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 9 / 19;
+        object-fit: cover;
+        object-position: top;
+        border-radius: 17px;
+        background: var(--surface-1);
+      }
+      .float-badge {
+        position: absolute;
+        left: -16px;
+        top: 26px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 12px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.95);
+        box-shadow: var(--shadow-2);
+        font-size: 12.5px;
+        font-weight: 600;
+        color: var(--running);
+      }
+
+      /* ---------------- 三大能力 ---------------- */
+      .pillars {
+        padding: 64px 0;
+      }
+      .pillar-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 20px;
+      }
+      .card {
+        position: relative;
+        border: 1px solid var(--border);
+        border-radius: var(--r-xl);
+        background: var(--surface-1);
+        box-shadow: var(--shadow-1);
+        padding: 24px;
+        transition: box-shadow 200ms ease, transform 200ms ease, border-color 200ms ease;
+      }
+      .card:hover {
+        box-shadow: var(--shadow-3);
+        transform: translateY(-3px);
+        border-color: var(--border-strong);
+      }
+      .card-ico {
+        display: grid;
+        place-items: center;
+        width: 42px;
+        height: 42px;
+        border-radius: var(--r-md);
+        background: var(--surface-2);
+        color: var(--text-2);
+        margin-bottom: 16px;
+      }
+      .card[data-accent="running"] .card-ico { background: rgba(37, 99, 235, 0.1); color: var(--running); }
+      .card[data-accent="merged"] .card-ico { background: rgba(5, 150, 105, 0.12); color: var(--merged); }
+      .card[data-accent="waiting"] .card-ico { background: rgba(8, 145, 178, 0.1); color: var(--waiting); }
+      .card h3 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: -0.01em;
+      }
+      .card .sub {
+        margin: 3px 0 0;
+        color: var(--text-3);
+        font-size: 13px;
+      }
+      .card .desc {
+        margin: 14px 0 0;
+        color: var(--text-2);
+        font-size: 14px;
+        line-height: 1.7;
+      }
+      .feature-list {
+        margin: 16px 0 0;
+        display: grid;
+        gap: 8px;
+      }
+      .feature-row {
+        display: flex;
+        gap: 9px;
+        align-items: flex-start;
+        font-size: 13.5px;
+        color: var(--text-2);
+      }
+      .feature-row .tick {
+        margin-top: 1px;
+        color: var(--success);
+        flex-shrink: 0;
+      }
+      .feature-row b {
+        color: var(--text-1);
+        font-weight: 600;
+      }
+
+      /* ---------------- 架构 / 数据流转 ---------------- */
+      .arch {
+        padding: 64px 0;
+        background: var(--surface-3);
+        border-top: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
+      }
+      .arch-grid {
+        display: grid;
+        grid-template-columns: 1fr 60px 0.86fr 60px 1fr;
+        align-items: stretch;
+        gap: 0;
+      }
+      .arch-col {
+        min-width: 0;
+      }
+      .node {
+        height: 100%;
+        border: 1px solid var(--border);
+        border-radius: var(--r-xl);
+        background: var(--surface-1);
+        box-shadow: var(--shadow-1);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+      .node-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(250, 250, 249, 0.8);
+      }
+      .node-head strong {
+        font-size: 15px;
+      }
+      .node-head .sub {
+        display: block;
+        margin-top: 2px;
+        color: var(--text-3);
+        font-size: 11.5px;
+        font-weight: 400;
+      }
+      .node-body {
+        padding: 16px;
+        flex: 1;
+      }
+      .node.hub {
+        background: linear-gradient(180deg, rgba(37, 99, 235, 0.05), var(--surface-1) 60%);
+      }
+      .hub-card {
+        position: relative;
+        border: 1px solid var(--border);
+        border-radius: var(--r-md);
+        background: rgba(255, 255, 255, 0.9);
+        padding: 12px 13px;
+      }
+      .hub-card + .hub-card {
+        margin-top: 10px;
+      }
+      .hub-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13.5px;
+        font-weight: 700;
+      }
+      .hub-desc {
+        margin-top: 7px;
+        color: var(--text-3);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      .lane {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .lane .pill {
+        font-size: 11px;
+        padding: 3px 8px;
+        font-weight: 600;
+      }
+      /* PostgreSQL 卡片：tasks→sessions 顺序"写入波" + 一道淡蓝光斜扫过卡片，呼应数据不断落库 */
+      .lane[data-live="db"] .pill {
+        animation: cc-write 3.2s ease-in-out infinite;
+      }
+      .lane[data-live="db"] .pill:nth-child(1) { animation-delay: 0s; }
+      .lane[data-live="db"] .pill:nth-child(2) { animation-delay: 0.4s; }
+      .lane[data-live="db"] .pill:nth-child(3) { animation-delay: 0.8s; }
+      .lane[data-live="db"] .pill:nth-child(4) { animation-delay: 1.2s; }
+      @keyframes cc-write {
+        0%, 38%, 100% { background: var(--surface-2); color: var(--text-3); }
+        10% { background: rgba(37, 99, 235, 0.16); color: var(--running); }
+      }
+      .hub-card.db::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        pointer-events: none;
+        background: linear-gradient(115deg, transparent 38%, rgba(37, 99, 235, 0.12) 50%, transparent 62%);
+        background-size: 220% 100%;
+        background-repeat: no-repeat;
+        animation: cc-db-sweep 3.2s ease-in-out infinite;
+      }
+      @keyframes cc-db-sweep {
+        0% { background-position: 150% 0; }
+        55%, 100% { background-position: -70% 0; }
+      }
+      /* SSE Relay 卡片：边框周期性泛青光 + 三个 pill 同时闪一下，呼应"实时广播推送"（与 DB 的顺序扫描区分） */
+      .hub-card.relay::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        pointer-events: none;
+        box-shadow: inset 0 0 0 1.5px rgba(8, 145, 178, 0);
+        animation: cc-relay-pulse 2.4s ease-in-out infinite;
+      }
+      @keyframes cc-relay-pulse {
+        0%, 100% { box-shadow: inset 0 0 0 1.5px rgba(8, 145, 178, 0); }
+        22% { box-shadow: inset 0 0 0 1.5px rgba(8, 145, 178, 0.45); }
+      }
+      .lane[data-live="relay"] .pill {
+        animation: cc-broadcast 2.4s ease-in-out infinite;
+      }
+      @keyframes cc-broadcast {
+        0%, 100% { background: var(--surface-2); color: var(--text-3); }
+        20%, 32% { background: rgba(8, 145, 178, 0.16); color: var(--waiting); }
+      }
+
+      /* Web 节点：浏览器壳 + 手机端缩略，体现"同一控制台，Web 与手机端都能用" */
+      .node-visual {
+        position: relative;
+      }
+      .node-phone {
+        position: absolute;
+        right: 8px;
+        bottom: 8px;
+        width: 72px;
+        padding: 3px;
+        border-radius: 14px;
+        background: var(--text-1);
+        box-shadow: 0 12px 26px rgba(28, 25, 23, 0.3);
+      }
+      .node-phone img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 9 / 19;
+        object-fit: cover;
+        object-position: top;
+        border-radius: 11px;
+        background: var(--surface-1);
+      }
+      .node-phone .phone-cap {
+        position: absolute;
+        top: -10px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: var(--running);
+        color: #fff;
+        font-size: 9.5px;
+        font-weight: 700;
+        white-space: nowrap;
+        box-shadow: var(--shadow-2);
+      }
+
+      /* 连接器：流动的蓝/绿光点沿轨道移动 */
+      .connector {
+        position: relative;
+        align-self: center;
+        height: 2px;
+        margin: 0 8px;
+        border-radius: 999px;
+        background: var(--border-strong);
+        overflow: visible;
+      }
+      .connector::before {
+        content: "";
+        position: absolute;
+        right: -1px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 0;
+        height: 0;
+        border-left: 7px solid var(--border-strong);
+        border-top: 5px solid transparent;
+        border-bottom: 5px solid transparent;
+      }
+      /* 导线高光：一道光沿连接线扫过，体现"电流 / 数据在流动" */
+      .connector .beam {
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        background: linear-gradient(90deg, transparent, rgba(37, 99, 235, 0.6), transparent);
+        background-size: 55% 100%;
+        background-repeat: no-repeat;
+        animation: cc-beam 2.4s linear infinite;
+      }
+      .connector.green .beam {
+        background: linear-gradient(90deg, transparent, rgba(5, 150, 105, 0.6), transparent);
+        background-size: 55% 100%;
+        background-repeat: no-repeat;
+      }
+      @keyframes cc-beam {
+        0% { background-position: -55% 0; }
+        100% { background-position: 155% 0; }
+      }
+      /* 数据包：单颗光点沿线流动 */
+      .connector .spark {
+        position: absolute;
+        top: 50%;
+        left: 0;
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        transform: translate(-50%, -50%);
+        background: var(--running);
+        box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.16);
+        animation: cc-flow 2.4s ease-in-out infinite;
+      }
+      .connector.green .spark {
+        background: var(--merged);
+        box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.16);
+      }
+      @keyframes cc-flow {
+        0% { left: 4%; opacity: 0; }
+        12% { opacity: 1; }
+        88% { opacity: 1; }
+        100% { left: 96%; opacity: 0; }
+      }
+      .connector-label {
+        position: absolute;
+        top: -26px;
+        left: 50%;
+        transform: translateX(-50%);
+        white-space: nowrap;
+        font-size: 11.5px;
+        font-weight: 700;
+        color: var(--running);
+      }
+      .connector.green .connector-label {
+        color: var(--merged);
+      }
+
+      .terminal {
+        margin-top: 12px;
+        border-radius: var(--r-md);
+        background: #1c1917;
+        color: #fafaf9;
+        font-family: var(--font-mono);
+        font-size: 11.5px;
+        line-height: 1.7;
+        padding: 12px 13px;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+      }
+      .terminal-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        color: #d6d3d1;
+        font-family: var(--font-sans);
+        font-size: 11.5px;
+        font-weight: 700;
+      }
+      .terminal-head .tdots {
+        display: inline-flex;
+        gap: 5px;
+      }
+      .terminal-head .tdots i {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #44403c;
+      }
+      .term-body {
+        height: 120px;
+      }
+      .term-line {
+        color: #d6d3d1;
+        white-space: pre;
+        min-height: 1.7em;
+      }
+      .term-line .blue { color: #93c5fd; }
+      .term-line .ok { color: #86efac; }
+      .term-cursor {
+        display: inline-block;
+        width: 7px;
+        height: 1.05em;
+        vertical-align: text-bottom;
+        background: #86efac;
+        margin-left: 1px;
+        animation: cc-caret 1s step-end infinite;
+      }
+      @keyframes cc-caret {
+        0%, 50% { opacity: 1; }
+        50.01%, 100% { opacity: 0; }
+      }
+      .worker-tags {
+        margin-top: 12px;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+      }
+      .worker-tag {
+        padding: 9px 10px;
+        border: 1px solid var(--border);
+        border-radius: var(--r-sm);
+        background: var(--surface-3);
+      }
+      .worker-tag b {
+        display: block;
+        font-size: 12.5px;
+      }
+      .worker-tag span {
+        display: block;
+        margin-top: 2px;
+        color: var(--text-3);
+        font-size: 10.5px;
+        line-height: 1.4;
+      }
+
+      /* ---------------- 截图画廊 ---------------- */
+      .gallery {
+        padding: 64px 0;
+      }
+      .tabs {
+        display: inline-flex;
+        gap: 4px;
+        padding: 4px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--surface-1);
+        margin-bottom: 26px;
+      }
+      .tab {
+        padding: 8px 18px;
+        border: none;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--text-3);
+        font-size: 13.5px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 140ms ease, color 140ms ease;
+      }
+      .tab:hover {
+        color: var(--text-1);
+      }
+      .tab.active {
+        background: var(--text-1);
+        color: var(--surface-1);
+      }
+      .shots {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 18px;
+      }
+      .shots[data-cols="mobile"] {
+        grid-template-columns: repeat(5, 1fr);
+      }
+      /* class 选择器的 display:grid 会盖过 [hidden] 的 UA display:none，
+         面板靠 hidden 属性切换时必须用更高特异性显式隐藏，否则三个面板会同时显示。 */
+      .shots[hidden] {
+        display: none;
+      }
+      .shot {
+        border: 1px solid var(--border);
+        border-radius: var(--r-lg);
+        background: var(--surface-1);
+        box-shadow: var(--shadow-1);
+        overflow: hidden;
+        transition: box-shadow 200ms ease, transform 200ms ease, border-color 200ms ease;
+      }
+      .shot:hover {
+        box-shadow: var(--shadow-3);
+        transform: translateY(-3px);
+        border-color: var(--border-strong);
+      }
+      .shot-frame {
+        overflow: hidden;
+        background: var(--surface-2);
+      }
+      .shot-frame img {
+        display: block;
+        width: 100%;
+        object-fit: cover;
+        object-position: left top;
+        transition: transform 300ms ease;
+      }
+      .shot:hover .shot-frame img {
+        transform: scale(1.03);
+      }
+      .shots[data-cols="web"] .shot-frame img { aspect-ratio: 16 / 10; }
+      .shots[data-cols="mobile"] .shot-frame img { aspect-ratio: 9 / 18; object-position: top; }
+      .shot-cap {
+        padding: 11px 14px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-2);
+      }
+      .shot-cap span {
+        display: block;
+        margin-top: 1px;
+        font-size: 11.5px;
+        font-weight: 400;
+        color: var(--text-4);
+      }
+
+      /* ---------------- 执行链路 5 步 ---------------- */
+      .flow {
+        padding: 64px 0 16px;
+        background: var(--surface-3);
+        border-top: 1px solid var(--border);
+      }
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 14px;
+      }
+      .step {
+        position: relative;
+        padding: 18px 16px;
+        border: 1px solid var(--border);
+        border-radius: var(--r-lg);
+        background: var(--surface-1);
+        box-shadow: var(--shadow-1);
+        transition: box-shadow 200ms ease, transform 200ms ease;
+      }
+      .step:hover {
+        box-shadow: var(--shadow-2);
+        transform: translateY(-2px);
+      }
+      .step::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: -10px;
+        width: 12px;
+        height: 2px;
+        background: var(--border-strong);
+        z-index: 1;
+      }
+      .step:last-child::after {
+        display: none;
+      }
+      .step-k {
+        color: var(--text-4);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .step-v {
+        margin-top: 8px;
+        font-size: 15px;
+        font-weight: 700;
+      }
+      .step-d {
+        margin-top: 6px;
+        color: var(--text-3);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      /* ---------------- 页脚 ---------------- */
+      .footer {
+        padding: 56px 0 64px;
+        border-top: 1px solid var(--border);
+      }
+      .footer-inner {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+      }
+      .footer-copy {
+        color: var(--text-3);
+        font-size: 13px;
+        line-height: 1.7;
+        max-width: 460px;
+      }
+      .footer-copy strong {
+        color: var(--text-1);
+      }
+      .footer-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      /* ---------------- 滚动入场动效（仅 html.motion 时启用隐藏初态） ---------------- */
+      html.motion .reveal {
+        opacity: 0;
+        transform: translateY(22px);
+        transition: opacity 620ms cubic-bezier(0.22, 1, 0.36, 1), transform 620ms cubic-bezier(0.22, 1, 0.36, 1);
+        transition-delay: var(--d, 0ms);
+      }
+      html.motion .reveal.in {
+        opacity: 1;
+        transform: none;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html { scroll-behavior: auto; }
+      }
+
+      /* ---------------- 响应式 ---------------- */
+      @media (max-width: 1000px) {
+        .hero h1 { font-size: 42px; }
+        .hero-inner { gap: 36px; }
+        .arch-grid {
+          grid-template-columns: 1fr;
+          gap: 16px;
+        }
+        .connector {
+          height: 40px;
+          width: 2px;
+          margin: 0 auto;
+          background: var(--border-strong);
+        }
+        .connector::before {
+          right: 50%;
+          top: auto;
+          bottom: -1px;
+          transform: translateX(50%);
+          border-left: 5px solid transparent;
+          border-right: 5px solid transparent;
+          border-top: 7px solid var(--border-strong);
+          border-bottom: 0;
+        }
+        .connector .beam { display: none; }
+        .connector .spark { left: 50% !important; animation: cc-flow-v 2.4s ease-in-out infinite; }
+        @keyframes cc-flow-v {
+          0% { top: 6%; opacity: 0; }
+          15% { opacity: 1; }
+          85% { opacity: 1; }
+          100% { top: 94%; opacity: 0; }
+        }
+        .connector-label {
+          top: 50%;
+          left: 16px;
+          transform: translateY(-50%);
+        }
+      }
+      @media (max-width: 880px) {
+        .nav-links { display: none; }
+        .hero-inner { grid-template-columns: 1fr; }
+        .hero-visual { max-width: 540px; }
+        .pillar-grid { grid-template-columns: 1fr; }
+        .shots, .shots[data-cols="mobile"] { grid-template-columns: repeat(2, 1fr); }
+        .steps { grid-template-columns: repeat(2, 1fr); }
+        .step::after { display: none; }
+        .section-head h2 { font-size: 27px; }
+      }
+      @media (max-width: 560px) {
+        .wrap { padding: 0 18px; }
+        .hero { padding: 48px 0; }
+        .hero h1 { font-size: 34px; }
+        .stat-band { grid-template-columns: repeat(2, 1fr); gap: 18px 14px; }
+        .shots, .shots[data-cols="mobile"] { grid-template-columns: 1fr; }
+        .steps { grid-template-columns: 1fr; }
+        .worker-tags { grid-template-columns: 1fr; }
+        .phone { width: 96px; right: -8px; }
+      }
+
+      /* 降级动效：关掉所有装饰性无限动画（光点 / 流光 / 写入波 / 呼吸环 / glow / 光标）。
+         置于响应式块之后 + !important，确保盖过 mobile 里 cc-flow-v 的重定义。 */
+      @media (prefers-reduced-motion: reduce) {
+        .hero-glow { animation: none !important; }
+        .connector .spark,
+        .connector .beam { display: none !important; }
+        .dot.pulse::after { animation: none !important; }
+        .lane[data-live] .pill { animation: none !important; }
+        .hub-card.db::after,
+        .hub-card.relay::after { animation: none !important; }
+        .term-cursor { animation: none !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="scroll-progress" id="progress"></div>
+
+    <!-- 顶栏 -->
+    <header class="nav" id="nav">
+      <div class="wrap nav-inner">
+        <a class="brand" href="#top" aria-label="ClaudeCenter 首页">
+          <span class="brand-mark">CC</span>
+          <span class="brand-copy">
+            <span class="brand-title">ClaudeCenter</span>
+            <span class="brand-sub">AI 编码任务中枢调度台</span>
+          </span>
+        </a>
+        <nav class="nav-links">
+          <a class="nav-link" href="#features">能力</a>
+          <a class="nav-link" href="#architecture">架构</a>
+          <a class="nav-link" href="#gallery">截图</a>
+          <a class="nav-link" href="#flow">流程</a>
+        </nav>
+        <a class="nav-cta" href="https://github.com/zzusp/claude-center" target="_blank" rel="noopener">
+          GitHub 仓库 →
+        </a>
+      </div>
+    </header>
+
+    <!-- Hero -->
+    <section class="hero" id="top">
+      <div class="hero-bg"></div>
+      <div class="hero-glow"></div>
+      <div class="wrap hero-inner">
+        <div class="hero-copy">
+          <span class="eyebrow reveal">
+            <span class="dot pulse" style="color: var(--running)"></span>
+            Web Console · Desktop Worker · DB + SSE
+          </span>
+          <h1 class="reveal" style="--d: 60ms">让 Claude Code 从单机工具变成团队基础设施</h1>
+          <p class="lead reveal" style="--d: 120ms">
+            浏览器随时发任务、看进度、回复提问；桌面 Worker 在本地连接 Claude Code 终端，
+            用 git worktree 隔离并发执行，最后自动形成 PR 闭环。
+          </p>
+          <div class="hero-actions reveal" style="--d: 180ms">
+            <a class="btn btn-primary" href="#architecture">看它怎么跑 →</a>
+            <a class="btn" href="#gallery">浏览真实截图</a>
+          </div>
+          <div class="stat-band reveal" style="--d: 240ms">
+            <div class="stat">
+              <div class="stat-v"><span data-count="2">0</span><span class="u">端</span></div>
+              <div class="stat-k">桌面平台<br />Windows / macOS</div>
+            </div>
+            <div class="stat">
+              <div class="stat-v"><span data-count="5">0</span><span class="u">步</span></div>
+              <div class="stat-k">发任务到 PR<br />全链路闭环</div>
+            </div>
+            <div class="stat">
+              <div class="stat-v"><span data-count="4">0</span><span class="u">级</span></div>
+              <div class="stat-k">协作权限<br />viewer → admin</div>
+            </div>
+            <div class="stat">
+              <div class="stat-v">&lt;1<span class="u">s</span></div>
+              <div class="stat-k">SSE 实时推送<br />断线自动退轮询</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-visual reveal" style="--d: 160ms">
+          <div class="float-badge">
+            <span class="dot pulse" style="color: var(--running)"></span> 实时监控
+          </div>
+          <div class="browser-shell">
+            <div class="browser-bar">
+              <span class="browser-dot"></span>
+              <span class="browser-dot"></span>
+              <span class="browser-dot"></span>
+              <span class="url"></span>
+            </div>
+            <img src="../../screenshots/overview.png" alt="ClaudeCenter Web 控制台总览页" loading="lazy" />
+          </div>
+          <div class="phone">
+            <img src="../../screenshots/mobile-task-detail.png" alt="手机端任务详情" loading="lazy" />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 三大能力 -->
+    <section class="pillars" id="features">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <span class="eyebrow">三大组件 · 一条协同链路</span>
+          <h2>发布、调度、执行 —— 各司其职，DB 唯一权威</h2>
+          <p>Web 端负责发布与监控，控制面负责持久化与实时推送，桌面 Worker 在本地真正跑 Claude Code。</p>
+        </div>
+        <div class="pillar-grid">
+          <article class="card reveal" data-accent="running">
+            <div class="card-ico" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+            </div>
+            <h3>Web 控制台</h3>
+            <p class="sub">任何设备访问：手机 / 平板 / PC</p>
+            <p class="desc">远程发布、监控、验收一站完成，不必守在跑任务的机器旁。</p>
+            <div class="feature-list">
+              <div class="feature-row"><span class="tick">✓</span><span><b>任务调度</b> · 草稿、定时、前置依赖、批量与状态流转</span></div>
+              <div class="feature-row"><span class="tick">✓</span><span><b>实时对话</b> · 指定 Worker + 项目分支，多轮远程协作</span></div>
+              <div class="feature-row"><span class="tick">✓</span><span><b>验收闭环</b> · PR 状态、合并检测、失败重试、取消在途</span></div>
+              <div class="feature-row"><span class="tick">✓</span><span><b>权限协作</b> · viewer / commenter / publisher / admin</span></div>
+            </div>
+          </article>
+
+          <article class="card reveal" data-accent="merged" style="--d: 90ms">
+            <div class="card-ico" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg>
+            </div>
+            <h3>控制面 · DB + SSE</h3>
+            <p class="sub">PostgreSQL 唯一权威 + 可选实时线</p>
+            <p class="desc">任务、会话、Worker 心跳、权限与 Claude Code transcript 全部可追溯。</p>
+            <div class="feature-list">
+              <div class="feature-row"><span class="tick">✓</span><span><b>唯一权威</b> · tasks / workers / projects / sessions 全落库</span></div>
+              <div class="feature-row"><span class="tick">✓</span><span><b>SSE Relay</b> · 项目 / 机器频道亚秒级推送</span></div>
+              <div class="feature-row"><span class="tick">✓</span><span><b>不可用退轮询</b> · 中转断线自动退回 DB 轮询，功能不降级</span></div>
+              <div class="feature-row"><span class="tick">✓</span><span><b>调度规则</b> · 多 Worker 认领队列，按并发上限运行</span></div>
+            </div>
+          </article>
+
+          <article class="card reveal" data-accent="waiting" style="--d: 180ms">
+            <div class="card-ico" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10M9 16v4M15 16v4"/></svg>
+            </div>
+            <h3>桌面 Worker</h3>
+            <p class="sub">Windows / macOS 本地运行</p>
+            <p class="desc">连接本机 Claude Code 终端，认领队列并在独立 worktree 中执行。</p>
+            <div class="feature-list">
+              <div class="feature-row"><span class="tick">✓</span><span><b>并发执行</b> · max parallel + 队列认领</span></div>
+              <div class="feature-row"><span class="tick">✓</span><span><b>worktree 隔离</b> · 同仓多任务互不干扰</span></div>
+              <div class="feature-row"><span class="tick">✓</span><span><b>无人值守</b> · 自动回复、用量监控、远程控制</span></div>
+              <div class="feature-row"><span class="tick">✓</span><span><b>会话沉淀</b> · session.jsonl 实时同步回库</span></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- 架构 / 数据流转 -->
+    <section class="arch" id="architecture">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <span class="eyebrow">数据流转</span>
+          <h2>一个任务，如何从浏览器流到 PR</h2>
+          <p>发布到中枢 → 落库并推送 → 本地认领执行 —— 蓝点是运行中的任务，到仓库时变绿即合并成功。</p>
+        </div>
+
+        <div class="arch-grid">
+          <div class="arch-col reveal">
+            <div class="node">
+              <div class="node-head">
+                <div><strong>Web 端控制台</strong><span class="sub">手机 / 平板 / PC 多端访问</span></div>
+                <span class="pill" data-tone="running"><span class="dot pulse"></span>实时监控</span>
+              </div>
+              <div class="node-body">
+                <div class="node-visual">
+                  <div class="browser-shell">
+                    <div class="browser-bar">
+                      <span class="browser-dot"></span><span class="browser-dot"></span><span class="browser-dot"></span>
+                    </div>
+                    <img src="../../screenshots/tasks.png" alt="Web 控制台任务列表" loading="lazy" />
+                  </div>
+                  <div class="node-phone">
+                    <img src="../../screenshots/mobile-tasks.png" alt="手机端任务列表" loading="lazy" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="connector reveal" aria-hidden="true">
+            <span class="connector-label">发布到中枢</span>
+            <span class="beam"></span>
+            <span class="spark"></span>
+          </div>
+
+          <div class="arch-col reveal">
+            <div class="node hub">
+              <div class="node-head">
+                <div><strong>控制面 Control Plane</strong><span class="sub">DB 权威持久化 + SSE 实时线</span></div>
+              </div>
+              <div class="node-body">
+                <div class="hub-card db">
+                  <div class="hub-title"><span class="pill" data-tone="running"><span class="dot pulse"></span>PostgreSQL</span></div>
+                  <div class="hub-desc">数据库是唯一权威：任务、会话、心跳、权限与 transcript 都可追溯。</div>
+                  <div class="lane" data-live="db">
+                    <span class="pill">tasks</span><span class="pill">workers</span>
+                    <span class="pill">projects</span><span class="pill">sessions</span>
+                  </div>
+                </div>
+                <div class="hub-card relay">
+                  <div class="hub-title"><span class="pill" data-tone="waiting"><span class="dot pulse"></span>SSE Relay</span></div>
+                  <div class="hub-desc">可选实时线：订阅项目 / 机器频道；不可用时自动退回 DB 轮询。</div>
+                  <div class="lane" data-live="relay">
+                    <span class="pill">亚秒级推送</span><span class="pill">断线重连</span><span class="pill">短重放</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="connector green reveal" aria-hidden="true">
+            <span class="connector-label">本地认领执行</span>
+            <span class="beam"></span>
+            <span class="spark"></span>
+          </div>
+
+          <div class="arch-col reveal">
+            <div class="node">
+              <div class="node-head">
+                <div><strong>桌面 Worker</strong><span class="sub">本机 Claude Code · worktree 隔离</span></div>
+                <span class="pill" data-tone="success"><span class="dot pulse"></span>本地执行</span>
+              </div>
+              <div class="node-body">
+                <div class="browser-shell">
+                  <div class="browser-bar">
+                    <span class="browser-dot"></span><span class="browser-dot"></span><span class="browser-dot"></span>
+                  </div>
+                  <img src="../../screenshots/worker-app.png" alt="Worker 桌面端总览" loading="lazy" />
+                </div>
+                <div class="terminal" id="terminal" aria-label="Claude Code 终端执行示意">
+                  <div class="terminal-head">
+                    <span>Claude Code terminal</span>
+                    <span class="tdots"><i></i><i></i><i></i></span>
+                  </div>
+                  <div class="term-body" id="termBody"></div>
+                </div>
+                <div class="worker-tags">
+                  <div class="worker-tag"><b>并发执行</b><span>max parallel + 队列认领</span></div>
+                  <div class="worker-tag"><b>worktree 隔离</b><span>同仓多任务互不干扰</span></div>
+                  <div class="worker-tag"><b>无人值守</b><span>自动回复 · 用量监控</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 截图画廊 -->
+    <section class="gallery" id="gallery">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <span class="eyebrow">真实截图</span>
+          <h2>不是渲染图，是产品里真实的样子</h2>
+          <p>Web 控制台、手机端、桌面 Worker —— 三端同一套 Claude Light 设计语言。</p>
+        </div>
+
+        <div class="tabs reveal" role="tablist">
+          <button class="tab active" data-tab="web" role="tab">Web 控制台</button>
+          <button class="tab" data-tab="mobile" role="tab">手机端</button>
+          <button class="tab" data-tab="worker" role="tab">桌面 Worker</button>
+        </div>
+
+        <div class="shots" data-cols="web" data-panel="web">
+          <figure class="shot reveal"><div class="shot-frame"><img src="../../screenshots/overview.png" alt="总览" loading="lazy" /></div><figcaption class="shot-cap">总览<span>关键指标 · 系统健康 · Worker 概览</span></figcaption></figure>
+          <figure class="shot reveal" style="--d: 80ms"><div class="shot-frame"><img src="../../screenshots/tasks.png" alt="任务列表" loading="lazy" /></div><figcaption class="shot-cap">任务<span>筛选 · 批量 · 定时 · 依赖</span></figcaption></figure>
+          <figure class="shot reveal" style="--d: 160ms"><div class="shot-frame"><img src="../../screenshots/task-detail.png" alt="任务详情" loading="lazy" /></div><figcaption class="shot-cap">任务详情<span>时间线 · diff · 日志回放</span></figcaption></figure>
+          <figure class="shot reveal"><div class="shot-frame"><img src="../../screenshots/conversations.png" alt="对话列表" loading="lazy" /></div><figcaption class="shot-cap">对话<span>多轮远程协作会话</span></figcaption></figure>
+          <figure class="shot reveal" style="--d: 80ms"><div class="shot-frame"><img src="../../screenshots/chat.png" alt="实时对话" loading="lazy" /></div><figcaption class="shot-cap">实时对话<span>工具调用 · thinking · 流式</span></figcaption></figure>
+          <figure class="shot reveal" style="--d: 160ms"><div class="shot-frame"><img src="../../screenshots/workers.png" alt="Worker 管理" loading="lazy" /></div><figcaption class="shot-cap">Worker<span>心跳 · 并发 · 套餐用量</span></figcaption></figure>
+        </div>
+
+        <div class="shots" data-cols="mobile" data-panel="mobile" hidden>
+          <figure class="shot reveal"><div class="shot-frame"><img src="../../screenshots/mobile-overview.png" alt="手机端总览" loading="lazy" /></div><figcaption class="shot-cap">总览</figcaption></figure>
+          <figure class="shot reveal" style="--d: 70ms"><div class="shot-frame"><img src="../../screenshots/mobile-tasks.png" alt="手机端任务" loading="lazy" /></div><figcaption class="shot-cap">任务</figcaption></figure>
+          <figure class="shot reveal" style="--d: 140ms"><div class="shot-frame"><img src="../../screenshots/mobile-task-detail.png" alt="手机端任务详情" loading="lazy" /></div><figcaption class="shot-cap">任务详情</figcaption></figure>
+          <figure class="shot reveal" style="--d: 210ms"><div class="shot-frame"><img src="../../screenshots/mobile-chat.png" alt="手机端对话" loading="lazy" /></div><figcaption class="shot-cap">对话</figcaption></figure>
+          <figure class="shot reveal" style="--d: 280ms"><div class="shot-frame"><img src="../../screenshots/mobile-workers.png" alt="手机端 Worker" loading="lazy" /></div><figcaption class="shot-cap">Worker</figcaption></figure>
+        </div>
+
+        <div class="shots" data-cols="web" data-panel="worker" hidden>
+          <figure class="shot reveal"><div class="shot-frame"><img src="../../screenshots/worker-app.png" alt="Worker 总览" loading="lazy" /></div><figcaption class="shot-cap">总览<span>运行状态 · 能力自检</span></figcaption></figure>
+          <figure class="shot reveal" style="--d: 80ms"><div class="shot-frame"><img src="../../screenshots/worker-tasks.png" alt="Worker 任务" loading="lazy" /></div><figcaption class="shot-cap">任务队列<span>认领 · 并发执行</span></figcaption></figure>
+          <figure class="shot reveal" style="--d: 160ms"><div class="shot-frame"><img src="../../screenshots/worker-projects.png" alt="Worker 项目" loading="lazy" /></div><figcaption class="shot-cap">项目<span>本地仓库与分支</span></figcaption></figure>
+          <figure class="shot reveal"><div class="shot-frame"><img src="../../screenshots/worker-settings.png" alt="Worker 设置" loading="lazy" /></div><figcaption class="shot-cap">设置<span>代理 · 模型 · 并发上限</span></figcaption></figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- 执行链路 5 步 -->
+    <section class="flow" id="flow">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <span class="eyebrow">任务执行链路</span>
+          <h2>五步闭环，全程可远程旁观</h2>
+        </div>
+        <div class="steps">
+          <div class="step reveal"><div class="step-k">01</div><div class="step-v">手机或 PC 发任务</div><div class="step-d">选择项目、分支、模型、定时与依赖</div></div>
+          <div class="step reveal" style="--d: 80ms"><div class="step-k">02</div><div class="step-v">中枢落库并推送</div><div class="step-d">DB 持久化，SSE 触发在线 Worker</div></div>
+          <div class="step reveal" style="--d: 160ms"><div class="step-k">03</div><div class="step-v">本地认领执行</div><div class="step-d">Claude Code 在独立 worktree 中运行</div></div>
+          <div class="step reveal" style="--d: 240ms"><div class="step-k">04</div><div class="step-v">远程看进度与回复</div><div class="step-d">工具调用、diff、thinking、日志实时回放</div></div>
+          <div class="step reveal" style="--d: 320ms"><div class="step-k">05</div><div class="step-v">PR 与合并闭环</div><div class="step-d">自动创建 PR、检测合并、沉淀会话记录</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 页脚 -->
+    <footer class="footer">
+      <div class="wrap footer-inner">
+        <div class="footer-copy">
+          <strong>ClaudeCenter</strong> · AI 编码协作中控台。Next.js Web Console + Electron 桌面 Worker，
+          共享一个 PostgreSQL 协同，可选叠加 SSE 中转作低延迟实时线。
+        </div>
+        <div class="footer-links">
+          <a class="btn" href="https://github.com/zzusp/claude-center" target="_blank" rel="noopener">GitHub →</a>
+          <a class="btn" href="https://github.com/zzusp/claude-center#readme" target="_blank" rel="noopener">项目 README</a>
+          <a class="btn" href="https://github.com/zzusp/claude-center/blob/main/docs/spec/claude-center-mvp.md" target="_blank" rel="noopener">设计文档</a>
+        </div>
+      </div>
+    </footer>
+
+    <script>
+      (function () {
+        "use strict";
+        var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        var root = document.documentElement;
+        // 仅在允许动效时给 <html> 加 motion 类，启用 reveal 隐藏初态；否则内容默认全可见。
+        if (!reduce) root.classList.add("motion");
+
+        // 顶栏滚动态 + 顶部进度条
+        var nav = document.getElementById("nav");
+        var progress = document.getElementById("progress");
+        function onScroll() {
+          var y = window.scrollY || window.pageYOffset;
+          nav.classList.toggle("scrolled", y > 8);
+          var h = document.documentElement.scrollHeight - window.innerHeight;
+          var p = h > 0 ? y / h : 0;
+          progress.style.transform = "scaleX(" + Math.min(1, Math.max(0, p)) + ")";
+        }
+        window.addEventListener("scroll", onScroll, { passive: true });
+        onScroll();
+
+        // 滚动入场：进入视口加 .in（不允许动效时直接全部点亮）
+        var reveals = Array.prototype.slice.call(document.querySelectorAll(".reveal"));
+        if (reduce || !("IntersectionObserver" in window)) {
+          reveals.forEach(function (el) { el.classList.add("in"); });
+        } else {
+          var io = new IntersectionObserver(
+            function (entries) {
+              entries.forEach(function (e) {
+                if (e.isIntersecting) {
+                  e.target.classList.add("in");
+                  io.unobserve(e.target);
+                }
+              });
+            },
+            { threshold: 0.12, rootMargin: "0px 0px -8% 0px" }
+          );
+          reveals.forEach(function (el) { io.observe(el); });
+        }
+
+        // 数字滚动计数（仅诚实的整数指标；<1s 等文本不参与）
+        function countUp(el) {
+          var target = parseInt(el.getAttribute("data-count"), 10);
+          if (isNaN(target)) return;
+          if (reduce) { el.textContent = String(target); return; }
+          var dur = 900, start = null;
+          function tick(ts) {
+            if (start === null) start = ts;
+            var t = Math.min(1, (ts - start) / dur);
+            var eased = 1 - Math.pow(1 - t, 3);
+            el.textContent = String(Math.round(target * eased));
+            if (t < 1) requestAnimationFrame(tick);
+            else el.textContent = String(target);
+          }
+          requestAnimationFrame(tick);
+        }
+        var counters = Array.prototype.slice.call(document.querySelectorAll("[data-count]"));
+        if (reduce || !("IntersectionObserver" in window)) {
+          counters.forEach(countUp);
+        } else {
+          var cio = new IntersectionObserver(
+            function (entries) {
+              entries.forEach(function (e) {
+                if (e.isIntersecting) { countUp(e.target); cio.unobserve(e.target); }
+              });
+            },
+            { threshold: 0.6 }
+          );
+          counters.forEach(function (el) { cio.observe(el); });
+        }
+
+        // 终端逐行打字（进入视口触发；不允许动效时一次性铺满）
+        var TERM_LINES = [
+          [["blue", "claim"], ["", " task cc/task-1781953"]],
+          [["blue", "worktree"], ["", " .claude/worktrees/feat-x"]],
+          [["ok", "run"], ["", " claude --model sonnet"]],
+          [["ok", "sync"], ["", " session.jsonl → DB"]],
+          [["ok", "push"], ["", " branch + create PR"]],
+          [["blue", "report"], ["", " merged / failed / waiting"]]
+        ];
+        var termBody = document.getElementById("termBody");
+        function renderLineInstant(parts) {
+          var div = document.createElement("div");
+          div.className = "term-line";
+          parts.forEach(function (p) {
+            var span = document.createElement("span");
+            if (p[0]) span.className = p[0];
+            span.textContent = p[1];
+            div.appendChild(span);
+          });
+          termBody.appendChild(div);
+        }
+        function fillInstant() {
+          termBody.innerHTML = "";
+          TERM_LINES.forEach(renderLineInstant);
+        }
+        var TERM_HOLD = 2800; // 打完 6 行停留多久再清屏重播
+        function typeAll() {
+          termBody.innerHTML = "";
+          var li = 0;
+          function done() {
+            // 末尾留一个常驻闪烁光标示意 live，停留后清屏循环重播——
+            // 与连接器光点的持续流动同频，强化「任务一直在跑」。
+            var last = termBody.lastChild;
+            var idle = document.createElement("span");
+            idle.className = "term-cursor";
+            (last || termBody).appendChild(idle);
+            setTimeout(typeAll, TERM_HOLD);
+          }
+          function nextLine() {
+            if (li >= TERM_LINES.length) { done(); return; }
+            var parts = TERM_LINES[li];
+            var div = document.createElement("div");
+            div.className = "term-line";
+            termBody.appendChild(div);
+            var flat = [];
+            parts.forEach(function (p) {
+              for (var i = 0; i < p[1].length; i++) flat.push([p[0], p[1][i]]);
+            });
+            var ci = 0, cur = {};
+            var cursor = document.createElement("span");
+            cursor.className = "term-cursor";
+            div.appendChild(cursor);
+            function nextChar() {
+              if (ci >= flat.length) {
+                if (cursor.parentNode) cursor.parentNode.removeChild(cursor);
+                li++;
+                setTimeout(nextLine, 160);
+                return;
+              }
+              var cls = flat[ci][0];
+              if (!cur.span || cur.cls !== cls) {
+                cur.span = document.createElement("span");
+                cur.cls = cls;
+                if (cls) cur.span.className = cls;
+                div.insertBefore(cur.span, cursor);
+              }
+              cur.span.textContent += flat[ci][1];
+              ci++;
+              setTimeout(nextChar, 26);
+            }
+            nextChar();
+          }
+          nextLine();
+        }
+        if (reduce || !("IntersectionObserver" in window)) {
+          fillInstant();
+        } else {
+          var tio = new IntersectionObserver(
+            function (entries) {
+              entries.forEach(function (e) {
+                if (e.isIntersecting) { typeAll(); tio.unobserve(e.target); }
+              });
+            },
+            { threshold: 0.4 }
+          );
+          tio.observe(document.getElementById("terminal"));
+        }
+
+        // 截图画廊切换
+        var tabs = Array.prototype.slice.call(document.querySelectorAll(".tab"));
+        var panels = Array.prototype.slice.call(document.querySelectorAll(".shots[data-panel]"));
+        tabs.forEach(function (tab) {
+          tab.addEventListener("click", function () {
+            var key = tab.getAttribute("data-tab");
+            tabs.forEach(function (t) { t.classList.toggle("active", t === tab); });
+            panels.forEach(function (p) {
+              var show = p.getAttribute("data-panel") === key;
+              p.hidden = !show;
+              if (show) {
+                // 切换后让本面板的 reveal 立即可见，避免停在隐藏初态
+                Array.prototype.slice.call(p.querySelectorAll(".reveal")).forEach(function (el) {
+                  el.classList.add("in");
+                });
+              }
+            });
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>
