@@ -1499,6 +1499,13 @@ export async function claimNextResumableTask(
   // rerun_started 事件时间，没有则 epoch。不再用「最后一条 worker 评论」做锚点：开放任意态
   // 输入后，用户在 running 期间发的消息会被同轮新生的 worker question 覆盖（评论时间 < 问题时间
   // → 现行谓词漏判），导致 worker 翻入 waiting 后认为没新回复、消息丢失。
+  //
+  // 锚点里额外纳入 resume_claimed：本认领同事务原子打的「已认领续接」戳（见下方 marker CTE）。
+  // 否则——若 resumeTask 在写 'resumed' 之前（如 worktree 准备阶段）就抛错翻 failed，'resumed' 永不落，
+  // 锚点停在 epoch，同一条 user 评论会让本任务在每个 tick 被无限重领、反复失败、停不下来（且 cancelled
+  // 也在 REPLYABLE_TERMINAL 内，取消刚翻终态又被重领，取消不生效）。认领时即打 resume_claimed 把锚点推到
+  // 当前评论之后，失败后不再重入；下一次续接需用户补一条**更晚**的新评论。getPendingReply /
+  // listPendingReplyAttachments 仍只看 'resumed'/'rerun_started'，故认领后紧接的本轮 resume 仍能读到该回复。
   const result = await client.query<Task>(
     `WITH candidate AS (
        SELECT tasks.id
@@ -1522,24 +1529,32 @@ export async function claimNextResumableTask(
                  (SELECT max(te.created_at)
                     FROM task_events te
                    WHERE te.task_id = tasks.id
-                     AND te.event_type IN ('resumed', 'rerun_started')),
+                     AND te.event_type IN ('resumed', 'rerun_started', 'resume_claimed')),
                  'epoch'::timestamptz)
           )
         ORDER BY tasks.updated_at ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
+     ),
+     claimed AS (
+       UPDATE tasks
+          SET status = 'running',
+              -- 清掉续接前可能残留的「待处理动作」戳：cancel_requested_at（终态 cancelled 的历史戳，
+              -- 不清会被 cancel checker 误杀）+ retry_requested_at（用户若同时点了重试，本次回复 resume
+              -- 已涵盖续接，无需再触发一次 retryFailedTask 的固定 prompt 重跑）。
+              cancel_requested_at = null,
+              retry_requested_at = null,
+              updated_at = now()
+         FROM candidate
+        WHERE tasks.id = candidate.id
+        RETURNING tasks.*
+     ),
+     marker AS (
+       -- 认领即打点：把续接锚点原子推进到「本次认领时刻」，防失败重入（与状态翻转同事务，命中才写）。
+       INSERT INTO task_events (task_id, worker_id, event_type, message, payload)
+       SELECT id, $1, 'resume_claimed', '已认领续接（防失败重入打点）', '{}'::jsonb FROM claimed
      )
-     UPDATE tasks
-        SET status = 'running',
-            -- 清掉续接前可能残留的「待处理动作」戳：cancel_requested_at（终态 cancelled 的历史戳，
-            -- 不清会被 cancel checker 误杀）+ retry_requested_at（用户若同时点了重试，本次回复 resume
-            -- 已涵盖续接，无需再触发一次 retryFailedTask 的固定 prompt 重跑）。
-            cancel_requested_at = null,
-            retry_requested_at = null,
-            updated_at = now()
-       FROM candidate
-      WHERE tasks.id = candidate.id
-      RETURNING tasks.*`,
+     SELECT * FROM claimed`,
     [workerId]
   );
   return result.rows[0] ?? null;

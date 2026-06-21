@@ -26,6 +26,7 @@ export const EVENT_META: Record<string, EventMeta> = {
   published: { label: "发布·进入待处理", tone: "pending" },
   scheduled_published: { label: "定时到点·进入待处理", tone: "scheduled" },
   claimed: { label: "已认领", tone: "queued" },
+  resume_claimed: { label: "已认领续接", tone: "queued" },
   worktree_prepared: { label: "工作树就绪", tone: "running" },
   running: { label: "开始执行", tone: "running" },
   resumed: { label: "用户回复·续接执行", tone: "running" },
