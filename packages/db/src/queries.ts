@@ -5,6 +5,7 @@ import {
   IN_FLIGHT_STATUSES,
   PUBLISHABLE_STATUSES,
   REACTIVATABLE_STATUSES,
+  REPLYABLE_TERMINAL_STATUSES,
   RETRYABLE_STATUSES,
   sqlInList
 } from "./task-state.js";
@@ -1471,8 +1472,12 @@ export async function setTaskMergeUnmerged(client: pg.Pool | pg.PoolClient, task
   );
 }
 
-// 续接：认领本 Worker 自己的、已收到新用户回复的等待中任务（原子翻转为 running）。
-// 「新回复」= 存在比最后一条 worker 评论更晚的 user 评论。
+// 续接：认领本 Worker 自己的、已收到新用户回复的任务（原子翻转为 running）。
+// 「新回复」= 存在比上一次 resumed / rerun_started 事件更晚的 user 评论。
+// 可续接的状态：waiting（Worker 显式提问等回复）+ 终态 REPLYABLE_TERMINAL_STATUSES（success/merged/
+// failed/cancelled，工作树 + 会话均保留）。后者要求 claude_session_id 非空才有会话可 resume——这正是
+// 「非在途任务也可回复续接」：用户对已完成 / 失败 / 取消的任务补一句话，Worker 带着回复 resume 同一会话
+// 接着干。draft/scheduled/pending 无会话，不参与（status 不在集合内自然排除）。
 export async function claimNextResumableTask(
   client: pg.Pool | pg.PoolClient,
   workerId: string
@@ -1485,8 +1490,16 @@ export async function claimNextResumableTask(
     `WITH candidate AS (
        SELECT tasks.id
          FROM tasks
-        WHERE tasks.status = 'waiting'
-          AND tasks.claimed_by = $1
+        WHERE tasks.claimed_by = $1
+          AND (
+            tasks.status = 'waiting'
+            OR (tasks.status IN (${sqlInList(REPLYABLE_TERMINAL_STATUSES)})
+                AND tasks.claude_session_id IS NOT NULL)
+          )
+          -- waiting 任务若有未处理的取消请求，让取消胜出（cancel checker 会翻 cancelled），不在此 resume。
+          -- 终态(已 cancelled)的 cancel_requested_at 是历史戳，不拦——在下方 SET 里清掉，避免重新 running
+          -- 后被 listCancelRequestedTaskIds 当成「待取消」误杀。
+          AND (tasks.status <> 'waiting' OR tasks.cancel_requested_at IS NULL)
           AND EXISTS (
             SELECT 1
               FROM task_comments uc
@@ -1505,6 +1518,11 @@ export async function claimNextResumableTask(
      )
      UPDATE tasks
         SET status = 'running',
+            -- 清掉续接前可能残留的「待处理动作」戳：cancel_requested_at（终态 cancelled 的历史戳，
+            -- 不清会被 cancel checker 误杀）+ retry_requested_at（用户若同时点了重试，本次回复 resume
+            -- 已涵盖续接，无需再触发一次 retryFailedTask 的固定 prompt 重跑）。
+            cancel_requested_at = null,
+            retry_requested_at = null,
             updated_at = now()
        FROM candidate
       WHERE tasks.id = candidate.id

@@ -38,3 +38,12 @@
 
 - 仍按 turn 边界注入（Claude 跑完当前轮才消费），不做 mid-token 打断。
 - 复用既有表 / 事件 / 锚点，无 schema 变更、无新迁移。
+
+## 扩展：非在途（终态）任务也可回复续接
+
+上文「用户消息仅在 task 进入 `waiting` 后被 `claimNextResumableTask` 消费」已不再准确——回复续接现已覆盖**保留了 Claude 会话的终态**（`success` / `merged` / `failed` / `cancelled`，工作树 + session 均保留，见 `listActiveTaskIdsForWorker`）：
+
+- 任务详情回复框（`apps/console/app/ui/task-detail-session.tsx`）对这些终态（且 `claude_session_id` 非空）开放，文案为「回复并续接」。`draft` / `scheduled` / `pending` 无会话，仍不开放。
+- `claimNextResumableTask`（`packages/db/src/queries.ts`）的候选状态由 `waiting` 扩到 `waiting + REPLYABLE_TERMINAL_STATUSES`；终态分支额外要求 `claude_session_id IS NOT NULL`。命中后翻 `running` 并**清掉历史动作戳** `cancel_requested_at`（否则重新 running 的 `cancelled` 任务会被 cancel checker 误杀）与 `retry_requested_at`（回复 resume 已涵盖续接，无需再走 `retryFailedTask` 固定 prompt）。
+- 续接走既有 `resumeTask` → `getPendingReply`（锚点不变）→ `finalizeTaskMultiRepo`（已有 PR 幂等复用、零改动判 `no_changes`），无新表 / 新迁移。
+- 与「续接重试」按钮（`requestTaskRetry` → `claimNextRetryableTask` → `retryFailedTask`）并存：前者由**用户回复**触发、带回复内容续接；后者由**按钮**触发、用失败原因 prompt 续接。回复续接优先级更高（claim 循环里在前）。

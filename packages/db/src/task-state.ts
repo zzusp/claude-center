@@ -37,6 +37,18 @@ export const REACTIVATABLE_STATUSES = ["failed", "cancelled"] as const satisfies
 // (重试=带上下文接着干;激活=清空回草稿推倒重来),分别命名以免改一处误伤另一处。
 export const RETRYABLE_STATUSES = ["failed", "cancelled"] as const satisfies readonly TaskStatus[];
 
+// 终态中「保留了 Claude 会话、可经用户回复直接续接」的集合(success/merged/failed/cancelled——均在
+// listActiveTaskIdsForWorker 的工作树保留名单内)。用户在任务详情对这些「非在途」任务回复 → 落库后
+// 由 Worker 的 claimNextResumableTask 认领、resume 同一会话续接(前提 claude_session_id 非空;
+// draft/scheduled/pending 无会话,不在此列)。与 RETRYABLE 部分重叠但触发与续接方式不同:此处由「用户回复」
+// 触发、带回复内容走 resumeTask;RETRYABLE 由「重试」按钮触发、用 retryPrompt 走 retryFailedTask。
+export const REPLYABLE_TERMINAL_STATUSES = [
+  "success",
+  "merged",
+  "failed",
+  "cancelled"
+] as const satisfies readonly TaskStatus[];
+
 // 可发布 / 退回门控涉及的待发状态(draft 人工发布、scheduled 到点/提前发布)。
 export const PUBLISHABLE_STATUSES = ["draft", "scheduled"] as const satisfies readonly TaskStatus[];
 

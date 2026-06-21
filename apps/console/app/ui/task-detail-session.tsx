@@ -35,6 +35,12 @@ export function SessionTranscript({
 
   usePolling(
     async (isActive) => {
+      // 任务（重新）在途时清掉「终态停拉」标记，恢复实时拉取——支持「对终态任务回复 → Worker resume
+      // 后任务重新翻 running」：此时 live 变 true（deps 含 live，usePolling 会重建并立即跑一次）。
+      if (live) {
+        doneRef.current = false;
+        termCountRef.current = 0;
+      }
       // 终态且已取够最终版（覆盖 Worker 终态强制同步的小窗）后停拉，不再重复拉大 blob。
       if (doneRef.current) return;
       try {
@@ -81,6 +87,9 @@ export function SessionTranscript({
 // 不必等 Worker 显式提问。提交落一条 user 评论到 task_comments；Worker 在当前轮跑到停止点后**直接注入**
 // （handleClaudeTurn 收尾前 getPendingReply 看到未消费的 user 评论 → 不收尾、不进 waiting、直接 --resume
 // 同一会话续接），消息不会等到下一次认领循环、也不会因本轮没命中哨兵而被丢弃（详见 docs/spec/task-live-inject.md）。
+// 非在途但保留了会话的终态（success / merged / failed / cancelled 且 claude_session_id 非空）同样开放回复：
+// 落库后由 Worker 的 claimNextResumableTask 认领、resume 同一 Claude 会话续接——用户对已完成 / 失败 / 取消的
+// 任务补一句话即可让它接着干（无需走「续接重试」的固定 prompt）。draft / scheduled / pending 无会话不开放。
 // 附件上传走通用 AttachmentUploader，提交后清空本地状态。
 function ReplyForm({ task, canComment }: { task: Task; canComment: boolean }) {
   const [reply, setReply] = useState("");
@@ -88,7 +97,14 @@ function ReplyForm({ task, canComment }: { task: Task; canComment: boolean }) {
   const { busy, error, run } = useAsyncAction();
   // 在途态：worker 正在/即将处理本任务，发送的消息会在下一次 resume 时被消费。
   const live = task.status === "claimed" || task.status === "running" || task.status === "waiting";
-  const canReply = live && canComment;
+  // 非在途但可续接：终态保留了 Claude 会话（worktree + session 均保留，见 listActiveTaskIdsForWorker）。
+  const terminalResumable =
+    Boolean(task.claude_session_id) &&
+    (task.status === "success" ||
+      task.status === "merged" ||
+      task.status === "failed" ||
+      task.status === "cancelled");
+  const canReply = (live || terminalResumable) && canComment;
 
   async function submitReply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -124,7 +140,9 @@ function ReplyForm({ task, canComment }: { task: Task; canComment: boolean }) {
               ? task.status === "waiting"
                 ? "回复 Worker 的提问，提交后将续接执行…"
                 : "随时给 Worker 留言，将在当前轮停止点直接注入续接…"
-              : "任务未在执行中，无法发送消息"
+              : terminalResumable
+                ? "任务已结束，回复将续接同一 Claude 会话继续执行…"
+                : "任务未在执行中，无法发送消息"
         }
         disabled={!canReply || busy}
       />
@@ -143,7 +161,15 @@ function ReplyForm({ task, canComment }: { task: Task; canComment: boolean }) {
           disabled={!canReply || busy || (!reply.trim() && replyAttachments.length === 0)}
         >
           <Send size={16} />
-          {!canComment ? "无回复权限" : live ? (task.status === "waiting" ? "回复并续接" : "发送消息") : "任务非在途"}
+          {!canComment
+            ? "无回复权限"
+            : live
+              ? task.status === "waiting"
+                ? "回复并续接"
+                : "发送消息"
+              : terminalResumable
+                ? "回复并续接"
+                : "任务非在途"}
         </button>
       </div>
     </form>
