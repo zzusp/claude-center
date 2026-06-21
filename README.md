@@ -4,6 +4,8 @@
 
 Web 中控台（Next.js）+ 桌面 Worker（Electron）+ PostgreSQL 协同，可选 SSE 实时线。任务从浏览器发出，Worker 在各台机器上自动认领执行并提交 PR，你在任何设备上随时查看进度、回复提问、验收结果。
 
+<img src="docs/manual/promo/claude-center-promo.png" width="720" alt="promo">
+
 ## 为什么需要 ClaudeCenter
 
 **花 $200 买了 Claude Max，但大部分时间在空转。**
