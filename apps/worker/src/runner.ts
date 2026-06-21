@@ -1114,32 +1114,40 @@ export class ClaudeCenterWorker {
     }
   }
 
-  // 周期扫描:本 worker 名下被请求取消的在途任务 → 先抢占 cancelled 终态(防执行链 catch 的 markTaskFailed 覆盖)→ 再杀 Claude 进程树。
+  // 周期扫描:本 worker 名下被请求取消的在途任务 → 先抢占 cancelled 终态(防执行链 catch 的 markTaskFailed 覆盖)→ 再杀 Claude 进程树(若有在跑句柄)。
+  // 与对话取消(handleConversationCancellations)同构:对 DB 返回的每个被取消 id 都翻终态,kill 只作用于当前持 child 句柄的在跑车道。
+  // 不能只遍历 this.active——waiting(轮已结束无 child)、claimed 未起跑、或重启后丢了 active 句柄的在途任务都不在其中,
+  // 只遍历 active 会让它们 cancel_requested_at 已落却永远翻不到 cancelled(任务停不下来)。
   private async handleCancellations(): Promise<void> {
     const ids = await listCancelRequestedTaskIds(getPool(), this.config.workerId);
     if (!ids.length) {
       return;
     }
-    const wanted = new Set(ids);
+    // 按 taskId 索引当前在跑车道(active Map 以 meta.key 为键),供命中 id 时杀进程。
+    const activeByTask = new Map<string, ActiveEntry>();
     for (const entry of this.active.values()) {
-      if (entry.kind !== "task" || !entry.taskId || entry.cancelled || !wanted.has(entry.taskId)) {
-        continue;
+      if (entry.kind === "task" && entry.taskId) {
+        activeByTask.set(entry.taskId, entry);
       }
-      entry.cancelled = true;
+    }
+    for (const taskId of ids) {
       try {
-        const ok = await markTaskCancelled(getPool(), entry.taskId, this.config.workerId, {
+        const ok = await markTaskCancelled(getPool(), taskId, this.config.workerId, {
           cancelledAt: new Date().toISOString(),
           reason: "user requested"
         });
-        if (entry.child) {
-          killProcessTree(entry.child);
+        // 只有正跑这条的车道才有 child 句柄可杀;waiting / 重连丢句柄的任务由上面 markTaskCancelled 翻终态即停。
+        const entry = activeByTask.get(taskId);
+        if (entry) {
+          entry.cancelled = true;
+          if (entry.child) {
+            killProcessTree(entry.child);
+          }
         }
-        this.log("info", `Task ${entry.taskId} cancelled (${ok ? "marked" : "already terminal"})`);
-        if (entry.taskId) {
-          void this.publishTaskById(entry.taskId);
-        }
+        this.log("info", `Task ${taskId} cancelled (${ok ? "marked" : "already terminal"})`);
+        void this.publishTaskById(taskId);
       } catch (error) {
-        this.log("error", `cancel ${entry.taskId}: ${error instanceof Error ? error.message : String(error)}`);
+        this.log("error", `cancel ${taskId}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }
