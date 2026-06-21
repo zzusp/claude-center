@@ -306,7 +306,7 @@ export default function Notifications() {
     <div className={`notif${modalOpen ? " notif-modal-open" : ""}`}>
       <button
         type="button"
-        className="notif-trigger"
+        className={`notif-trigger${totalDot > 0 ? " ringing" : ""}`}
         aria-label={`消息通知（${totalDot} 条未读）`}
       >
         {totalDot > 0 ? <BellRing size={18} strokeWidth={1.6} /> : <Bell size={18} strokeWidth={1.6} />}
