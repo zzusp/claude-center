@@ -26,6 +26,8 @@ const STATE = {
   claudePreCommand: "",
   relayState: "connected",
   relayChannels: 3,
+  databaseUrl: "postgresql://app:****@db.internal:5432/claude_center",
+  dbState: "connected",
   logs: Array.from({ length: 40 }).map((_, i) => ({
     ts: iso(-(40 - i) * 60000),
     level: i % 9 === 0 ? "error" : "info",
@@ -78,6 +80,8 @@ const api = {
   ],
   setTerminal: async () => {},
   setPreCommand: async () => {},
+  setRelayConfig: async () => {},
+  setDatabaseConfig: async () => ({ ok: true, error: null }),
   listCloudProjects: async () => [{ name: "claude-center" }, { name: "demo-app" }],
   listProjectLinks: async () => [
     { project_name: "claude-center", local_path: "D:/project/claude-center" },

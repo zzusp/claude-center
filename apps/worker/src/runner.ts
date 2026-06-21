@@ -10,6 +10,8 @@ import {
   getConversation,
   getTaskWithDeps,
   getPool,
+  pingDatabase,
+  reconfigureDatabase,
   getWorkerRuntime,
   heartbeatWorker,
   listActiveTaskIdsForWorker,
@@ -109,6 +111,9 @@ type ActiveEntry = {
   cancelled: boolean;
 };
 
+// 数据库连接健康度：未配置 / 已连通 / 连不上。桌面端据此提示用户去「设置 → 数据库连接」。
+export type DbState = "unconfigured" | "connected" | "error";
+
 // 暴露给桌面端（Electron）展示与开关用的状态快照。
 export type WorkerStatusSnapshot = {
   workerName: string;
@@ -134,6 +139,10 @@ export type WorkerStatusSnapshot = {
   relayUrl: string;
   relayPublishToken: string;
   relayWorkerToken: string;
+  // 当前生效的数据库连接串（桌面端「设置 → 数据库连接」回显 / 编辑用）。空字符串 = 未配置。
+  databaseUrl: string;
+  // 数据库连接健康度（顶栏红点 + 设置卡片提示）。
+  dbState: DbState;
 };
 
 const UNKNOWN_CAPABILITY = { ok: false, version: null, path: null };
@@ -150,6 +159,8 @@ export class ClaudeCenterWorker {
   private gcRunning = false;
   // 仅护住「认领循环」，不护执行：执行 fire-and-forget 进 active 跟踪，实现真并发。
   private claiming = false;
+  // 重启循环的重入护栏（切库 / 首次配库后会 stop()+start()，防并发重启重复注册/起定时器）。
+  private restarting = false;
   // 对话独立车道：≤1 轮在途、不占任务并发槽、不受工作态门控（用户显式点名了这个 worker，idle 也应答）。
   private conversationBusy = false;
   // 在跑的对话轮：messageId + conversationId + Claude 子进程句柄 + pid + 已取消标记，供 Console 端「终止本轮回答」杀进程。
@@ -308,6 +319,54 @@ export class ClaudeCenterWorker {
     this.log("info", this.config.relayUrl ? `SSE 中转已配置：${this.config.relayUrl}` : "SSE 中转已禁用（纯数据库轮询）");
   }
 
+  // 桌面端配置数据库连接串：持久化进 worker.json（覆盖同名 env）→ 切换连接池 → 重启所有循环（以新库重新注册/轮询）。
+  // 返回探活结果给桌面端即时回报；连不通也已持久化，下次重启 / 重配仍用此串。空 = 清空配置（worker 将停止接活）。
+  async setDatabaseConfig(url: string): Promise<{ ok: boolean; error: string | null }> {
+    const next = url.trim();
+    this.config.databaseUrl = next;
+    persistWorkerState(this.config.dataDir, { databaseUrl: next });
+    // 切连接池：关旧池，下次 getPool 按新串重建。
+    await reconfigureDatabase(next || null);
+    // 先探活给 UI 即时反馈（顺带以新串建好连接池）。
+    let result: { ok: boolean; error: string | null };
+    try {
+      if (!next) {
+        throw new Error("连接串为空（未配置数据库）");
+      }
+      await pingDatabase();
+      result = { ok: true, error: null };
+    } catch (error) {
+      result = { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    // 重启循环：首次配库（之前 start 因缺库早退、无定时器）经此真正跑起来；换库则以新库重新注册 + 轮询。
+    // 后台进行（含能力自检，较慢），不阻塞本次 UI 回报。
+    void this.restart().catch((error) =>
+      this.log("error", `db restart: ${error instanceof Error ? error.message : String(error)}`)
+    );
+    this.log(
+      "info",
+      next ? `数据库连接已更新（${result.ok ? "连通" : `暂不可达：${result.error}`}）` : "数据库连接已清空"
+    );
+    return result;
+  }
+
+  // 停掉所有循环再以最新配置重启（切库 / 首次配库后用）。restarting 防并发重入。
+  private async restart(): Promise<void> {
+    if (this.restarting) {
+      return;
+    }
+    this.restarting = true;
+    try {
+      await this.stop();
+      // 重置中转内部状态（清频道 + 订阅），让随后 start() 的 subscribe 干净重建——
+      // 否则 stop() 关了订阅但 channels 仍在，subscribe 会因「频道未变」早退、不重连。
+      this.relay.reconfigure();
+      await this.start();
+    } finally {
+      this.restarting = false;
+    }
+  }
+
   // —— 桌面端项目关联 —— //
 
   // 云端项目清单（供桌面端下拉选择关联目标）。
@@ -442,7 +501,19 @@ export class ClaudeCenterWorker {
   }
 
   async getStatusSnapshot(): Promise<WorkerStatusSnapshot> {
-    const runtime = await getWorkerRuntime(getPool(), this.config.workerId).catch(() => null);
+    // 复用注册行查询同时判定 DB 健康度：未配串=unconfigured；查询成功（即便无行=未注册）=connected；抛错=error。
+    let runtime: Awaited<ReturnType<typeof getWorkerRuntime>> | null = null;
+    let dbState: DbState;
+    if (!this.config.databaseUrl) {
+      dbState = "unconfigured";
+    } else {
+      try {
+        runtime = await getWorkerRuntime(getPool(), this.config.workerId);
+        dbState = "connected";
+      } catch {
+        dbState = "error";
+      }
+    }
     return {
       workerName: this.config.workerName,
       hostName: this.config.hostName,
@@ -470,7 +541,9 @@ export class ClaudeCenterWorker {
       relayChannels: this.relay.channelCount,
       relayUrl: this.config.relayUrl,
       relayPublishToken: this.config.relayPublishToken,
-      relayWorkerToken: this.config.relayWorkerToken
+      relayWorkerToken: this.config.relayWorkerToken,
+      databaseUrl: this.config.databaseUrl,
+      dbState
     };
   }
 

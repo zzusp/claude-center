@@ -59,6 +59,9 @@ app.whenReady().then(() => {
   ipcMain.handle("worker:setRelayConfig", (_event, input: { url: string; publishToken: string; workerToken: string }) =>
     worker?.setRelayConfig(input)
   );
+  ipcMain.handle("worker:setDatabaseConfig", (_event, url: string) =>
+    worker?.setDatabaseConfig(url) ?? { ok: false, error: "worker 未就绪" }
+  );
   ipcMain.handle("worker:listCloudProjects", () => worker?.listCloudProjects() ?? []);
   ipcMain.handle("worker:listProjectLinks", () => worker?.listProjectLinks() ?? []);
   ipcMain.handle("worker:addProjectLink", (_event, input: { projectName: string; localPath: string }) =>

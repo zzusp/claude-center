@@ -76,24 +76,30 @@ https://github.com/zzusp/claude-center/releases/tag/worker-v0.2.0
 
 Worker 通过 PostgreSQL 跟 Console 沟通——必须知道连接串。配置写在 `~/.claude-center/worker.json` 或环境变量。
 
-### 5.1 必填：DATABASE_URL
+### 5.1 必填：数据库连接串
 
-第一次启动 Worker 桌面端会弹「配置」面板，最重要的是这条：
+Worker 必须知道连接串才能跟 Console 沟通。两种配法，二选一即可：
+
+**① 桌面端「设置 → 数据库连接」卡片（推荐，免改文件、保存即时生效）**
+
+第一次启动若没连上库，顶栏数据库指示会显示「数据库未配置」。进「设置 → 数据库连接」，把管理员给的 PostgreSQL 连接串填进去：
+
+```
+postgresql://USER:PASSWORD@HOST:5432/claude_center
+```
+
+点「保存并连接」即时连接并重新注册，**无需重启**；连通状态见顶栏数据库指示（绿=已连接 / 红=连不上）。持久化到 `~/.claude-center/worker.json`，**覆盖**同名环境变量。向 Console 管理员（你们公司的 DBA / 运维）要这个连接串。
+
+**② 环境变量 / `~/.claude-center/.env`**
+
+在用户目录 `~/.claude-center/.env` 写：
 
 ```
 DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/claude_center
-```
-
-向 Console 管理员（你们公司的 DBA / 运维）要这个连接串。
-
-**也可走 `.env` 文件**：在用户目录 `~/.claude-center/.env` 写：
-
-```
-DATABASE_URL=postgresql://...
 CLAUDE_CENTER_WORKER_NAME=your-pc-name   # 给本机起个识别名，Console 列表里显示
 ```
 
-完整环境变量参考仓库根 `.env.example`。
+桌面端卡片里填过的连接串优先级更高（覆盖此 env）。完整环境变量参考仓库根 `.env.example`。
 
 ### 5.2 Worker 名字
 
