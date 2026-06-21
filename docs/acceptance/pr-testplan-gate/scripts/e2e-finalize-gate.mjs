@@ -118,7 +118,7 @@ try {
   const UNTESTED_PLAN = ["## Summary", "改了一半。", "", "## Changes", "- s.txt:1 — 加了一行", "", "## Test Plan", "- [x] typecheck 通过", "- [ ] e2e 未跑"].join("\n");
 
   // 单场景执行器：seed 任务 + worktree + 改动 → finalize → 返回事件/通知/gh 调用记录。
-  async function runScenario({ label, claudeOutput, mergeable }) {
+  async function runScenario({ label, claudeOutput, mergeable, presetPrUrl }) {
     console.log(`\n=== 场景：${label} ===`);
     const workBranch = `cc/e2e-${label}-${Date.now()}`;
     const draft = await db.createTask(pool, {
@@ -128,6 +128,8 @@ try {
     });
     await db.createTaskRepos(pool, draft.id, [{ projectRepoId, role: "main", relativePath: ".", baseBranch: "main", workBranch, targetBranch: "main", subStatus: "pending" }]);
     await pool.query(`UPDATE tasks SET status='running', claimed_by=$2, claimed_at=now(), started_at=now() WHERE id=$1`, [draft.id, workerId]);
+    // 模拟打回重跑：该仓 PR 已存在（pr_url 已落库）→ finalize 走「复用 + 刷新正文」分支。
+    if (presetPrUrl) await pool.query(`UPDATE task_repos SET pr_url=$2, sub_status='pr_created' WHERE task_id=$1`, [draft.id, presetPrUrl]);
     const task = (await pool.query(`SELECT * FROM tasks WHERE id=$1`, [draft.id])).rows[0];
 
     // 建任务 worktree（主仓 role）+ 未提交改动（让 finalize 自己 commit）
@@ -153,7 +155,8 @@ try {
     const notifs = (await pool.query(`SELECT DISTINCT type FROM notifications WHERE related_task_id=$1`, [task.id])).rows.map((n) => n.type);
     const ghCalls = existsSync(capture) ? readFileSync(capture, "utf8").trim().split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l)) : [];
     const createBody = ghCalls.find((c) => c.cmd === "create")?.body ?? "";
-    return { task, events, notifs, ghCalls, createBody };
+    const editBody = ghCalls.find((c) => c.cmd === "edit")?.body ?? "";
+    return { task, events, notifs, ghCalls, createBody, editBody };
   }
 
   // ---- 场景 1：Test Plan 全通过 + 可合并 → 自动合并 ----
@@ -194,6 +197,18 @@ try {
     assert(!r.events.includes("auto_merged"), "未自动合并");
     assert(r.ghCalls.some((c) => c.cmd === "view") && !r.ghCalls.some((c) => c.cmd === "merge"), "查了 mergeable 但未 merge");
     assert(r.notifs.includes("task_review_required"), "不可合并也发了待人工确认通知（需求 3）");
+  }
+
+  // ---- 场景 4：打回重跑（PR 已存在）→ 不重复 create，而是刷新正文为最新 Markdown ----
+  {
+    const r = await runScenario({ label: "reuse-refresh", claudeOutput: PASS_PLAN, mergeable: true, presetPrUrl: "https://github.com/fake/repo/pull/1" });
+    console.log(`  events: ${r.events.join(" → ")}`);
+    console.log(`  gh: ${r.ghCalls.map((c) => c.cmd).join(",")}  notifs: ${r.notifs.join(",") || "—"}`);
+    assert(!r.ghCalls.some((c) => c.cmd === "create"), "复用已存在 PR，未重复 gh pr create");
+    assert(r.ghCalls.some((c) => c.cmd === "edit"), "刷新正文：gh pr edit 被调用");
+    assert(!r.editBody.includes("```text") && r.editBody.includes("## Summary") && r.editBody.includes("## Test Plan"),
+      "刷新后的正文是渲染 Markdown（无 ```text、含结构化段）");
+    assert(r.events.includes("auto_merged"), "刷新后照常走门禁 → 自动合并");
   }
 
   console.log(failures === 0 ? "\n✓ 端到端全部断言通过" : `\n✗ ${failures} 条断言失败`);

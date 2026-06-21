@@ -494,6 +494,16 @@ function extractPrUrl(output: string): string | null {
   return match?.[0] ?? null;
 }
 
+// 复用已存在 PR 时刷新其正文（`gh pr edit --body`）。PR 正文原仅在 create 时写一次，打回重跑 / 续接不更新，
+// 正文会停在首轮内容；本函数让正文始终反映最新结构化产出。best-effort：失败只告警、不阻塞收尾。
+async function refreshPrBody(config: WorkerConfig, subWt: string, prUrl: string, body: string): Promise<void> {
+  try {
+    await runCommand(config.ghCommand, ["pr", "edit", prUrl, "--body", body], { cwd: subWt, timeoutMs: 5 * 60_000 });
+  } catch (error) {
+    console.warn(`[pr] 刷新 PR 正文失败（${prUrl}，不阻塞）：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 // ====== 多仓任务（docs/spec/task-multi-repo.md）======
 // task_repos 是任务级仓快照；TaskRepoCtx 补充 project_repos.repo_url，给 worktree 准备阶段
 // 的 `git clone` 用（子仓本地缺失时 clone）。
@@ -881,23 +891,35 @@ export async function finalizeTaskMultiRepo(
       });
 
       // 打回重跑时该仓的 PR 已存在：push 已自动更新；跳过 gh pr create（与原 finalize 同理）。
+      // 但 PR 正文原仅在 create 时写一次，重跑不刷新 → 正文会停在首轮内容（旧 worker 建的还是代码块格式）。
+      // 这里 best-effort 重写正文，让它反映本轮最新的结构化产出。
       if (ctx.pr_url) {
+        await refreshPrBody(config, subWt, ctx.pr_url, prBody(task, claudeOutput));
         await updateTaskRepoStatus(pool, ctx.id, "pr_created");
+        await addTaskEvent(pool, task.id, config.workerId, "pr_created", `${repoLabel} 复用已存在 PR（已刷新正文）`, {
+          repoRole: ctx.role,
+          relativePath: ctx.relative_path,
+          prUrl: ctx.pr_url,
+          reused: true,
+          bodyRefreshed: true
+        });
         results.push({ ctx, sub: "pr_created", prUrl: ctx.pr_url, reused: true });
         continue;
       }
 
       // 幂等建 PR：首轮可能已 `gh pr create` 成功、却在落 pr_url 前失败（task_repos.pr_url 仍空）。
-      // 此时再 create 会因「a pull request already exists」整仓判失败。先查同 head/base 的已开 PR，命中即复用。
+      // 此时再 create 会因「a pull request already exists」整仓判失败。先查同 head/base 的已开 PR，命中即复用（并刷新正文）。
       const existingPrUrl = await findExistingPrUrl(config, subWt, ctx.work_branch, ctx.target_branch);
       if (existingPrUrl) {
+        await refreshPrBody(config, subWt, existingPrUrl, prBody(task, claudeOutput));
         await updateTaskRepoPrUrl(pool, ctx.id, existingPrUrl);
         await updateTaskRepoStatus(pool, ctx.id, "pr_created");
-        await addTaskEvent(pool, task.id, config.workerId, "pr_created", `${repoLabel} 复用已存在 PR`, {
+        await addTaskEvent(pool, task.id, config.workerId, "pr_created", `${repoLabel} 复用已存在 PR（已刷新正文）`, {
           repoRole: ctx.role,
           relativePath: ctx.relative_path,
           prUrl: existingPrUrl,
-          reused: true
+          reused: true,
+          bodyRefreshed: true
         });
         results.push({ ctx, sub: "pr_created", prUrl: existingPrUrl, reused: true });
         continue;

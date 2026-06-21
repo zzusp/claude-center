@@ -25,6 +25,11 @@ if (sub === "create") {
   out("https://github.com/fake/repo/pull/1\n");
   process.exit(0);
 }
+if (sub === "edit") {
+  const bi = argv.indexOf("--body");
+  record({ cmd: "edit", url: argv[3], body: bi >= 0 ? argv[bi + 1] : "" });
+  process.exit(0);
+}
 if (sub === "view") {
   const bad = process.env.FAKE_GH_MERGEABLE === "false";
   const mergeable = bad ? "CONFLICTING" : "MERGEABLE";

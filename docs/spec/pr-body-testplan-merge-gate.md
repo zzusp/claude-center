@@ -44,6 +44,13 @@
 `<details>` 折叠块，末尾加 Worker 署名脚注。`claudeOutput` 为空时给占位文案兜底；显示侧对超长
 内容截断（GitHub PR body 上限 65536 字符），**Test Plan 解析用未截断的全量文本**，门禁不受显示截断影响。
 
+**正文随重跑刷新（`refreshPrBody`）**：PR 正文原仅在 `gh pr create` 时写一次；打回重跑 / 续接走「复用
+已存在 PR」分支时不更新，正文会停在首轮内容（旧 worker 建的还是代码块格式）。故复用分支新增
+`gh pr edit <prUrl> --body <prBody(...)>`（best-effort，失败不阻塞），让正文始终反映本轮最新结构化产出。
+含义：① 已存在的旧格式 PR 会在更新版 Worker 下一轮 finalize 时被刷成渲染后的 Markdown；② 多轮迭代时
+PR 正文不再过时。注意：**运行中的 Worker 是长驻进程、按已编译产物服务**，本改动要随 Worker 重新构建 +
+重启后才对新任务/重跑生效——当前任务自身的旧 PR 正文不会因源码改动自动变化（需更新版 Worker 重跑该任务）。
+
 ### 3) Test Plan 解析 + 自动合并门禁（`parseTestPlan` + `finalizeTaskMultiRepo`）
 
 `parseTestPlan(output)` 纯函数：定位 `## Test Plan` 标题（大小写不敏感，到下一个标题结束），收集
