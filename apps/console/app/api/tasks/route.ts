@@ -11,6 +11,7 @@ import {
   userHasProject,
   TASK_STATUSES,
   type SortDir,
+  type SortField,
   type TaskModel
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
@@ -56,7 +57,8 @@ export async function GET(request: NextRequest) {
         : null;
     const q = params.get("q")?.trim() || null;
 
-    // 排序方向：表头切换 created_at 升/降序，白名单 asc/desc，默认 desc。
+    // 排序：列（created 创建时间 / tokens 累计 token 用量）+ 方向（asc/desc）均走白名单，默认 created desc。
+    const sort: SortField = params.get("sort") === "tokens" ? "tokens" : "created";
     const dir: SortDir = params.get("dir") === "asc" ? "asc" : "desc";
 
     const pageSizeRaw = Number(params.get("pageSize"));
@@ -80,6 +82,7 @@ export async function GET(request: NextRequest) {
         submitMode,
         projectIds,
         q,
+        sort,
         dir,
         limit: pageSize,
         offset: (page - 1) * pageSize

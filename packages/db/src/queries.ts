@@ -467,8 +467,10 @@ export async function setTaskDependencies(
   await addTaskDependencies(client, taskId, dependsOnIds);
 }
 
-// 任务流列表固定按更新时间排序，方向由列表头切换（默认 desc）。
+// 任务流列表排序：方向（升/降）由列表头切换（默认 desc）。
 export type SortDir = "asc" | "desc";
+// 排序列白名单：created=创建时间（默认）、tokens=累计 token 用量。外部输入须在此白名单内。
+export type SortField = "created" | "tokens";
 
 export type ListTasksFilters = {
   status?: string[];
@@ -482,6 +484,8 @@ export type ListTasksFilters = {
   // 项目级隔离：非 admin 传入其可访问项目 id 集合，约束只返回范围内任务（空集合 → 无结果）。
   projectIds?: string[] | null;
   q?: string | null;
+  // 排序列（白名单）；缺省按 created。
+  sort?: SortField;
   dir?: SortDir;
   limit: number;
   offset: number;
@@ -527,8 +531,13 @@ export async function listTasks(
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  // 排序固定按 created_at，仅方向可变（白名单 asc/desc），避免把外部输入拼进 ORDER BY。
-  const orderBy = `tasks.created_at ${filters.dir === "asc" ? "ASC" : "DESC"}`;
+  // 排序列 + 方向均走白名单（避免把外部输入拼进 ORDER BY）：默认 created_at；按 token 排序时
+  // 以 created_at DESC 作次级键，让大量同为 0 token 的任务有稳定先后。
+  const dir = filters.dir === "asc" ? "ASC" : "DESC";
+  const orderBy =
+    filters.sort === "tokens"
+      ? `tasks.total_tokens ${dir}, tasks.created_at DESC`
+      : `tasks.created_at ${dir}`;
 
   params.push(filters.limit);
   const limitIdx = params.length;
@@ -550,7 +559,11 @@ export async function listTasks(
   );
 
   const total = result.rows[0] ? Number(result.rows[0].total_count) : 0;
-  const tasks = result.rows.map(({ total_count: _total, ...task }) => task as Task);
+  // total_tokens 是 bigint，pg 原样返回字符串；列表展示 / 排序按数值用，这里统一转 number。
+  const tasks: Task[] = result.rows.map(({ total_count: _total, ...task }) => ({
+    ...task,
+    total_tokens: Number(task.total_tokens ?? 0)
+  }));
   return { tasks, total };
 }
 
@@ -1636,6 +1649,22 @@ export async function setTaskClaudeSession(
         SET claude_session_id = $3, updated_at = now()
       WHERE id = $1 AND claimed_by = $2`,
     [taskId, workerId, sessionId]
+  );
+}
+
+// Worker 每轮 claude 执行后把该轮 token 用量累加到 tasks.total_tokens（首轮 / 续接 / 重试逐轮叠加）。
+// 仅认领该任务的 worker 可累加（claimed_by 守卫，与 setTaskClaudeSession 一致）。
+export async function incrementTaskTokens(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  workerId: string,
+  deltaTokens: number
+): Promise<void> {
+  await client.query(
+    `UPDATE tasks
+        SET total_tokens = total_tokens + $3, updated_at = now()
+      WHERE id = $1 AND claimed_by = $2`,
+    [taskId, workerId, deltaTokens]
   );
 }
 

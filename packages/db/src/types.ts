@@ -217,6 +217,9 @@ export type Task = {
   // 重试请求时间戳：用户对 failed/cancelled 任务点「重试」时打此戳；Worker 的 claimNextRetryableTask
   // 据此续接重跑并清空。未请求为 null。
   retry_requested_at: string | null;
+  // 任务开发累计 token 用量：Worker 每轮 claude 执行后把该轮 usage（input+output+两类 cache）求和逐轮累加。
+  // DB 为 bigint（pg 原样返回字符串）；listTasks 统一转 number 供列表展示 / 排序。默认 0。
+  total_tokens: number;
   // 前置任务 id（listRecentTasks 聚合填充；其余查询不返回，故可选）。
   depends_on?: string[];
   // 存在「状态非 accepted 的前置」时为 true，用于 UI 提示阻塞（同上，可选）。

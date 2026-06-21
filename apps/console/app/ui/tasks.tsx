@@ -6,6 +6,7 @@ import type {
   Project,
   Role,
   SortDir,
+  SortField,
   Task,
   TaskComment,
   TaskEvent,
@@ -23,7 +24,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Empty, KvRow, STATUS_META, StatusBadge, StatusDot,
-  computeTaskDurationMs, fmtDateTime, fmtDurationMs, fmtTime, metaOf, parsePrNumber, postJson, type Tone
+  computeTaskDurationMs, fmtDateTime, fmtDurationMs, fmtTime, fmtTokens, metaOf, parsePrNumber, postJson, type Tone
 } from "./shared";
 import {
   ROLE_LABEL, ROLE_OPTIONS, SPARK_CAP, TONE_COLOR, emptyOverview, fmtAgo, syncAgo,
@@ -154,8 +155,18 @@ function TasksView({
   const [submitMode, setSubmitMode] = useState("");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
-  // 列表固定按创建时间排序，方向由「创建」表头切换（默认降序）。
+  // 列表排序：列（created 创建 / tokens Token 用量）+ 方向，均由表头点击切换（默认创建时间降序）。
+  const [sort, setSort] = useState<SortField>("created");
   const [dir, setDir] = useState<SortDir>("desc");
+  // 点表头：本列已在排序则切方向，否则切到本列并重置为降序（大值/最新在前）。
+  function toggleSort(field: SortField) {
+    if (sort === field) {
+      setDir((prev) => (prev === "desc" ? "asc" : "desc"));
+    } else {
+      setSort(field);
+      setDir("desc");
+    }
+  }
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(1);
   const [data, setData] = useState<ListResponse>({ tasks: [], total: 0, page: 1, pageSize: 20 });
@@ -244,13 +255,13 @@ function TasksView({
   // 任一筛选条件变化都回到第 1 页
   useEffect(() => {
     setPage(1);
-  }, [status, projectId, workerId, submitMode, debouncedQ, dir, pageSize]);
+  }, [status, projectId, workerId, submitMode, debouncedQ, sort, dir, pageSize]);
 
   // 切换筛选 / 翻页 / 改排序 / 改页大小时清空选区——选中的任务可能不在新视图里，
   // 跨页保留会让用户误以为「未在表内」的任务也参与批量操作。
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [status, projectId, workerId, submitMode, debouncedQ, dir, page, pageSize]);
+  }, [status, projectId, workerId, submitMode, debouncedQ, sort, dir, page, pageSize]);
 
   // worker 下拉数据：取全集仅用于过滤展示，离线 worker 也保留（历史任务仍要可定位）。
   // worker 注册/离线属低频事件，挂载拉一次即可，不必因任意 relay 事件被动刷新（Infinity = 关闭所有自动刷新源）。
@@ -273,6 +284,7 @@ function TasksView({
       if (workerId) params.set("workerId", workerId);
       if (submitMode) params.set("submitMode", submitMode);
       if (debouncedQ) params.set("q", debouncedQ);
+      params.set("sort", sort);
       params.set("dir", dir);
       params.set("page", String(page));
       params.set("pageSize", String(pageSize));
@@ -290,7 +302,7 @@ function TasksView({
         if (isActive()) setLoading(false);
       }
     },
-    [status, projectId, workerId, submitMode, debouncedQ, dir, page, pageSize, refreshKey, refreshSignal],
+    [status, projectId, workerId, submitMode, debouncedQ, sort, dir, page, pageSize, refreshKey, refreshSignal],
     Infinity
   );
 
@@ -445,13 +457,24 @@ function TasksView({
                         <th>PR</th>
                         <th>耗时</th>
                         <th
+                          className="t-right"
                           style={{ cursor: "pointer", userSelect: "none" }}
-                          onClick={() => setDir((prev) => (prev === "desc" ? "asc" : "desc"))}
-                          title="点击切换创建时间排序"
+                          onClick={() => toggleSort("tokens")}
+                          title="点击按 Token 用量排序"
+                        >
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            Token
+                            {sort === "tokens" ? (dir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : null}
+                          </span>
+                        </th>
+                        <th
+                          style={{ cursor: "pointer", userSelect: "none" }}
+                          onClick={() => toggleSort("created")}
+                          title="点击按创建时间排序"
                         >
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                             创建
-                            {dir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
+                            {sort === "created" ? (dir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : null}
                           </span>
                         </th>
                         <th className="t-right">操作</th>
@@ -515,6 +538,9 @@ function TasksView({
                               )}
                             </td>
                             <td className="t-num" data-label="耗时">{fmtDurationMs(computeTaskDurationMs(task))}</td>
+                            <td className="t-num t-right" data-label="Token" title={`${task.total_tokens ?? 0} tokens`}>
+                              {fmtTokens(task.total_tokens)}
+                            </td>
                             <td className="t-num" data-label="创建">{fmtDateTime(task.created_at)}</td>
                             <td className="t-right" data-label="操作">
                               <div className="row-actions">

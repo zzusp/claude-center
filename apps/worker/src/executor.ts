@@ -9,6 +9,7 @@ import {
   getPendingReply,
   getPool,
   getTaskLocalPath,
+  incrementTaskTokens,
   listAttachmentsForTask,
   listConversationTurnAttachments,
   listPendingReplyAttachments,
@@ -144,7 +145,8 @@ async function countAutoReplyRounds(taskId: string): Promise<number> {
   return Number(result.rows[0]?.count ?? 0);
 }
 
-type ClaudeTurn = { sessionId: string | null; result: string; raw: CommandResult };
+// tokens：本轮 claude usage（input+output+两类 cache）求和；由调用方累加进 tasks.total_tokens。
+type ClaudeTurn = { sessionId: string | null; result: string; tokens: number; raw: CommandResult };
 
 type ClaudeCallOpts = {
   prompt: string;
@@ -270,7 +272,12 @@ function runClaudeJson(
 ): Promise<ClaudeTurn> {
   return spawnClaude(config, { ...opts, full: true }).then((raw) => {
     const parsed = parseClaudeJson(raw);
-    return { sessionId: parsed.session_id ?? null, result: parsed.result ?? "", raw };
+    return {
+      sessionId: parsed.session_id ?? null,
+      result: parsed.result ?? "",
+      tokens: sumUsageTokens(parsed.usage),
+      raw
+    };
   });
 }
 
@@ -289,12 +296,45 @@ function runTaskClaude(
   }
 ): Promise<ClaudeTurn> {
   const stopSync = startTaskSessionSync(taskId, opts.cwd);
-  return runClaudeJson(config, opts).finally(() => stopSync());
+  return runClaudeJson(config, opts)
+    .then(async (turn) => {
+      // 本轮 token 用量累加到 tasks.total_tokens（best-effort：累加失败只告警、不回滚已完成的执行；
+      // 与 startTaskSessionSync 的「周期同步失败不阻塞执行」同一取舍）。
+      if (turn.tokens > 0) {
+        await incrementTaskTokens(getPool(), taskId, config.workerId, turn.tokens).catch((error) => {
+          console.warn(
+            `[tokens] 累计 token 用量失败（不影响任务执行）：${error instanceof Error ? error.message : String(error)}`
+          );
+        });
+      }
+      return turn;
+    })
+    .finally(() => stopSync());
 }
 
-function parseClaudeJson(raw: CommandResult): { session_id?: string; result?: string } {
+// claude --output-format json 的 usage：四类 token（input/output + cache 写入/读取）。
+type ClaudeUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+};
+
+// 四类 token 求和作该轮总用量；非数字 / 缺失按 0 计，保证累加器恒为有限值。
+function sumUsageTokens(usage: ClaudeUsage | undefined): number {
+  if (!usage) return 0;
+  const parts = [
+    usage.input_tokens,
+    usage.output_tokens,
+    usage.cache_creation_input_tokens,
+    usage.cache_read_input_tokens
+  ];
+  return parts.reduce<number>((sum, n) => sum + (typeof n === "number" && Number.isFinite(n) ? n : 0), 0);
+}
+
+function parseClaudeJson(raw: CommandResult): { session_id?: string; result?: string; usage?: ClaudeUsage } {
   try {
-    return JSON.parse(raw.stdout.trim()) as { session_id?: string; result?: string };
+    return JSON.parse(raw.stdout.trim()) as { session_id?: string; result?: string; usage?: ClaudeUsage };
   } catch {
     throw new Error(
       `Failed to parse claude --output-format json output.\nstdout:\n${raw.stdout.slice(
