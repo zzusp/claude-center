@@ -5780,6 +5780,30 @@ a.ds-v:hover {
   color: var(--text-1);
 }
 
+/* 有未读时：铃铛 icon 周期性摆动（红点照常显示），引导用户注意。
+   transform-origin 取顶部中心，像悬挂的铃铛从吊点起摆；摆动集中在前 0.8s、其后静止约 1.2s 再循环，避免持续抖动扰人。 */
+.notif-trigger.ringing svg {
+  transform-origin: top center;
+  animation: cc-bell-swing 2s ease-in-out infinite;
+}
+
+@keyframes cc-bell-swing {
+  0%, 40%, 100% { transform: rotate(0); }
+  5% { transform: rotate(14deg); }
+  10% { transform: rotate(-12deg); }
+  15% { transform: rotate(10deg); }
+  20% { transform: rotate(-8deg); }
+  25% { transform: rotate(6deg); }
+  30% { transform: rotate(-4deg); }
+  35% { transform: rotate(2deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notif-trigger.ringing svg {
+    animation: none;
+  }
+}
+
 .notif-dot {
   position: absolute;
   top: -4px;
