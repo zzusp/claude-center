@@ -469,17 +469,27 @@ function UserForm({
           {projects.length === 0 ? (
             <div className="scope-hint">暂无项目，先到「代码项目」创建。</div>
           ) : (
-            <div className="checkbox-list">
-              {projects.map((project) => (
-                <label key={project.id} className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={projectIds.includes(project.id)}
-                    onChange={() => toggleProject(project.id)}
-                  />
-                  <span>{project.name}</span>
-                </label>
-              ))}
+            <div className="dep-picker">
+              <div className="dep-picker-list">
+                {projects.map((project) => {
+                  const checked = projectIds.includes(project.id);
+                  return (
+                    <button
+                      type="button"
+                      key={project.id}
+                      className={`dep-option${checked ? " selected" : ""}`}
+                      onClick={() => toggleProject(project.id)}
+                      aria-pressed={checked}
+                    >
+                      <span className={`dep-check${checked ? " on" : ""}`} aria-hidden>
+                        {checked ? <Check size={11} strokeWidth={3} /> : null}
+                      </span>
+                      <span className="dep-option-title">{project.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {projectIds.length > 0 ? <span className="field-hint">已选 {projectIds.length} 个项目</span> : null}
             </div>
           )}
         </div>
