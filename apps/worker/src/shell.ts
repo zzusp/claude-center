@@ -173,7 +173,8 @@ export function runCommand(
           // killProcessTree 对非组长子进程（普通 git/gh 等）自动回退 child.kill，无回归。
           killProcessTree(child);
           settled = true;
-          reject(new Error(`Command timed out: ${command} ${args.join(" ")}`));
+          // 超时文案带整条命令行（args 含 curl 的 Authorization 头）→ 拼前脱敏，勿把 token 透进错误链。
+          reject(new Error(redactSecrets(`Command timed out: ${command} ${args.join(" ")}`)));
         }, options.timeoutMs)
       : null;
 
@@ -229,5 +230,16 @@ export function formatCommandFailure(result: CommandResult): string {
   if (result.stderr.trim()) {
     lines.push(`stderr:\n${result.stderr.trim()}`);
   }
-  return lines.join("\n");
+  // 命令行（args）及命令输出都可能夹带凭据 → 整条失败文案统一脱敏后再返回。
+  return redactSecrets(lines.join("\n"));
+}
+
+// 命令行可能夹带敏感凭据：curl 采集套餐用量时 `-H "Authorization: Bearer <token>"` 把 oauth token 放进 argv，
+// `sk-ant-...` API key 同理。runCommand 失败 / 超时的错误文案会带上整条命令行（及命令输出），经
+// fetchUsage 回填到 usage.error，再随 worker `this.log` 透到桌面日志面板、并落库到 Console worker 详情 —— token 泄漏。
+// 故拼进错误文案前统一脱敏：保留 `Bearer` / `sk-ant-` 前缀便于看出是哪类凭据，仅把其后的密文替换为 ***。
+export function redactSecrets(text: string): string {
+  return text
+    .replace(/Bearer\s+\S+/gi, "Bearer ***")
+    .replace(/sk-ant-\S+/g, "sk-ant-***");
 }

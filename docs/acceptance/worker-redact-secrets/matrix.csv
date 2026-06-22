@@ -1,0 +1,8 @@
+case,description,round-1
+A1,redactSecrets：Bearer token → "Bearer ***",PASS
+A2,redactSecrets：sk-ant key → "sk-ant-***",PASS
+A3,redactSecrets：非凭据文本原样不动,PASS
+B,formatCommandFailure：args + 命令输出里的凭据均脱敏,PASS
+C,runCommand 非零退出（真 curl 坏代理）：error.message 不含明文 token,PASS
+D,runCommand 超时（真 node 挂住）：超时文案脱敏后不含 token,PASS
+E,fetchUsage 形态：usage.error 回填后不含 token、保留原因前缀,PASS
