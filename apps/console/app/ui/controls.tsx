@@ -376,7 +376,8 @@ function DateTimePicker({
   disabled = false,
   placeholder = "选择日期与时间",
   ariaLabel,
-  required
+  required,
+  direction = "down"
 }: {
   name?: string;
   value?: string;
@@ -387,6 +388,8 @@ function DateTimePicker({
   placeholder?: string;
   ariaLabel?: string;
   required?: boolean;
+  // 面板展开方向：默认向下；贴近视口底部的场景（如对话输入框）用 "up" 向上展开避免被裁切。
+  direction?: "down" | "up";
 }) {
   const isControlled = value !== undefined;
   const [internal, setInternal] = useState(defaultValue);
@@ -544,7 +547,7 @@ function DateTimePicker({
   }, [minDate, parsed]);
 
   return (
-    <div className={`dt-picker${open ? " open" : ""}${disabled ? " disabled" : ""}`} ref={rootRef}>
+    <div className={`dt-picker${open ? " open" : ""}${disabled ? " disabled" : ""}${direction === "up" ? " up" : ""}`} ref={rootRef}>
       {name ? <input type="hidden" name={name} value={current} required={required} /> : null}
       <button
         type="button"

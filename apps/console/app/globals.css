@@ -2737,6 +2737,12 @@ tr[data-selected] {
   animation: dt-panel-in 120ms ease;
 }
 
+/* 向上展开（direction="up"）：贴近视口底部时避免日历被裁切（如对话输入框旁）。 */
+.dt-picker.up .dt-panel {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
 @keyframes dt-panel-in {
   from {
     opacity: 0;
@@ -4582,7 +4588,8 @@ a.dep-item:hover {
   color: var(--text-2);
 }
 .chat-field input,
-.chat-field select {
+.chat-field select,
+.chat-field textarea {
   padding: 8px 10px;
   font: inherit;
   font-size: 13.5px;
@@ -4591,10 +4598,110 @@ a.dep-item:hover {
   background: var(--surface-1);
   color: var(--text-1);
 }
+.chat-field textarea {
+  resize: vertical;
+  min-height: 56px;
+  line-height: 1.5;
+}
 .chat-field input:focus,
-.chat-field select:focus {
+.chat-field select:focus,
+.chat-field textarea:focus {
   outline: none;
   border-color: var(--running);
+}
+
+/* 自动回复（无人值守）徽标：头部副标题里的小标签（复用 .chat-tag 的圆角/字号）。 */
+.chat-tag-auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  background: var(--surface-2);
+  color: var(--text-3);
+  vertical-align: middle;
+}
+
+/* 待发送的定时消息清单（输入框上方）。 */
+.chat-scheduled {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 14px 4px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.chat-scheduled-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.chat-scheduled-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.chat-scheduled-ico {
+  color: var(--text-4);
+  flex-shrink: 0;
+}
+.chat-scheduled-time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+.chat-scheduled-body {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-scheduled-del {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-4);
+  cursor: pointer;
+}
+.chat-scheduled-del:hover {
+  background: var(--surface-1);
+  color: var(--failed);
+}
+
+/* 输入框底栏左侧工具组：定时发送选择器 + 提示文案。 */
+.chat-composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.chat-schedule-picker {
+  width: 188px;
+  flex-shrink: 0;
+}
+.chat-schedule-picker .dt-trigger {
+  padding: 6px 9px;
+  font-size: 12px;
+}
+/* 提示文案可收缩 / 省略，避免定时控件挤占后在窄屏溢出。 */
+.chat-composer-tools .chat-composer-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* —— 会话 transcript 富展示（task-detail / chat 共用，移植自 claude-code-session）—— */

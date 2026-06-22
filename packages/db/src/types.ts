@@ -296,8 +296,8 @@ export type Attachment = AttachmentMeta & {
 // ===== 实时直连对话（Worker Direct Chat）：独立于任务流的问答通道。详见 docs/spec/worker-direct-chat.md =====
 export type ConversationStatus = "active" | "closed";
 export type ConversationMessageRole = "user" | "assistant";
-// user 消息恒 'done'；assistant：claim 即 'streaming'，收尾 'done'/'failed'；用户点「终止」则翻 'cancelled'。
-export type ConversationMessageStatus = "pending" | "streaming" | "done" | "failed" | "cancelled";
+// user 消息恒 'done'（定时消息先 'scheduled'、到点翻 'done'）；assistant：claim 即 'streaming'，收尾 'done'/'failed'；用户点「终止」则翻 'cancelled'。
+export type ConversationMessageStatus = "scheduled" | "pending" | "streaming" | "done" | "failed" | "cancelled";
 
 export type Conversation = {
   id: string;
@@ -310,6 +310,10 @@ export type Conversation = {
   // 复用 TaskModel：'default' 不传 --model，跟随 claude 默认。
   model: TaskModel;
   status: ConversationStatus;
+  // 自动回复（无人值守）：开启后 Worker 执行对话轮注入「自主决策、不停下来问」指令；复用 tasks.auto_reply 的设计。
+  auto_reply: boolean;
+  // 决策预案：auto_reply=true 时拼进 prompt 作为用户预先编码的偏好。
+  auto_decision_hints: string;
   claude_session_id: string | null;
   created_by: string | null;
   created_at: string;
@@ -350,10 +354,13 @@ export type Notification = {
 export type ConversationMessage = {
   id: string;
   conversation_id: string;
-  seq: number;
+  // 定时消息（status='scheduled'）在到点提升前为 null（不占 seq、不参与排序/派发）；提升时才赋 max(seq)+1。
+  seq: number | null;
   role: ConversationMessageRole;
   body: string;
   status: ConversationMessageStatus;
+  // 定时发送时间：status='scheduled' 的 user 消息到此刻由调度器翻 'done' 并赋 seq；非定时消息为 null。
+  scheduled_at: string | null;
   claimed_by: string | null;
   error_message: string | null;
   // Console 点「终止本轮回答」打的时间戳；Worker 周期 + relay 信号扫描自己名下的取消请求 → 杀 Claude 进程树 → 翻终态。

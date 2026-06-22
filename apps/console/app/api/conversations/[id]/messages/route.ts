@@ -24,7 +24,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const user = gate;
   try {
     const { id } = await params;
-    const payload = (await request.json()) as { body?: string; attachmentIds?: string[] };
+    const payload = (await request.json()) as { body?: string; attachmentIds?: string[]; scheduledAt?: string };
     // 允许「仅附件、空文本」——粘一张截图直接发问是常见用法，body 留空字符串入库。
     const text = payload.body?.trim() ?? "";
     const attachmentIds = Array.isArray(payload.attachmentIds)
@@ -35,6 +35,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
     if (attachmentIds.length > MAX_ATTACHMENTS_PER_OWNER) {
       return badRequest(`附件数量超过上限（${MAX_ATTACHMENTS_PER_OWNER}）`);
+    }
+    // 定时发送（可选）：必须可解析且为将来时间；落 'scheduled' 态，到点由 Console 调度器提升进可应答队列。
+    let scheduledAt: string | null = null;
+    const scheduledRaw = payload.scheduledAt?.trim();
+    if (scheduledRaw) {
+      const when = new Date(scheduledRaw);
+      if (Number.isNaN(when.getTime())) {
+        return badRequest("定时发送时间格式无效");
+      }
+      if (when.getTime() <= Date.now()) {
+        return badRequest("定时发送时间必须晚于当前时间");
+      }
+      scheduledAt = when.toISOString();
     }
     const conversation = await getConversation(getPool(), id);
     if (!conversation) {
@@ -53,11 +66,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return badRequest("worker 当前离线，无法继续对话");
     }
     // 消息 + 附件绑定原子化：绑定失败要把消息也回滚（否则会看到空消息 + 孤儿附件）。
+    // 定时消息（scheduledAt）落 'scheduled' 态、seq=NULL；附件照常绑定，到点提升后随该 user 消息一并被 Worker 读取。
     const client = await getPool().connect();
     let message;
     try {
       await client.query("BEGIN");
-      message = await addConversationMessage(client, { conversationId: id, role: "user", body: text });
+      message = await addConversationMessage(client, { conversationId: id, role: "user", body: text, scheduledAt });
       await bindAttachmentsToConversationMessage(
         client,
         message.id,
@@ -71,15 +85,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     } finally {
       client.release();
     }
-    // 落库后即推到项目频道：会话的 worker 已关联该项目（创建时校验），会收到并立即认领应答。
-    publishRelay({
-      channel: projectChannel(conversation.project_id),
-      type: "conversation.message",
-      entityId: id,
-      projectId: conversation.project_id,
-      seq: message.seq,
-      payload: message
-    });
+    // 即时消息：落库后即推到项目频道，worker 收到立即认领应答。
+    // 定时消息：不 publish（worker 不应在到点前应答），到点由调度器提升后下一轮 tick 认领。
+    if (!scheduledAt) {
+      publishRelay({
+        channel: projectChannel(conversation.project_id),
+        type: "conversation.message",
+        entityId: id,
+        projectId: conversation.project_id,
+        seq: message.seq ?? undefined,
+        payload: message
+      });
+    }
     return NextResponse.json({ message }, { status: 201 });
   } catch (error) {
     return errorResponse(error);

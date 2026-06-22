@@ -750,7 +750,7 @@ export class ClaudeCenterWorker {
       type: "conversation.message",
       entityId: conversation.id,
       projectId: conversation.project_id,
-      seq: message.seq,
+      seq: message.seq ?? undefined,
       payload: message
     });
   }
@@ -775,14 +775,16 @@ export class ClaudeCenterWorker {
         payload: conversation
       });
       const messages = await listConversationMessages(pool, conversationId);
-      const last = messages[messages.length - 1];
+      // 排除尚未到点的定时消息（seq=null）：它们不参与对话流，取真正最后一条已编号消息推送。
+      const ranked = messages.filter((m) => m.seq != null);
+      const last = ranked[ranked.length - 1];
       if (last) {
         this.relay.publish({
           channel,
           type: "conversation.message",
           entityId: conversation.id,
           projectId: conversation.project_id,
-          seq: last.seq,
+          seq: last.seq ?? undefined,
           payload: last
         });
       }
