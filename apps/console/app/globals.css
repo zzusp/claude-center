@@ -2515,8 +2515,8 @@ tr[data-selected] {
   text-transform: none;
 }
 
-/* ---------------- Dependency picker（前置任务多选） ----------------
-   替代原生 <select multiple>：一个带边框的可滚动列表，每行=勾选态 + 状态徽标 + 标题，整行可点。 */
+/* ---------------- Dependency picker（多选列表，前置任务 / 用户可访问项目复用） ----------------
+   替代原生 <select multiple>：一个带边框的可滚动列表，每行=勾选态 +（可选状态徽标）+ 标题，整行可点。 */
 .dep-picker {
   display: grid;
   gap: 6px;
@@ -3533,32 +3533,6 @@ tr[data-selected] {
   font-weight: 600;
   color: var(--text-3);
   background: var(--surface-2);
-}
-
-.checkbox-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 220px;
-  overflow-y: auto;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--surface-3);
-}
-
-.checkbox-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-2);
-  cursor: pointer;
-}
-
-.checkbox-row input {
-  width: auto;
-  margin: 0;
 }
 
 .scope-hint {
