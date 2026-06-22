@@ -1,6 +1,28 @@
 import type { Permission, Role, Task, Worker } from "@claude-center/db";
 import type { Tone } from "./shared";
 
+type WorkerSweepHealth = {
+  lastTickAt: string | null;
+  lastError: string | null;
+  lastOfflined: number;
+  totalOfflined: number;
+  tickCount: number;
+  ok: boolean;
+};
+
+type MergeCheckHealth = {
+  startedAt: string | null;
+  intervalMs: number | null;
+  lastTickAt: string | null;
+  lastError: string | null;
+  lastChecked: string | null;
+  lastMergedTaskId: string | null;
+  totalChecked: number;
+  totalMerged: number;
+  tickCount: number;
+  ok: boolean;
+};
+
 type Health = {
   db: { ok: boolean; latencyMs: number | null; pool: { total: number; idle: number; waiting: number; max: number } };
   scheduler: {
@@ -13,6 +35,8 @@ type Health = {
     tickCount: number;
     scheduledPending: number;
     ok: boolean;
+    workerSweep: WorkerSweepHealth;
+    mergeCheck: MergeCheckHealth;
   };
 };
 
@@ -99,5 +123,5 @@ function syncAgo(value: string, now: number): string {
   return `${Math.floor(s / 60)} 分钟前`;
 }
 
-export type { Health, Overview, ViewKey, CurrentUser };
+export type { Health, MergeCheckHealth, Overview, ViewKey, WorkerSweepHealth, CurrentUser };
 export { ROLE_LABEL, ROLE_OPTIONS, emptyOverview, SPARK_CAP, TONE_COLOR, fmtAgo, syncAgo };

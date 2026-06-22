@@ -12,7 +12,14 @@ import {
 import { NextResponse } from "next/server";
 import { requireUser } from "../../lib/session";
 import { errorResponse } from "../../lib/api";
-import { getSchedulerState, isSchedulerHealthy } from "../../lib/scheduler-state";
+import {
+  getMergeCheckState,
+  getSchedulerState,
+  getWorkerSweepState,
+  isMergeCheckHealthy,
+  isSchedulerHealthy,
+  isWorkerSweepHealthy
+} from "../../lib/scheduler-state";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +51,8 @@ export async function GET() {
       ]);
 
     const scheduler = getSchedulerState();
+    const workerSweep = getWorkerSweepState();
+    const mergeCheck = getMergeCheckState();
     const todayNewTasks = dailyNewTasks[dailyNewTasks.length - 1] ?? 0;
     const todayCompletedTasks = dailyCompletedTasks[dailyCompletedTasks.length - 1] ?? 0;
     const todayMergedTasks = dailyMergedTasks[dailyMergedTasks.length - 1] ?? 0;
@@ -60,10 +69,16 @@ export async function GET() {
       dailyNewTasks,
       dailyCompletedTasks,
       dailyMergedTasks,
-      // 系统运行状态：DB 连接池 + 定时调度器。走到这里说明库可达，故 db.ok 恒 true。
+      // 系统运行状态：DB 连接池 + 定时调度器（3 段子状态）。走到这里说明库可达，故 db.ok 恒 true。
       health: {
         db: { ok: true, latencyMs: dbLatencyMs, pool: getPoolStats(pool) },
-        scheduler: { ...scheduler, scheduledPending, ok: isSchedulerHealthy(scheduler) }
+        scheduler: {
+          ...scheduler,
+          scheduledPending,
+          ok: isSchedulerHealthy(scheduler),
+          workerSweep: { ...workerSweep, ok: isWorkerSweepHealthy(workerSweep) },
+          mergeCheck: { ...mergeCheck, ok: isMergeCheckHealthy(mergeCheck) }
+        }
       }
     });
   } catch (error) {

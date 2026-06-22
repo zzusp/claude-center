@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Clock, Database, RadioTower } from "lucide-react";
 import { KvRow, type Tone } from "./shared";
-import { TONE_COLOR, fmtAgo, syncAgo, type Health } from "./dashboard-shared";
+import { TONE_COLOR, fmtAgo, syncAgo, type Health, type MergeCheckHealth, type WorkerSweepHealth } from "./dashboard-shared";
 import { useRelayStatus, type RelayStatus as RelayConnState } from "../lib/use-relay";
 import { useCountUp } from "../lib/use-count-up";
 
@@ -71,7 +71,21 @@ export function RuntimeHealth({
 }) {
   const db = health?.db;
   const sched = health?.scheduler;
-  const intervalSec = sched?.intervalMs ? Math.round(sched.intervalMs / 1000) : null;
+  const sweep = sched?.workerSweep;
+  const merge = sched?.mergeCheck;
+  // 整卡 ok：仅「已启动」的段参与判定，未启动段视为 N/A 不让整卡翻红。
+  // 这样兼容两种过渡态：(a) dev 下 Fast Refresh 不重跑 instrumentation 时旧进程没写新段 state；
+  // (b) prod 滚动升级时新前端短暂连到旧后端实例。判定标准：promote 用 startedAt、sweep 用 lastTickAt、
+  // merge 用 startedAt——为各段「曾经活过」的真实信号。
+  const promoteStarted = Boolean(sched?.startedAt);
+  const sweepStarted = Boolean(sweep?.lastTickAt);
+  const mergeStarted = Boolean(merge?.startedAt);
+  const promoteOk = !promoteStarted || (sched?.ok ?? false);
+  const sweepOk = !sweepStarted || (sweep?.ok ?? false);
+  const mergeOk = !mergeStarted || (merge?.ok ?? false);
+  const schedulerEverStarted = promoteStarted || sweepStarted || mergeStarted;
+  const schedulerAllOk = promoteOk && sweepOk && mergeOk && schedulerEverStarted;
+  const schedulerLabel = schedulerAllOk ? "运行中" : schedulerEverStarted ? "异常" : "未启动";
   const relay = useRelayStatus();
   const relayMeta = RELAY_META[relay];
   // SSE 中转摘要(admin only,API 自带 403 守卫):enabled=false 或 403 时 summary=null,几行 SSE KV 自动不渲染。
@@ -143,16 +157,11 @@ export function RuntimeHealth({
         <HealthCard
           icon={<Clock size={16} />}
           title="定时调度器"
-          ok={sched?.ok ?? false}
-          okLabel={sched?.ok ? "运行中" : sched?.startedAt ? "异常" : "未启动"}
-          rows={[
-            { k: "检查周期", v: intervalSec != null ? `每 ${intervalSec}s` : "—" },
-            { k: "上次检查", v: sched?.lastTickAt ? fmtAgo(sched.lastTickAt) : "—" },
-            { k: "定时待发", v: sched ? `${sched.scheduledPending} 个` : "—" },
-            { k: "累计提升", v: sched ? `${sched.totalPromoted} 个` : "—" },
-            ...(sched?.lastError ? [{ k: "最近错误", v: sched.lastError, mono: true }] : [])
-          ]}
-        />
+          ok={schedulerAllOk}
+          okLabel={schedulerLabel}
+        >
+          <SchedulerCardBody sched={sched ?? null} sweep={sweep ?? null} merge={merge ?? null} />
+        </HealthCard>
         <HealthCard
           icon={<RadioTower size={16} />}
           title="SSE 连接"
@@ -170,15 +179,18 @@ export function HealthCard({
   title,
   ok,
   okLabel,
-  rows
+  rows,
+  children
 }: {
   icon: React.ReactNode;
   title: string;
   ok: boolean;
   okLabel: string;
-  rows: { k: string; v: React.ReactNode; mono?: boolean }[];
+  rows?: { k: string; v: React.ReactNode; mono?: boolean }[];
+  children?: React.ReactNode;
 }) {
   // 健康时绿点呼吸（cc-breathe + cc-ring 复用），异常时红点静态——避免红色长时间闪烁喧宾夺主。
+  // children 优先于 rows：调度器卡用 children 渲染 3 段子状态，其他卡仍传 rows。
   return (
     <section className="card">
       <div className="card-head">
@@ -192,11 +204,82 @@ export function HealthCard({
         </span>
       </div>
       <div className="card-body health-body">
-        {rows.map((row) => (
-          <KvRow key={row.k} k={row.k} v={row.v} mono={row.mono} />
-        ))}
+        {children ?? rows?.map((row) => <KvRow key={row.k} k={row.k} v={row.v} mono={row.mono} />)}
       </div>
     </section>
+  );
+}
+
+// 定时调度器卡片专用 body：3 行紧凑布局（每段一行 = ● 标题 + 周期 + 上次时间），
+// 异常时在该段下方多一行 lastError；正常路径只 3 行，高度与同行其他健康卡持平。
+function SchedulerCardBody({
+  sched,
+  sweep,
+  merge
+}: {
+  sched: Health["scheduler"] | null;
+  sweep: WorkerSweepHealth | null;
+  merge: MergeCheckHealth | null;
+}) {
+  const promoteInterval = sched?.intervalMs ? `每 ${Math.round(sched.intervalMs / 1000)}s` : null;
+  const mergeInterval = merge?.intervalMs ? `每 ${Math.round(merge.intervalMs / 1000)}s` : null;
+  return (
+    <>
+      <SchedulerRow
+        title="定时任务检查"
+        meta={promoteInterval}
+        value={sched?.lastTickAt ? fmtAgo(sched.lastTickAt) : "—"}
+        ok={sched?.ok ?? false}
+        started={Boolean(sched?.startedAt)}
+        error={sched?.lastError ?? null}
+      />
+      <SchedulerRow
+        title="PR 合并检查"
+        meta={mergeInterval}
+        value={merge?.lastTickAt ? fmtAgo(merge.lastTickAt) : "—"}
+        ok={merge?.ok ?? false}
+        started={Boolean(merge?.startedAt)}
+        error={merge?.lastError ?? null}
+      />
+      <SchedulerRow
+        title="Worker 离线扫描"
+        meta={promoteInterval}
+        value={sweep?.lastTickAt ? fmtAgo(sweep.lastTickAt) : "—"}
+        ok={sweep?.ok ?? false}
+        started={Boolean(sweep?.lastTickAt)}
+        error={sweep?.lastError ?? null}
+      />
+    </>
+  );
+}
+
+function SchedulerRow({
+  title,
+  meta,
+  value,
+  ok,
+  started,
+  error
+}: {
+  title: string;
+  meta: string | null;
+  value: string;
+  ok: boolean;
+  started: boolean;
+  error: string | null;
+}) {
+  // 未启动时灰点不脉动；启动+健康绿色脉动；启动+异常红色静态。
+  const tone = !started ? "offline" : ok ? "online" : "failed";
+  return (
+    <div className="sched-row-wrap">
+      <div className="sched-row">
+        <span className={`dot${started && ok ? " pulse" : ""}`} data-tone={tone} />
+        <span className="sched-row-title">{title}</span>
+        {meta ? <span className="sched-row-meta">{meta}</span> : null}
+        <span className="sched-row-value">{value}</span>
+      </div>
+      {error ? <div className="sched-row-error">{error}</div> : null}
+    </div>
   );
 }
 

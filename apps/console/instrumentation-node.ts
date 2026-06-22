@@ -11,7 +11,13 @@
 // 用 globalThis 标志位防 dev HMR 重复起定时器。
 
 import { detectBranchMerged } from "./app/lib/merge-check";
-import { recordSchedulerStart, recordSchedulerTick } from "./app/lib/scheduler-state";
+import {
+  recordMergeCheckStart,
+  recordMergeCheckTick,
+  recordSchedulerStart,
+  recordSchedulerTick,
+  recordWorkerSweepTick
+} from "./app/lib/scheduler-state";
 
 const DEFAULT_INTERVAL_MS = 30_000;
 // 合并检查间隔:30s 一次(spec drop-accepted-rejected.md §3「定时任务,30s 一次」)。
@@ -59,11 +65,14 @@ export async function registerNode(): Promise<void> {
       // 这两个动作各自独立 + 单条 UPDATE/INSERT，互不阻塞；失败仅 warn、不影响定时发布提升。
       try {
         const offlined = await sweepStaleWorkers(getPool());
+        recordWorkerSweepTick(offlined, new Date().toISOString(), null);
         if (offlined > 0) {
           console.log(`[scheduler] ${offlined} 个 Worker 被翻为 offline 并发出离线通知`);
         }
       } catch (error) {
-        console.warn(`[scheduler] sweepStaleWorkers 失败：${error instanceof Error ? error.message : String(error)}`);
+        const message = error instanceof Error ? error.message : String(error);
+        recordWorkerSweepTick(0, new Date().toISOString(), message);
+        console.warn(`[scheduler] sweepStaleWorkers 失败：${message}`);
       }
     } catch (error) {
       recordSchedulerTick(0, new Date().toISOString(), error instanceof Error ? error.message : String(error));
@@ -97,6 +106,7 @@ export async function registerNode(): Promise<void> {
     try {
       const candidate = await claimNextMergeCheckCandidate(getPool());
       if (!candidate) {
+        recordMergeCheckTick(new Date().toISOString(), { checkedTaskId: null, merged: false, error: null });
         return;
       }
       const merged = await detectBranchMerged({
@@ -116,13 +126,21 @@ export async function registerNode(): Promise<void> {
       } else {
         await setTaskMergeUnmerged(getPool(), candidate.id);
       }
+      recordMergeCheckTick(new Date().toISOString(), {
+        checkedTaskId: candidate.id,
+        merged,
+        error: null
+      });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      recordMergeCheckTick(new Date().toISOString(), { checkedTaskId: null, merged: false, error: message });
       console.error("[merge-check] 合并检查失败：", error);
     } finally {
       mergeChecking = false;
     }
   }
 
+  recordMergeCheckStart(mergeIntervalMs, new Date().toISOString());
   void mergeTick();
   const mergeTimer = setInterval(() => void mergeTick(), mergeIntervalMs);
   mergeTimer.unref?.();

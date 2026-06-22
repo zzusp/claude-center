@@ -553,6 +553,49 @@ a:hover {
   gap: 10px;
 }
 
+/* 定时调度器卡片：3 段紧凑布局（每段一行 = ● 标题 + 周期 + 上次时间）。
+   .sched-row-wrap 包一段（一行 + 可选错误副行），段间用虚线分隔。 */
+.sched-row-wrap + .sched-row-wrap {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+
+.sched-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.sched-row-title {
+  color: var(--text-1);
+  font-weight: 500;
+}
+
+.sched-row-meta {
+  margin-left: auto;
+  color: var(--text-4);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sched-row-value {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  min-width: 64px;
+  text-align: right;
+}
+
+.sched-row-error {
+  margin-top: 4px;
+  margin-left: 16px;
+  font-size: 11.5px;
+  color: var(--failed);
+  overflow-wrap: anywhere;
+}
+
 .grid-tasks {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
