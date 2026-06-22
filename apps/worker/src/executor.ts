@@ -448,6 +448,28 @@ function resumePrompt(task: Task, reply: string, attachments: AttachmentMeta[], 
   ].join("\n");
 }
 
+// 无会话续接 prompt:对失败 / 取消时 Claude 还没产出 session(如失败在 worktree 准备阶段)的任务,
+// 用户补一句话即可让它从头执行——没有可 --resume 的旧会话,故给完整任务描述 + 用户补充,等同首轮 taskPrompt
+// 但额外注入用户的补充说明(全新工作树,需重列任务原始附件)。
+function freshReplyPrompt(task: Task, reply: string, attachments: AttachmentMeta[], wtPath: string): string {
+  return [
+    ...worktreeAnchor(wtPath),
+    `ClaudeCenter task: ${task.title}`,
+    "",
+    "Goal:",
+    task.description,
+    "",
+    "The user added this note to help you complete the task:",
+    "",
+    reply,
+    "",
+    "Work directly in this worktree. Implement the requested code changes, keep edits scoped, and run the most relevant local verification command when possible.",
+    ...attachmentSection(attachments),
+    "",
+    ...replyDirective(task)
+  ].join("\n");
+}
+
 // 续接重试 prompt:failed 任务带上次失败原因(error_message);cancelled 任务无 error_message,
 // 用「此前被中断」措辞。让 Claude 带着「上次为什么没成」在当前分支接着干。
 function retryPrompt(task: Task, attachments: AttachmentMeta[], wtPath: string): string {
@@ -1188,7 +1210,9 @@ export async function executeTask(config: WorkerConfig, task: Task, hooks?: Exec
   }
 }
 
-// 续接：用户已回复，续接同一 Claude 会话继续执行。复用任务工作树（持有上一轮未提交改动）。
+// 续接：用户回复后继续执行。有会话则 resume 同一 Claude 会话、复用任务工作树（持有上一轮未提交改动）；
+// 无会话（失败 / 取消时 Claude 还没产出 session，如失败在 worktree 准备阶段）则从 origin/<base> 全新重建
+// 工作树、带着用户补充从头执行——失败任务也能靠补一句话接着干，不被「非在途」挡住（goal 2）。
 export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecHooks): Promise<void> {
   const pool = getPool();
 
@@ -1199,10 +1223,8 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
     if (!localPath) {
       throw new Error(`No local path linked for task ${task.id}`);
     }
-    if (!task.claude_session_id) {
-      throw new Error(`Task ${task.id} has no claude_session_id to resume`);
-    }
 
+    const resume = Boolean(task.claude_session_id);
     const reply = await getPendingReply(pool, task.id);
     if (!reply) {
       // 理论上 claimNextResumableTask 已保证有新回复；这里兜底退回等待，避免空跑 Claude。
@@ -1211,17 +1233,20 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
     }
 
     const wtPath = worktreePathFor(localPath, task.id);
-    // 多仓续接：所有参与仓的 worktree 各自复用（被 GC 清理过则按 work_branch 重建）。
-    const ctxs = await prepareAllRepoWorktrees(task, localPath, false, config.workerId);
+    // 有会话：复用所有参与仓的 worktree（被 GC 清理过则按 work_branch 重建）。无会话：fresh 从 origin/<base> 重建。
+    const ctxs = await prepareAllRepoWorktrees(task, localPath, !resume, config.workerId);
     // 落本轮回复的附件（已存在同 sha256 跳过）；任务原始附件可能在初轮已落但 GC 后会丢，所以一并补落。
     const replyAtts = await loadReplyAttachments(task.id);
     const taskAtts = await loadTaskAttachments(task.id);
     await materializeAttachments(wtPath, [...taskAtts, ...replyAtts]);
-    await addTaskEvent(pool, task.id, config.workerId, "resumed", "用户回复，续接执行", {});
+    await addTaskEvent(pool, task.id, config.workerId, "resumed", resume ? "用户回复，续接执行" : "用户回复，全新执行", { resume });
     const turn = await runTaskClaude(config, task.id, {
-      prompt: resumePrompt(task, reply, replyAtts, wtPath),
+      // 有会话续接同一会话注入回复；无会话给完整任务描述 + 用户补充从头跑（全新工作树需重列任务原始附件）。
+      prompt: resume
+        ? resumePrompt(task, reply, replyAtts, wtPath)
+        : freshReplyPrompt(task, reply, [...taskAtts, ...replyAtts], wtPath),
       cwd: wtPath,
-      resumeSessionId: task.claude_session_id,
+      resumeSessionId: task.claude_session_id ?? undefined,
       model: task.model,
       dynamicWorkflow: task.dynamic_workflow,
       onSpawn: hooks?.onClaudeSpawn

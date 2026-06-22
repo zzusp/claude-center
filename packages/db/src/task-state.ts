@@ -37,10 +37,11 @@ export const REACTIVATABLE_STATUSES = ["failed", "cancelled"] as const satisfies
 // (重试=带上下文接着干;激活=清空回草稿推倒重来),分别命名以免改一处误伤另一处。
 export const RETRYABLE_STATUSES = ["failed", "cancelled"] as const satisfies readonly TaskStatus[];
 
-// 终态中「保留了 Claude 会话、可经用户回复直接续接」的集合(success/merged/failed/cancelled——均在
-// listActiveTaskIdsForWorker 的工作树保留名单内)。用户在任务详情对这些「非在途」任务回复 → 落库后
-// 由 Worker 的 claimNextResumableTask 认领、resume 同一会话续接(前提 claude_session_id 非空;
-// draft/scheduled/pending 无会话,不在此列)。与 RETRYABLE 部分重叠但触发与续接方式不同:此处由「用户回复」
+// 终态中「可经用户回复直接续接」的集合(success/merged/failed/cancelled——均在 listActiveTaskIdsForWorker
+// 的工作树保留名单内)。用户在任务详情对这些「非在途」任务回复 → 落库后由 Worker 的 claimNextResumableTask
+// 认领走 resumeTask:有 claude_session_id 则 resume 同一会话续接,无会话(如失败在 worktree 准备阶段、Claude
+// 还没产出 session)则带用户补充全新执行——不再要求会话非空,失败任务也允许补一句话接着干。
+// draft/scheduled/pending 尚未执行,不在此列。与 RETRYABLE 部分重叠但触发与续接方式不同:此处由「用户回复」
 // 触发、带回复内容走 resumeTask;RETRYABLE 由「重试」按钮触发、用 retryPrompt 走 retryFailedTask。
 export const REPLYABLE_TERMINAL_STATUSES = [
   "success",

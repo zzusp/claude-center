@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync, type Dirent } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, type Dirent } from "node:fs";
 import path from "node:path";
 import { runCommand, type CommandResult } from "./shell.js";
 
@@ -66,6 +66,19 @@ export async function removeWorktree(localPath: string, wtPath: string): Promise
   await gitTolerant(["-C", localPath, "worktree", "prune"]);
 }
 
+// 删掉残留在 wtPath 的「非工作树」孤儿目录：`git worktree remove` 只能拆「已注册工作树」，对注册元数据
+// 已丢失（被 prune 清掉）却仍占着磁盘的孤儿目录无能为力——此时若直接 `git worktree add`，git 会因目标
+// 目录已存在且非空而报 `fatal: '<path>' already exists`（实测 `--force` 也不豁免这一项），任务卡在
+// worktree 准备阶段、续接重试同样过不去。本函数 best-effort 删除该目录，让随后的 add 不再撞车；删不掉
+//（文件被占用等）则不阻断，交给 add 抛出明确错误由上层标 failed。
+function rmOrphanDir(wtPath: string): void {
+  try {
+    rmSync(wtPath, { recursive: true, force: true });
+  } catch {
+    // 删不掉留给 worktree add 报 "already exists"，上层据此标 failed。
+  }
+}
+
 // 确保任务的工作树就绪。
 // fresh（新任务）：删旧 → 从 origin/<base> 新建工作分支 workBranch 的工作树。
 // recover（续接/打回重跑）：工作树在就复用；不在则从已有 workBranch 重建。
@@ -77,6 +90,8 @@ export async function ensureWorktree(
   ensureWorktreesIgnored(localPath);
   if (opts.fresh) {
     await removeWorktree(localPath, wtPath);
+    // removeWorktree 只拆「已注册工作树」；注册已丢却残留磁盘的孤儿目录它管不到，先兜底删掉，否则 add 撞 "already exists"。
+    rmOrphanDir(wtPath);
     await runCommand(
       "git",
       ["-C", localPath, "worktree", "add", "--force", "-B", opts.workBranch, wtPath, opts.baseRef ?? opts.workBranch],
@@ -85,11 +100,14 @@ export async function ensureWorktree(
     return;
   }
 
-  // 工作树的 .git 是指向主仓的文件；存在即视为可复用。
+  // 续接 / 重试：工作树的 .git 是指向主仓的文件，存在即视为可复用（持有上一轮未提交改动，直接接着干）。
   if (existsSync(path.join(wtPath, ".git"))) {
     return;
   }
+  // 走到这里说明 wtPath 不是有效工作树：注册可能已被 prune，但目录作为孤儿残留（非空）。prune 清悬挂注册，
+  // 再兜底删掉孤儿目录，避免 worktree add 撞 "already exists"，最后从已有 workBranch 重建（不再误报失败）。
   await gitTolerant(["-C", localPath, "worktree", "prune"]);
+  rmOrphanDir(wtPath);
   await runCommand(
     "git",
     ["-C", localPath, "worktree", "add", "--force", wtPath, opts.workBranch],

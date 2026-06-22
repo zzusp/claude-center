@@ -87,9 +87,10 @@ export function SessionTranscript({
 // 不必等 Worker 显式提问。提交落一条 user 评论到 task_comments；Worker 在当前轮跑到停止点后**直接注入**
 // （handleClaudeTurn 收尾前 getPendingReply 看到未消费的 user 评论 → 不收尾、不进 waiting、直接 --resume
 // 同一会话续接），消息不会等到下一次认领循环、也不会因本轮没命中哨兵而被丢弃（详见 docs/spec/task-live-inject.md）。
-// 非在途但保留了会话的终态（success / merged / failed / cancelled 且 claude_session_id 非空）同样开放回复：
-// 落库后由 Worker 的 claimNextResumableTask 认领、resume 同一 Claude 会话续接——用户对已完成 / 失败 / 取消的
-// 任务补一句话即可让它接着干（无需走「续接重试」的固定 prompt）。draft / scheduled / pending 无会话不开放。
+// 非在途的终态（success / merged / failed / cancelled）同样开放回复：落库后由 Worker 的 claimNextResumableTask
+// 认领走 resumeTask——有 Claude 会话则 resume 同一会话续接，无会话（如失败在 worktree 准备阶段、Claude 还没
+// 产出 session）则带着用户补充全新执行。用户对已完成 / 失败 / 取消的任务补一句话即可让它接着干（无需走
+//「续接重试」的固定 prompt）；失败任务不再因「没有会话」被挡住。draft / scheduled / pending 尚未执行不开放。
 // 附件上传走通用 AttachmentUploader，提交后清空本地状态。
 function ReplyForm({ task, canComment }: { task: Task; canComment: boolean }) {
   const [reply, setReply] = useState("");
@@ -97,13 +98,12 @@ function ReplyForm({ task, canComment }: { task: Task; canComment: boolean }) {
   const { busy, error, run } = useAsyncAction();
   // 在途态：worker 正在/即将处理本任务，发送的消息会在下一次 resume 时被消费。
   const live = task.status === "claimed" || task.status === "running" || task.status === "waiting";
-  // 非在途但可续接：终态保留了 Claude 会话（worktree + session 均保留，见 listActiveTaskIdsForWorker）。
+  // 非在途但可续接：终态（worktree + session 见 listActiveTaskIdsForWorker 保留名单）均开放回复，不再要求会话非空。
   const terminalResumable =
-    Boolean(task.claude_session_id) &&
-    (task.status === "success" ||
-      task.status === "merged" ||
-      task.status === "failed" ||
-      task.status === "cancelled");
+    task.status === "success" ||
+    task.status === "merged" ||
+    task.status === "failed" ||
+    task.status === "cancelled";
   const canReply = (live || terminalResumable) && canComment;
 
   async function submitReply(event: FormEvent<HTMLFormElement>) {
@@ -141,7 +141,9 @@ function ReplyForm({ task, canComment }: { task: Task; canComment: boolean }) {
                 ? "回复 Worker 的提问，提交后将续接执行…"
                 : "随时给 Worker 留言，将在当前轮停止点直接注入续接…"
               : terminalResumable
-                ? "任务已结束，回复将续接同一 Claude 会话继续执行…"
+                ? task.claude_session_id
+                  ? "任务已结束，回复将续接同一 Claude 会话继续执行…"
+                  : "任务已结束，回复将带着你的补充重新执行任务…"
                 : "任务未在执行中，无法发送消息"
         }
         disabled={!canReply || busy}
