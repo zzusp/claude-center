@@ -1,0 +1,5 @@
+case,desc,round-1
+C1,parseTestPlan 单测 9 用例全绿（含 failed/fails 文案回归）,PASS
+C2,真实任务 a262645f 全文 -> total=8 passed=8 allPassed=true（旧为 7/8）,PASS
+C3,worker typecheck 绿,PASS
+C4,worker build 绿 + dist/test-plan.js 正则为 /[❌✗✘]/,PASS
