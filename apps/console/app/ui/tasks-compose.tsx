@@ -211,7 +211,7 @@ function ComposeTaskForm({
           {submitMode === "pr" ? (
             <div className="field">
               <label className="field-label">
-                自动合并 PR <span className="field-hint">由 Worker 自动 gh pr merge --merge(All test cases must pass)</span>
+                自动合并 PR <span className="field-hint">由 Worker 自动 gh pr merge --merge</span>
               </label>
               <Select
                 name="autoMergePr"
@@ -229,7 +229,7 @@ function ComposeTaskForm({
           )}
           <div className="field">
             <label className="field-label">
-              自动回复（兜底） <span className="field-hint">真停了：零改动→失败，有改动→自动续接最多 2 轮</span>
+              自动回复（兜底） <span className="field-hint">真停了：零改动→失败，有改动→续接 2 轮</span>
             </label>
             <Select
               name="autoReply"
