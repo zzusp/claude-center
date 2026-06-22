@@ -1,0 +1,8 @@
+case,description,round-1
+worker-typecheck,tsc --noEmit 通过无报错,PASS
+worker-build,db+relay-client prebuild + worker tsc 通过无报错,PASS
+e2e-A-real-success,真代理实采 oauth/usage 拿到 5h/7d 窗口（本机 max 账号）,PASS
+e2e-B-failure-capture,坏代理触发采集失败被捕获为 error、不抛异常、沿用上轮窗口,PASS
+e2e-C-no-retry-gate,refreshUsage:false 不发起网络（163ms）、原样透传上轮 usage,PASS
+e2e-D-runner-no-retry,真 refreshInfo 失败一轮推进 lastUsageFetchAt、紧接一轮不重采且时刻不变,PASS
+e2e-log-observable,真 runner 失败日志含「本轮不重试，等下次采集触发再采」,PASS

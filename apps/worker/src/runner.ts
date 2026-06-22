@@ -626,9 +626,12 @@ export class ClaudeCenterWorker {
   // 采集 claude 版本/订阅/用量 + 当前客户端策略，写入 DB 供 Console 展示。
   // 版本/订阅每轮（infoIntervalMs，默认 60s）都刷；远程 oauth/usage 单独按 usageIntervalMs（默认 5min）慢刷，
   // 其余轮沿用上轮用量——避免高频打爆该接口触发 rate_limit_error。仅在真采集的轮次打 Usage 日志，免刷屏。
+  // 采集失败不重试：lastUsageFetchAt 在「发起采集前」就推进，故本轮 oauth/usage 失败也不会在下一个 info tick
+  //（60s）提前重采——必须等满 usageIntervalMs 的下一次采集触发，失败一轮即跳过一轮、不自动重试。
   private async refreshInfo(): Promise<void> {
     const now = Date.now();
     const refreshUsage = now - this.lastUsageFetchAt >= this.config.usageIntervalMs;
+    // 成功/失败一致地在发起前推进采集时刻：采集失败不重试，等下一次 usageIntervalMs 触发再采。
     if (refreshUsage) this.lastUsageFetchAt = now;
     this.lastInspect = await inspectClaude(this.config, {
       previousUsage: this.lastInspect.usage,
@@ -650,13 +653,14 @@ export class ClaudeCenterWorker {
       const five = usage.five_hour ? `5h ${usage.five_hour.utilization}%` : "5h —";
       const seven = usage.seven_day ? `7d ${usage.seven_day.utilization}%` : "7d —";
       // 有窗口又带 error：本轮采集失败（如限流），沿用上轮数据，info 轻提示而非报红。
-      const stale = usage.error ? `（本轮采集失败，沿用上次：${usage.error}）` : "";
+      const stale = usage.error ? `（本轮采集失败，沿用上次：${usage.error}；不重试，等下次采集触发）` : "";
       this.log("info", `Usage — ${five} · ${seven}${stale}`);
     } else {
       this.log(
         "error",
         `Usage 采集失败（${subscriptionType} 套餐）：${usage.error ?? "未知原因"}` +
-          (this.config.usageProxy ? "" : "；当前未配置 CLAUDE_CENTER_USAGE_PROXY，直连 api.anthropic.com 可能被挡")
+          (this.config.usageProxy ? "" : "；当前未配置 CLAUDE_CENTER_USAGE_PROXY，直连 api.anthropic.com 可能被挡") +
+          "；本轮不重试，等下次采集触发再采"
       );
     }
   }
