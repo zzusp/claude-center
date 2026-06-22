@@ -14,8 +14,11 @@ export type TestPlanResult = {
   allPassed: boolean;
 };
 
-// 失败标记：勾选了 [x] 但带 ❌/✗/FAIL 仍判未通过（防 Claude 自相矛盾地把失败项打了勾）。
-const FAIL_MARK = /[❌✗✘]|\bFAIL(?:ED|ING)?\b/i;
+// 失败标记：勾选了 [x] 但带叉号 ❌/✗/✘ 仍判未通过（防 Claude 自相矛盾地把失败项打了勾）。
+// 按契约（center-rules.md / 本任务系统提示）失败项写 `- [ ] <case> ❌`——叉号是唯一失败记号。
+// 不再匹配英文单词 FAIL/FAILED：用例描述里「Command failed」「assert it fails」属正常文案，
+// 词匹配会把已勾选（通过）的用例误判为失败、错误拦截自动合并。
+const FAIL_MARK = /[❌✗✘]/;
 
 export function parseTestPlan(output: string): TestPlanResult {
   const items: TestPlanItem[] = [];
