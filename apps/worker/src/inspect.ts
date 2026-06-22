@@ -30,30 +30,44 @@ export type Capability = { ok: boolean; version: string | null; path: string | n
 // worker 执行任务依赖的外部命令的自检结果。registerWorker 用其替换原硬编码 capabilities。
 export type Capabilities = { git: Capability; gh: Capability; claude: Capability; nodejs: Capability; python: Capability };
 
-// `claude --version` → "2.1.177 (Claude Code)"，取前导语义版本号。
+// 语义版本号通配：主流 CLI 的 `--version` 输出都含形如 1.2.3 的版本号（可带 -rc.1 / .post 等后缀）。
+const SEMVER_RE = /(\d+\.\d+\.\d+(?:[-.\w]*)?)/;
+
+// 从 `claude --version` 输出解析 Claude Code 版本号。规范输出形如 "2.1.183 (Claude Code)"，
+// 优先取紧挨 "(Claude Code)" 标记前的版本号——claude 偶尔会在 stdout 先打一行更新提示/迁移/告警
+//（如 "A new version 2.2.0 is available"），若只取「首个语义版本号」会误取那行里的版本，导致上报
+// 版本偏离实际安装版本（即「版本获取不准」）。无标记时（格式变化/非常规输出）回退首个语义版本号，与原行为一致。
+export function parseClaudeVersion(output: string): string | null {
+  const marked = output.match(/(\d+\.\d+\.\d+(?:[-.\w]*)?)\s*\(Claude Code\)/i);
+  return marked?.[1] ?? output.match(SEMVER_RE)?.[1] ?? null;
+}
+
 export async function getClaudeVersion(config: WorkerConfig): Promise<string | null> {
   try {
     const result = await runCommand(config.claudeCommand, ["--version"], { timeoutMs: 15_000 });
-    const match = result.stdout.match(/(\d+\.\d+\.\d+(?:[-.\w]*)?)/);
-    return match?.[1] ?? null;
+    return parseClaudeVersion(result.stdout);
   } catch {
     return null;
   }
 }
 
 // 跑 `<cmd> --version` 自检单个命令:成功(退出 0)即 ok,顺带解析版本号与安装路径。容错:命令不存在/报错 → {ok:false}。
-async function probeCommand(command: string, versionRe = /(\d+\.\d+\.\d+(?:[-.\w]*)?)/): Promise<Capability> {
+// parse 默认取首个语义版本号；claude 传 parseClaudeVersion（认 "(Claude Code)" 标记，避开更新提示行误取）。
+async function probeCommand(
+  command: string,
+  parse: (text: string) => string | null = (text) => text.match(SEMVER_RE)?.[1] ?? null
+): Promise<Capability> {
   let result;
   try {
     result = await runCommand(command, ["--version"], { timeoutMs: 15_000 });
   } catch {
     return { ok: false, version: null, path: null };
   }
-  const match = result.stdout.match(versionRe) ?? result.stderr.match(versionRe);
+  const version = parse(result.stdout) ?? parse(result.stderr);
   let resolvedPath: string | null = null;
   try { resolvedPath = await resolveCommand(command); } catch { /* ignore */ }
   if (!resolvedPath && path.isAbsolute(command)) resolvedPath = command;
-  return { ok: true, version: match?.[1] ?? null, path: resolvedPath };
+  return { ok: true, version, path: resolvedPath };
 }
 
 // 启动时自检 worker 执行任务所需的外部命令是否可用。结果上报 DB(Console 可见)+ 桌面 UI 红绿点展示。
@@ -61,7 +75,7 @@ export async function detectCapabilities(config: WorkerConfig): Promise<Capabili
   const [git, gh, claude, nodejs, pythonMain, python3] = await Promise.all([
     probeCommand("git"),
     probeCommand(config.ghCommand),
-    probeCommand(config.claudeCommand),
+    probeCommand(config.claudeCommand, parseClaudeVersion),
     probeCommand("node"),
     probeCommand("python"),
     probeCommand("python3")
