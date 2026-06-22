@@ -42,6 +42,10 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# git：/api/projects/[id]/branches 用 `git ls-remote --heads <repoUrl>` 拉远端分支供选分支，
+# node:alpine 基础镜像不带 git → 运行时 `spawn git ENOENT`、该接口对所有项目恒返回 502。
+# ca-certificates：git 走 HTTPS 拉远端 refs 需系统 CA bundle 验证证书，否则 TLS 校验失败。
+RUN apk add --no-cache git ca-certificates
 # 非 root 用户。
 RUN addgroup -S app && adduser -S app -G app
 # standalone 目录结构：app/apps/console/server.js + app/node_modules（顶层）+ app/apps/console/.next/...
