@@ -10,12 +10,13 @@ PASS  含未测试（空 checkbox）→ 拦截  -> found=true allPassed=false 1/
 PASS  含未通过（❌）→ 拦截  -> found=true allPassed=false 1/2
 PASS  打勾但带 ❌（自相矛盾）→ 该条判未通过  -> found=true allPassed=false 0/1
 PASS  勾选项描述含英文 failed/fails → 仍判通过（回归）  -> found=true allPassed=true 3/3
+PASS  只勾选通过项（失败/未验证不勾选）→ 未全通过则拦截  -> found=true allPassed=false 1/3
 PASS  无 Test Plan → found=false → 拦截  -> found=false allPassed=false 0/0
 PASS  Test Plan 后接其它标题 → 不误收后续 checkbox  -> found=true allPassed=true 1/1
 PASS  大小写 [X] + 星号 bullet + 大写标题  -> found=true allPassed=false 1/2
 PASS  CRLF 换行  -> found=true allPassed=true 2/2
 
-All 9 cases PASS
+All 10 cases PASS
 ```
 
 ## C2 真实任务 a262645f 全文回放

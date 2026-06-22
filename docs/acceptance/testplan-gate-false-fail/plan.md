@@ -43,6 +43,11 @@ const FAIL_MARK = /[❌✗✘]/;   // 新
 
 叉号 ❌/✗/✘ 不会出现在正常中英文描述里，安全；勾选 + 叉号自相矛盾的项仍判未通过（防御意图保留）。
 
+**与用户确认的规则一致**：本质即「checkbox 状态是唯一真值——只勾选通过项，失败 / 未验证一律不勾选」。
+契约 `apps/worker/prompts/center-rules.md:31-40` 早已如此约定（Passed→`[x]`、Failed→`[ ] ❌`、
+Not run→`[ ]`，且「Only a checked box counts as verified passing」），case C 本就是通过项且正确勾选，
+错的是旧解析器拿描述文本里的英文词二次猜测。修复后解析只认 checkbox 状态，与契约 / 用户规则对齐。
+
 ## 验证
 
 - `npx tsx docs/acceptance/pr-testplan-gate/scripts/verify-parse-testplan.mts` —— 9 用例全 PASS

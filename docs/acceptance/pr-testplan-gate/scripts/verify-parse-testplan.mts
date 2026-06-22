@@ -43,6 +43,18 @@ const cases: Case[] = [
     wantFound: true, wantAllPassed: true, wantTotal: 3, wantPassed: 3
   },
   {
+    // 用户确认的规则：checkbox 状态即真值——只勾选通过项，失败 / 未验证都不勾选。
+    // 三态混排：通过(勾) + 失败(不勾 ❌) + 未验证(不勾) → 仅 1/3 通过 → 拦截自动合并。
+    name: "只勾选通过项（失败/未验证不勾选）→ 未全通过则拦截",
+    md: [
+      "## Test Plan",
+      "- [x] 通过的用例（已验证）",
+      "- [ ] 失败的用例 ❌",
+      "- [ ] 未验证的用例"
+    ].join("\n"),
+    wantFound: true, wantAllPassed: false, wantTotal: 3, wantPassed: 1
+  },
+  {
     name: "无 Test Plan → found=false → 拦截",
     md: ["## Summary", "只有总结，没有测试计划。", "", "## Changes", "- a.ts:1 改了"].join("\n"),
     wantFound: false, wantAllPassed: false, wantTotal: 0, wantPassed: 0
