@@ -1513,8 +1513,10 @@ export async function claimNextResumableTask(
         WHERE tasks.claimed_by = $1
           AND (
             tasks.status = 'waiting'
-            OR (tasks.status IN (${sqlInList(REPLYABLE_TERMINAL_STATUSES)})
-                AND tasks.claude_session_id IS NOT NULL)
+            -- 终态（success/merged/failed/cancelled）均开放「回复即续接」：有会话则 resume 同一 Claude 会话，
+            -- 无会话（如失败在 worktree 准备阶段、Claude 还没产出 session）则带用户补充全新执行——见 resumeTask。
+            -- 不再要求 claude_session_id 非空：失败任务也允许用户补一句话接着干，而不是被「非在途」挡住。
+            OR tasks.status IN (${sqlInList(REPLYABLE_TERMINAL_STATUSES)})
           )
           -- waiting 任务若有未处理的取消请求，让取消胜出（cancel checker 会翻 cancelled），不在此 resume。
           -- 终态(已 cancelled)的 cancel_requested_at 是历史戳，不拦——在下方 SET 里清掉，避免重新 running
