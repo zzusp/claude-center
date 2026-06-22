@@ -37,6 +37,7 @@ export async function registerNode(): Promise<void> {
   const {
     getPool,
     promoteDueScheduledTasks,
+    promoteDueScheduledConversationMessages,
     claimNextMergeCheckCandidate,
     markTaskMerged,
     setTaskMergeUnmerged,
@@ -60,6 +61,18 @@ export async function registerNode(): Promise<void> {
       recordSchedulerTick(promoted, new Date().toISOString(), null);
       if (promoted > 0) {
         console.log(`[scheduler] 提升 ${promoted} 个到点定时任务进入待处理队列`);
+      }
+      // 同 tick 顺带提升到点的实时对话定时消息（scheduled→done + 赋 seq），Worker 下一轮 tickConversation 即认领。
+      // 独立 try/catch：失败仅 warn、不影响定时任务提升与 worker 扫描。
+      try {
+        const promotedMsgs = await promoteDueScheduledConversationMessages(getPool());
+        if (promotedMsgs > 0) {
+          console.log(`[scheduler] 提升 ${promotedMsgs} 条到点定时对话消息进入可应答队列`);
+        }
+      } catch (error) {
+        console.warn(
+          `[scheduler] promoteDueScheduledConversationMessages 失败：${error instanceof Error ? error.message : String(error)}`
+        );
       }
       // 同 tick 顺带扫描 stale worker：心跳超过 60s 的 online worker 翻 offline 并发 worker_offline 通知。
       // 这两个动作各自独立 + 单条 UPDATE/INSERT，互不阻塞；失败仅 warn、不影响定时发布提升。

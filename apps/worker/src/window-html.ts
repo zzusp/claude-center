@@ -1121,6 +1121,8 @@ export function windowHtml(): string {
             for (var i = lastDone + 1; i < msgs.length; i++) {
               var m = msgs[i];
               if (m.role !== "user") continue;
+              // 跳过尚未到点的定时消息（status='scheduled'，seq=null）：它还没发出，不该当作本轮提问气泡展示。
+              if (m.status === "scheduled") continue;
               var body = m.body || "";
               if (!body) continue;
               if (jsonl && jsonl.indexOf(body) >= 0) continue;

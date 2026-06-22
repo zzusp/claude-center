@@ -40,7 +40,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
       type: "conversation.cancel",
       entityId: id,
       projectId: conversation.project_id,
-      seq: message.seq,
+      seq: message.seq ?? undefined,
       payload: { conversationId: id, messageId: message.id }
     });
     publishRelay({
@@ -48,7 +48,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
       type: "conversation.message",
       entityId: id,
       projectId: conversation.project_id,
-      seq: message.seq,
+      seq: message.seq ?? undefined,
       payload: message
     });
     return NextResponse.json({ message });

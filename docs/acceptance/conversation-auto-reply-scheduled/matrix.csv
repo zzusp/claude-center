@@ -1,0 +1,14 @@
+case,round-1,notes
+typecheck 五包,PASS,npm run typecheck 全绿
+ephemeral 全量迁移(36)+verify:console,PASS,node scripts/ephemeral-db.mjs --verify（401→200 + db.ok + scheduler.ok）
+next build 五包(含 webpack),PASS,npm run build 全绿
+e2e-1 自动回复 create 持久化,PASS,auto_reply/auto_decision_hints 落库
+e2e-1 设置更新(部分字段 COALESCE),PASS,updateConversationSettings 仅改传入字段
+e2e-2 即时消息可被认领,PASS,seq=0/done + claimNextConversationTurn 命中
+e2e-3 定时消息插入(seq=NULL/scheduled),PASS,scheduled_at 落库
+e2e-3 未到点不进 prompt/不被认领,PASS,getConversationPrompt=null + claim=null
+e2e-3 到点提升(scheduled→done+赋 seq),PASS,promoteDueScheduledConversationMessages
+e2e-3 到点后进 prompt/可被认领,PASS,prompt 含正文 + claim 命中该会话
+e2e-4 同会话多条同时到点 seq 不冲突,PASS,row_number 赋连续 seq
+e2e-5 取消未到点定时消息,PASS,deleteScheduledConversationMessage=true 且行已删
+e2e-5 已发送消息不可被定时取消,PASS,deleteScheduledConversationMessage=false

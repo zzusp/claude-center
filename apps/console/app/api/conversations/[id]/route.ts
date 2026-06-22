@@ -4,7 +4,8 @@ import {
   getPool,
   getWorker,
   listConversationMessages,
-  renameConversation
+  renameConversation,
+  updateConversationSettings
 } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../../lib/session";
@@ -40,7 +41,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   }
 }
 
-// 重命名会话：复用 command.create 权限（与建/结束对话同级），按项目可见性校验。
+// 更新会话：重命名（title）/ 会话级设置（autoReply + autoDecisionHints）。复用 command.create 权限
+//（与建/结束对话同级），按项目可见性校验。三者可单独或组合传入；均未传则报错。
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requirePermission("command.create");
   if (gate instanceof NextResponse) {
@@ -49,12 +51,18 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   const user = gate;
   try {
     const { id } = await params;
-    const body = (await request.json()) as { title?: string };
+    const body = (await request.json()) as {
+      title?: string;
+      autoReply?: boolean;
+      autoDecisionHints?: string;
+    };
     const title = body.title?.trim();
-    if (title == null) {
-      return badRequest("title 必填");
+    const hasTitle = title != null;
+    const hasSettings = body.autoReply !== undefined || body.autoDecisionHints !== undefined;
+    if (!hasTitle && !hasSettings) {
+      return badRequest("无可更新字段");
     }
-    if (title.length > 200) {
+    if (hasTitle && title!.length > 200) {
       return badRequest("标题最长 200 字");
     }
     const conversation = await getConversation(getPool(), id);
@@ -65,7 +73,15 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (denied) {
       return denied;
     }
-    await renameConversation(getPool(), id, title);
+    if (hasTitle) {
+      await renameConversation(getPool(), id, title!);
+    }
+    if (hasSettings) {
+      await updateConversationSettings(getPool(), id, {
+        autoReply: body.autoReply,
+        autoDecisionHints: body.autoDecisionHints
+      });
+    }
     return NextResponse.json({ ok: true });
   } catch (error) {
     return errorResponse(error);

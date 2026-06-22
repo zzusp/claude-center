@@ -372,6 +372,20 @@ function autoReplyDirective(task: Task): string[] {
   ];
 }
 
+// 实时对话的「自动回复（无人值守）」指令：与任务的 autoReplyDirective 同设计，但针对只读问答场景
+//（对话不 commit / 不开 PR），让 Claude 自主决策、把假设说清、一轮答到底，不停下来反问用户。
+// auto_decision_hints 作为用户预先编码的决策偏好一并注入。仅 conv.auto_reply=true 时使用。
+function conversationAutoReplyDirective(conv: Conversation): string[] {
+  const hints = conv.auto_decision_hints?.trim();
+  return [
+    "",
+    "You run UNATTENDED. No human is watching this turn. Do NOT stop to ask the user clarifying questions.",
+    "If the request is ambiguous, make reasonable assumptions, state them explicitly, and answer in full this turn.",
+    "Prefer the minimal, most likely-intended interpretation; follow existing patterns in the codebase.",
+    ...(hints ? ["", "Decision policy from the user:", hints] : [])
+  ];
+}
+
 // 默认（auto_reply=false）的协作指令：邀请使用哨兵停下等人回复。
 function manualReplyDirective(): string[] {
   return [
@@ -1441,8 +1455,15 @@ export async function executeConversationTurn(
     // 附件落盘到 worktree 内 .claude-attachments/（同 sha256 跨轮跳过），并把相对路径附到 prompt 末尾，
     // 让本地 claude -p 读到（图片走 vision）。与 task / comment 同一套 §Worker 流程（task-attachments.md）。
     await materializeAttachments(wtPath, turnAttachments);
-    const prompt =
-      turnAttachments.length > 0 ? [basePrompt, ...attachmentSection(turnAttachments)].join("\n") : basePrompt;
+    // 会话级「自动回复（无人值守）」：开启时把自主决策指令拼到 prompt 末尾（与任务表单同设计）。
+    const promptParts = [basePrompt];
+    if (turnAttachments.length > 0) {
+      promptParts.push(...attachmentSection(turnAttachments));
+    }
+    if (conv.auto_reply) {
+      promptParts.push(...conversationAutoReplyDirective(conv));
+    }
+    const prompt = promptParts.join("\n");
 
     // 执行期间周期 + 终态把 session .jsonl 同步到 conversation_sessions；进程退出后强制最终同步一次保证完整。
     const stopSync = startConversationSessionSync(conv.id, wtPath);

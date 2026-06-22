@@ -1,4 +1,5 @@
 import {
+  addConversationMessage,
   createConversation,
   getPool,
   getWorker,
@@ -31,9 +32,28 @@ export async function POST(request: NextRequest) {
       branch?: string;
       model?: string;
       title?: string;
+      autoReply?: boolean;
+      autoDecisionHints?: string;
+      // 可选首条消息：填了则建会话后立即落一条 user 消息（无 scheduledAt 即时应答；有则定时发送）。
+      firstMessage?: string;
+      scheduledAt?: string;
     };
     if (!body.projectId || !body.workerId || !body.branch?.trim()) {
       return badRequest("projectId、workerId、branch 必填");
+    }
+    // 定时发送时间（可选，仅在带首条消息时有意义）：必须可解析且为将来时间。
+    const firstMessage = body.firstMessage?.trim() ?? "";
+    let scheduledAt: string | null = null;
+    const scheduledRaw = body.scheduledAt?.trim();
+    if (scheduledRaw) {
+      const when = new Date(scheduledRaw);
+      if (Number.isNaN(when.getTime())) {
+        return badRequest("定时发送时间格式无效");
+      }
+      if (when.getTime() <= Date.now()) {
+        return badRequest("定时发送时间必须晚于当前时间");
+      }
+      scheduledAt = when.toISOString();
     }
     const denied = await requireProjectScope(user, body.projectId, "无权访问该项目");
     if (denied) {
@@ -58,6 +78,8 @@ export async function POST(request: NextRequest) {
       branch: body.branch.trim(),
       model,
       title: body.title?.trim() || "",
+      autoReply: body.autoReply === true,
+      autoDecisionHints: body.autoDecisionHints,
       createdBy: user.id
     });
     publishRelay({
@@ -67,6 +89,26 @@ export async function POST(request: NextRequest) {
       projectId: conversation.project_id,
       payload: conversation
     });
+    // 可选首条消息：即时消息落库后 publish 让 worker 立即应答；定时消息落 'scheduled' 态、不 publish
+    //（worker 不应在到点前应答），到点由 Console 调度器提升后下一轮 tick 认领。
+    if (firstMessage) {
+      const message = await addConversationMessage(getPool(), {
+        conversationId: conversation.id,
+        role: "user",
+        body: firstMessage,
+        scheduledAt
+      });
+      if (!scheduledAt) {
+        publishRelay({
+          channel: projectChannel(conversation.project_id),
+          type: "conversation.message",
+          entityId: conversation.id,
+          projectId: conversation.project_id,
+          seq: message.seq ?? undefined,
+          payload: message
+        });
+      }
+    }
     return NextResponse.json({ conversation }, { status: 201 });
   } catch (error) {
     return errorResponse(error);

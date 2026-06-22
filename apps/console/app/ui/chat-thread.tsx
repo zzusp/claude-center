@@ -1,10 +1,11 @@
 "use client";
 
-import type { AttachmentMeta, Conversation, Project, Worker } from "@claude-center/db";
-import { ArrowUp, Check, ChevronLeft, GitBranch, Info, MessageSquare, MoreHorizontal, Pencil, Server, Sparkles, Square, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Empty, postJson } from "./shared";
+import type { AttachmentMeta, Conversation, ConversationMessage, Project, Worker } from "@claude-center/db";
+import { ArrowUp, Bot, CalendarClock, Check, ChevronLeft, Clock, GitBranch, Info, MessageSquare, MoreHorizontal, Pencil, Server, Settings2, Sparkles, Square, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Empty, fmtDateTime, postJson } from "./shared";
 import { AttachmentList, AttachmentUploader } from "./attachment-uploader";
+import { DateTimePicker, Select } from "./controls";
 import { SessionMetaBar } from "./session-meta";
 import { TranscriptView, parseTranscript } from "./transcript";
 import { usePolling } from "../lib/use-polling";
@@ -46,6 +47,12 @@ export function ChatThread({
   // 移动端：会话信息条（通道/模型/套餐用量/上下文）默认折叠，点头部 ⓘ 展开；桌面端 CSS 始终展示、忽略此态。
   const [metaOpen, setMetaOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // 待发送的定时消息（status='scheduled'）：在输入框上方展示 + 可取消。随 worker 轮询一并刷新。
+  const [scheduled, setScheduled] = useState<ConversationMessage[]>([]);
+  // 定时发送时间（composer 用，datetime-local 格式 "YYYY-MM-DDTHH:MM"）；空 = 立即发送。
+  const [scheduleAt, setScheduleAt] = useState("");
+  // 会话设置弹窗（自动回复 + 决策预案）开关。
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const doneRef = useRef(false);
@@ -66,28 +73,32 @@ export function ChatThread({
     setLoaded(cached !== undefined);
     setPending([]);
     setWorker(null);
+    setScheduled([]);
+    setScheduleAt("");
     doneRef.current = false;
   }, [id]);
 
-  // 轮询对话详情拿 worker 快照（claude_version / subscription / usage）。
-  // worker 本身不会换、变化是 5h/7d 套餐窗位移（分钟级漂移），消息流事件与 usage 无关：
-  // 不订阅 relay，节奏拉到 15s，避免每条消息事件都顺手刷一遍这个无关接口。
-  usePolling(
-    async (isActive) => {
+  // 拉对话详情：worker 快照（claude_version / subscription / usage）+ 待发送定时消息（status='scheduled'）。
+  // 抽成可复用函数，定时发送 / 取消后手动调一次即时刷新，无需等下个轮询周期。
+  const refreshMeta = useCallback(
+    async (isActive: () => boolean = () => true): Promise<void> => {
       try {
         const r = await fetch(`/api/conversations/${id}`, { cache: "no-store" });
         if (!r.ok) return;
-        const d = (await r.json()) as { worker: Worker | null };
+        const d = (await r.json()) as { worker: Worker | null; messages?: ConversationMessage[] };
         if (!isActive()) return;
         setWorker(d.worker);
+        setScheduled((d.messages ?? []).filter((m) => m.status === "scheduled"));
       } catch {
         /* 轮询失败静默 */
       }
     },
-    [id],
-    15_000,
-    { relay: false }
+    [id]
   );
+
+  // 轮询对话详情。worker 本身不会换、变化是 5h/7d 套餐窗位移（分钟级漂移），消息流事件与 usage 无关：
+  // 不订阅 relay，节奏拉到 15s，避免每条消息事件都顺手刷一遍这个无关接口。定时消息变更不频繁，同节奏即可。
+  usePolling(refreshMeta, [id], 15_000, { relay: false });
 
   // 轮询对话 session transcript（active 持续；closed 取一次即停）。Worker 周期 3s + 终态把 jsonl 同步到库。
   // 带 If-None-Match 条件请求：未变返 304，省下大 blob 反序列化 + setJsonl 触发的整棵 reconcile；
@@ -191,21 +202,57 @@ export function ChatThread({
     if ((!text && draftAtts.length === 0) || sending) {
       return;
     }
+    // datetime-local（本地时区）→ ISO；空则立即发送。
+    const scheduledAt = scheduleAt ? new Date(scheduleAt).toISOString() : undefined;
     setSending(true);
     setErr("");
     try {
       await postJson(`/api/conversations/${id}/messages`, {
         body: text,
-        attachmentIds: draftAtts.map((a) => a.id)
+        attachmentIds: draftAtts.map((a) => a.id),
+        ...(scheduledAt ? { scheduledAt } : {})
       });
       setInput("");
-      setPending((p) => [...p, { text, attachments: draftAtts }]);
       setDraftAtts([]);
+      if (scheduledAt) {
+        // 定时消息不进乐观气泡（它在到点前不会被应答）；清掉时间并刷新「待发送」清单即时展示。
+        setScheduleAt("");
+        await refreshMeta();
+      } else {
+        setPending((p) => [...p, { text, attachments: draftAtts }]);
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : "发送失败");
     } finally {
       setSending(false);
     }
+  }
+
+  // 取消一条尚未到点的定时消息。
+  async function cancelScheduled(messageId: string): Promise<void> {
+    try {
+      const r = await fetch(`/api/conversations/${id}/messages/${messageId}`, { method: "DELETE" });
+      if (!r.ok) {
+        throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "取消失败");
+      }
+      await refreshMeta();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "取消失败");
+    }
+  }
+
+  // 保存会话级设置（自动回复 + 决策预案）：PATCH 后让父组件刷新列表（conversation prop 含 auto_reply 字段）。
+  async function saveSettings(autoReply: boolean, autoDecisionHints: string): Promise<void> {
+    const r = await fetch(`/api/conversations/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ autoReply, autoDecisionHints })
+    });
+    if (!r.ok) {
+      throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "保存失败");
+    }
+    setSettingsOpen(false);
+    onChanged();
   }
 
   async function cancelTurn(): Promise<void> {
@@ -279,6 +326,11 @@ export function ChatThread({
           <span className="chat-thread-sub">
             <Server size={12} /> {conversation.worker_name} <GitBranch size={12} /> {conversation.branch} ·{" "}
             {conversation.project_name}
+            {conversation.auto_reply ? (
+              <span className="chat-tag chat-tag-auto" title="已开启自动回复（无人值守）">
+                <Bot size={11} /> 自动回复
+              </span>
+            ) : null}
           </span>
         </div>
         <div className="chat-head-menu" ref={menuRef}>
@@ -302,6 +354,17 @@ export function ChatThread({
                   }}
                 >
                   <Pencil size={13} /> 重命名
+                </button>
+              ) : null}
+              {canCommand ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSettingsOpen(true);
+                    setMenuOpen(false);
+                  }}
+                >
+                  <Settings2 size={13} /> 对话设置
                 </button>
               ) : null}
               <button
@@ -362,6 +425,33 @@ export function ChatThread({
 
       {err ? <div className="chat-error">{err}</div> : null}
 
+      {/* 待发送的定时消息：在输入框上方排队展示，可逐条取消。到点由 Console 调度器提升后才进入应答流程。 */}
+      {scheduled.length > 0 ? (
+        <div className="chat-scheduled">
+          <div className="chat-scheduled-head">
+            <CalendarClock size={13} /> 定时发送（{scheduled.length}）
+          </div>
+          {scheduled.map((m) => (
+            <div className="chat-scheduled-item" key={m.id}>
+              <Clock size={12} className="chat-scheduled-ico" aria-hidden />
+              <span className="chat-scheduled-time">{fmtDateTime(m.scheduled_at)}</span>
+              <span className="chat-scheduled-body">{m.body || "（仅附件）"}</span>
+              {canCommand ? (
+                <button
+                  type="button"
+                  className="chat-scheduled-del"
+                  title="取消定时发送"
+                  aria-label="取消定时发送"
+                  onClick={() => void cancelScheduled(m.id)}
+                >
+                  <X size={13} />
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {closed ? (
         <div className="chat-closed">对话已结束</div>
       ) : offline ? (
@@ -383,7 +473,23 @@ export function ChatThread({
             rows={1}
           />
           <div className="chat-composer-bar">
-            <span className="chat-composer-hint">Enter 发送 · Shift+Enter 换行</span>
+            <div className="chat-composer-tools">
+              {/* 定时发送：选了时间则点发送 / Enter 排定到该时刻发送；direction=up 避免输入框贴底被裁切。 */}
+              <div className="chat-schedule-picker">
+                <DateTimePicker
+                  value={scheduleAt}
+                  onChange={setScheduleAt}
+                  minNow
+                  direction="up"
+                  disabled={sending || busy}
+                  placeholder="定时发送…"
+                  ariaLabel="定时发送时间"
+                />
+              </div>
+              <span className="chat-composer-hint">
+                {scheduleAt ? "将定时发送" : "Enter 发送 · Shift+Enter 换行"}
+              </span>
+            </div>
             {busy ? (
               <button
                 className="chat-send chat-send-stop"
@@ -400,10 +506,14 @@ export function ChatThread({
                 type="button"
                 disabled={sending || (!input.trim() && draftAtts.length === 0)}
                 onClick={send}
-                title="发送消息（Enter）"
-                aria-label="发送消息"
+                title={scheduleAt ? "定时发送" : "发送消息（Enter）"}
+                aria-label={scheduleAt ? "定时发送" : "发送消息"}
               >
-                <ArrowUp size={18} strokeWidth={2.5} />
+                {scheduleAt ? (
+                  <CalendarClock size={16} strokeWidth={2.5} />
+                ) : (
+                  <ArrowUp size={18} strokeWidth={2.5} />
+                )}
               </button>
             )}
           </div>
@@ -411,6 +521,88 @@ export function ChatThread({
       ) : (
         <div className="chat-closed">无发送权限（需 command.create）</div>
       )}
+
+      {settingsOpen ? (
+        <ConversationSettingsModal
+          conversation={conversation}
+          onClose={() => setSettingsOpen(false)}
+          onSave={saveSettings}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// 会话级设置弹窗：自动回复（无人值守）开关 + 决策预案。与任务表单的「自动回复」同设计（Select + hints）。
+function ConversationSettingsModal({
+  conversation,
+  onClose,
+  onSave
+}: {
+  conversation: Conversation;
+  onClose: () => void;
+  onSave: (autoReply: boolean, autoDecisionHints: string) => Promise<void>;
+}) {
+  const [autoReply, setAutoReply] = useState(conversation.auto_reply);
+  const [hints, setHints] = useState(conversation.auto_decision_hints);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function submit(): Promise<void> {
+    setBusy(true);
+    setErr("");
+    try {
+      await onSave(autoReply, hints.trim());
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "保存失败");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="chat-modal-backdrop" onClick={onClose}>
+      <div className="chat-modal" onClick={(e) => e.stopPropagation()}>
+        <header className="chat-modal-head">
+          <strong>对话设置</strong>
+          <button className="icon-btn" type="button" onClick={onClose} title="关闭">
+            <X size={16} />
+          </button>
+        </header>
+        <div className="chat-modal-body">
+          <label className="chat-field">
+            <span>自动回复（兜底）</span>
+            <Select
+              value={autoReply ? "on" : "off"}
+              onChange={(v) => setAutoReply(v === "on")}
+              options={[
+                { value: "off", label: "否 · 等人回复（默认）" },
+                { value: "on", label: "是 · 无人值守，自主决策" }
+              ]}
+              ariaLabel="自动回复"
+            />
+          </label>
+          {autoReply ? (
+            <label className="chat-field">
+              <span>决策预案（可选）</span>
+              <textarea
+                value={hints}
+                onChange={(e) => setHints(e.target.value)}
+                rows={3}
+                placeholder="prefer minimal change; keep existing patterns; ..."
+              />
+            </label>
+          ) : null}
+          {err ? <div className="chat-error">{err}</div> : null}
+        </div>
+        <footer className="chat-modal-foot">
+          <button className="btn btn-sm" type="button" onClick={onClose} disabled={busy}>
+            取消
+          </button>
+          <button className="btn btn-sm btn-primary" type="button" onClick={submit} disabled={busy}>
+            {busy ? "保存中…" : "保存"}
+          </button>
+        </footer>
+      </div>
     </div>
   );
 }
@@ -433,6 +625,12 @@ export function NewConversationPanel({
   const [workerId, setWorkerId] = useState("");
   const [model, setModel] = useState("default");
   const [title, setTitle] = useState("");
+  // 可选首条消息 + 定时发送时间（datetime-local 格式，空 = 立即发送）。
+  const [firstMessage, setFirstMessage] = useState("");
+  const [scheduleAt, setScheduleAt] = useState("");
+  // 会话级自动回复（无人值守）+ 决策预案，与任务表单同设计。
+  const [autoReply, setAutoReply] = useState(false);
+  const [autoHints, setAutoHints] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -469,13 +667,28 @@ export function NewConversationPanel({
       setErr("请选择项目、分支和 worker");
       return;
     }
+    const msg = firstMessage.trim();
+    if (scheduleAt && !msg) {
+      setErr("设了定时发送时间，请填写首条消息内容");
+      return;
+    }
     setBusy(true);
     setErr("");
     try {
       const r = await fetch("/api/conversations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, branch, workerId, model, title })
+        body: JSON.stringify({
+          projectId,
+          branch,
+          workerId,
+          model,
+          title,
+          autoReply,
+          autoDecisionHints: autoHints,
+          ...(msg ? { firstMessage: msg } : {}),
+          ...(msg && scheduleAt ? { scheduledAt: new Date(scheduleAt).toISOString() } : {})
+        })
       });
       const d = (await r.json()) as { conversation?: { id: string }; error?: string };
       if (!r.ok || !d.conversation) {
@@ -555,6 +768,49 @@ export function NewConversationPanel({
               <option value="sonnet">Sonnet</option>
               <option value="haiku">Haiku</option>
             </select>
+          </label>
+          <label className="chat-field">
+            <span>自动回复（兜底）</span>
+            <Select
+              value={autoReply ? "on" : "off"}
+              onChange={(v) => setAutoReply(v === "on")}
+              options={[
+                { value: "off", label: "否 · 等人回复（默认）" },
+                { value: "on", label: "是 · 无人值守，自主决策" }
+              ]}
+              ariaLabel="自动回复"
+            />
+          </label>
+          {autoReply ? (
+            <label className="chat-field">
+              <span>决策预案（可选）</span>
+              <textarea
+                value={autoHints}
+                onChange={(e) => setAutoHints(e.target.value)}
+                rows={2}
+                placeholder="prefer minimal change; keep existing patterns; ..."
+              />
+            </label>
+          ) : null}
+          <label className="chat-field">
+            <span>首条消息（可选）</span>
+            <textarea
+              value={firstMessage}
+              onChange={(e) => setFirstMessage(e.target.value)}
+              rows={2}
+              placeholder="填写则建对话后即开始；可配合下方定时发送"
+            />
+          </label>
+          <label className="chat-field">
+            <span>定时发送（可选，需先填首条消息）</span>
+            <DateTimePicker
+              value={scheduleAt}
+              onChange={setScheduleAt}
+              minNow
+              disabled={!firstMessage.trim()}
+              placeholder="立即发送；选择时间则定时发送"
+              ariaLabel="定时发送时间"
+            />
           </label>
           {err ? <div className="chat-error">{err}</div> : null}
         </div>

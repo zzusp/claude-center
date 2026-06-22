@@ -2121,16 +2121,43 @@ export async function createConversation(
     branch: string;
     model: TaskModel;
     title?: string;
+    autoReply?: boolean;
+    autoDecisionHints?: string;
     createdBy: string | null;
   }
 ): Promise<Conversation> {
   const result = await client.query<Conversation>(
-    `INSERT INTO conversations (project_id, worker_id, branch, model, title, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO conversations (project_id, worker_id, branch, model, title, auto_reply, auto_decision_hints, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
-    [input.projectId, input.workerId, input.branch, input.model, input.title ?? "", input.createdBy]
+    [
+      input.projectId,
+      input.workerId,
+      input.branch,
+      input.model,
+      input.title ?? "",
+      input.autoReply ?? false,
+      input.autoDecisionHints?.trim() ?? "",
+      input.createdBy
+    ]
   );
   return result.rows[0]!;
+}
+
+// 更新会话级设置（自动回复 + 决策预案）。仅传入的字段被改写（COALESCE 兜底未传字段保持原值）。
+// 不 bump updated_at：与 renameConversation 一致，改设置不打乱列表按活跃排序。
+export async function updateConversationSettings(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string,
+  input: { autoReply?: boolean; autoDecisionHints?: string }
+): Promise<void> {
+  await client.query(
+    `UPDATE conversations
+        SET auto_reply = COALESCE($2, auto_reply),
+            auto_decision_hints = COALESCE($3, auto_decision_hints)
+      WHERE id = $1`,
+    [conversationId, input.autoReply ?? null, input.autoDecisionHints?.trim() ?? null]
+  );
 }
 
 // 列会话：join 项目 / worker 名 + 最后消息时间。projectIds 非 null 时按项目白名单过滤（RBAC）。
@@ -2232,11 +2259,24 @@ export async function listConversationMessages(
   return result.rows;
 }
 
-// 追加一条消息（用户提问用 role='user'）。seq = 当前会话最大 seq + 1，并 bump 会话 updated_at。
+// 追加一条消息（用户提问用 role='user'）。
+// - 普通消息：status='done'，seq = 当前会话最大 seq + 1，并 bump 会话 updated_at（推到列表顶 + 触发 worker 认领）。
+// - 定时消息（传 scheduledAt）：status='scheduled'，seq=NULL（到点由调度器赋 seq），不 bump updated_at
+//   （未到点不应触发认领 / 列表活跃排序）。到点前不参与 claim / prompt 锚点（见 036 迁移说明）。
 export async function addConversationMessage(
   client: pg.Pool | pg.PoolClient,
-  input: { conversationId: string; role: ConversationMessageRole; body: string }
+  input: { conversationId: string; role: ConversationMessageRole; body: string; scheduledAt?: string | null }
 ): Promise<ConversationMessage> {
+  const scheduledAt = input.scheduledAt ?? null;
+  if (scheduledAt) {
+    const result = await client.query<ConversationMessage>(
+      `INSERT INTO conversation_messages (conversation_id, seq, role, body, status, scheduled_at)
+       VALUES ($1, NULL, $2, $3, 'scheduled', $4)
+       RETURNING *`,
+      [input.conversationId, input.role, input.body, scheduledAt]
+    );
+    return result.rows[0]!;
+  }
   const result = await client.query<ConversationMessage>(
     `INSERT INTO conversation_messages (conversation_id, seq, role, body, status)
      SELECT $1,
@@ -2247,6 +2287,56 @@ export async function addConversationMessage(
   );
   await client.query(`UPDATE conversations SET updated_at = now() WHERE id = $1`, [input.conversationId]);
   return result.rows[0]!;
+}
+
+// 删除一条尚未到点的定时消息（用户在对话里取消待发消息）。仅 status='scheduled' 可删，
+// 避免误删已进入应答流程的普通消息。返回是否删除成功。
+export async function deleteScheduledConversationMessage(
+  client: pg.Pool | pg.PoolClient,
+  conversationId: string,
+  messageId: string
+): Promise<boolean> {
+  const result = await client.query(
+    `DELETE FROM conversation_messages
+      WHERE id = $1 AND conversation_id = $2 AND status = 'scheduled'`,
+    [messageId, conversationId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// 调度器：把到点的定时消息（status='scheduled' 且 scheduled_at<=now()）翻为 'done' 并赋 seq，
+// 进入可应答队列。seq 在提升这一刻才赋 max(seq)+rn（rn 让同会话多条到点消息得到互不冲突的连续序号），
+// 故触发时它恰是最新一条 user 消息，Worker 下一轮 tickConversation 即认领。顺手 bump 受影响会话的
+// updated_at（列表上浮 + 与「回复中」派生同步）。返回提升的消息条数。
+export async function promoteDueScheduledConversationMessages(
+  client: pg.Pool | pg.PoolClient
+): Promise<number> {
+  const result = await client.query<{ promoted: number }>(
+    `WITH due AS (
+       SELECT id, conversation_id,
+              row_number() OVER (PARTITION BY conversation_id ORDER BY scheduled_at, id) AS rn
+         FROM conversation_messages
+        WHERE status = 'scheduled' AND scheduled_at <= now()
+     ),
+     upd AS (
+       UPDATE conversation_messages cm
+          SET status = 'done',
+              seq = COALESCE(
+                (SELECT max(m2.seq) FROM conversation_messages m2
+                  WHERE m2.conversation_id = cm.conversation_id AND m2.seq IS NOT NULL),
+                -1) + due.rn,
+              updated_at = now()
+         FROM due
+        WHERE cm.id = due.id
+       RETURNING cm.conversation_id
+     ),
+     bump AS (
+       UPDATE conversations c SET updated_at = now()
+        WHERE c.id IN (SELECT DISTINCT conversation_id FROM upd)
+     )
+     SELECT count(*)::int AS promoted FROM upd`
+  );
+  return result.rows[0]?.promoted ?? 0;
 }
 
 // Worker 领下一个待应答的对话轮：本 worker 的 active 会话、最后一条是 user 消息、且无在途 assistant 轮。
@@ -2263,7 +2353,8 @@ export async function claimNextConversationTurn(
         WHERE c.worker_id = $1
           AND c.status = 'active'
           AND (SELECT m.role FROM conversation_messages m
-                WHERE m.conversation_id = c.id ORDER BY m.seq DESC LIMIT 1) = 'user'
+                WHERE m.conversation_id = c.id AND m.seq IS NOT NULL
+                ORDER BY m.seq DESC LIMIT 1) = 'user'
           AND NOT EXISTS (
             SELECT 1 FROM conversation_messages m
              WHERE m.conversation_id = c.id
@@ -2291,6 +2382,7 @@ export async function getConversationPrompt(
        FROM conversation_messages
       WHERE conversation_id = $1
         AND role = 'user'
+        AND seq IS NOT NULL
         AND seq > COALESCE(
           (SELECT max(seq) FROM conversation_messages
             WHERE conversation_id = $1 AND role = 'assistant' AND status IN ('done', 'failed')),
