@@ -211,41 +211,22 @@ function ComposeTaskForm({
           {submitMode === "pr" ? (
             <div className="field">
               <label className="field-label">
-                自动合并 PR <span className="field-hint">由 Worker 自动 gh pr merge --merge</span>
+                自动合并 PR <span className="field-hint">由 Worker 自动 gh pr merge --merge(All test cases must pass)</span>
               </label>
               <Select
                 name="autoMergePr"
                 value={autoMergePr ? "on" : "off"}
                 onChange={(value) => setAutoMergePr(value === "on")}
                 options={[
-                  { value: "off", label: "否 · 仅创建 PR" },
-                  { value: "on", label: "是 · 创建后自动合并" }
+                  {value: "off", label: "否 · 仅创建 PR"},
+                  {value: "on", label: "是 · 创建后自动合并"}
                 ]}
                 ariaLabel="自动合并 PR"
               />
             </div>
           ) : (
-            <div className="field" aria-hidden />
+            <div className="field" aria-hidden/>
           )}
-          <div className="field">
-            <label className="field-label">
-              执行模型 <span className="field-hint">默认跟随 Worker</span>
-            </label>
-            <Select
-              name="model"
-              value={model}
-              onChange={(value) => setModel(value as "default" | "opus" | "sonnet" | "haiku")}
-              options={[
-                { value: "default", label: "默认 · 跟随 Worker" },
-                { value: "opus", label: "Opus" },
-                { value: "sonnet", label: "Sonnet" },
-                { value: "haiku", label: "Haiku" }
-              ]}
-              ariaLabel="执行模型"
-            />
-          </div>
-        </div>
-        <div className="form-row">
           <div className="field">
             <label className="field-label">
               自动回复（兜底） <span className="field-hint">真停了：零改动→失败，有改动→自动续接最多 2 轮</span>
@@ -255,10 +236,29 @@ function ComposeTaskForm({
               value={autoReply ? "on" : "off"}
               onChange={(value) => setAutoReply(value === "on")}
               options={[
-                { value: "off", label: "否 · 等人回复（默认）" },
-                { value: "on", label: "是 · 无人值守，按规则兜底" }
+                {value: "off", label: "否 · 等人回复（默认）"},
+                {value: "on", label: "是 · 无人值守，按规则兜底"}
               ]}
               ariaLabel="自动回复"
+            />
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="field">
+            <label className="field-label">
+              执行模型 <span className="field-hint">默认跟随 Worker</span>
+            </label>
+            <Select
+              name="model"
+              value={model}
+              onChange={(value) => setModel(value as "default" | "opus" | "sonnet" | "haiku")}
+              options={[
+                {value: "default", label: "默认 · 跟随 Worker"},
+                {value: "opus", label: "Opus"},
+                {value: "sonnet", label: "Sonnet"},
+                {value: "haiku", label: "Haiku"}
+              ]}
+              ariaLabel="执行模型"
             />
           </div>
           <div className="field">
@@ -270,8 +270,8 @@ function ComposeTaskForm({
               value={dynamicWorkflow ? "on" : "off"}
               onChange={(value) => setDynamicWorkflow(value === "on")}
               options={[
-                { value: "off", label: "否 · 关闭（默认）" },
-                { value: "on", label: "是 · 启用动态工作流" }
+                {value: "off", label: "否 · 关闭（默认）"},
+                {value: "on", label: "是 · 启用动态工作流"}
               ]}
               ariaLabel="动态工作流"
             />
@@ -282,7 +282,8 @@ function ComposeTaskForm({
             <label className="field-label">
               决策预案 <span className="field-hint">可选，喂给 Claude 当决策偏好（如"优先最小改动，跳过测试"）</span>
             </label>
-            <textarea name="autoDecisionHints" rows={2} placeholder="prefer minimal change; keep existing patterns; ..." />
+            <textarea name="autoDecisionHints" rows={2}
+                      placeholder="prefer minimal change; keep existing patterns; ..."/>
           </div>
         ) : null}
       </section>
