@@ -59,7 +59,6 @@ import {
   worktreePathFor
 } from "./worktree.js";
 import { findSessionInfo, startConversationSessionSync, startTaskSessionSync } from "./session.js";
-import { parseTestPlan, type TestPlanResult } from "./test-plan.js";
 
 const CLAUDE_TIMEOUT_MS = 60 * 60_000;
 // 定向 shell 指令的执行上限（沿用原 runPowerShell 的 20 分钟）。
@@ -1018,49 +1017,20 @@ export async function finalizeTaskMultiRepo(
 
   // 强一致自动合并（spec 抉择 2）：所有 PR 都 mergeable 才统一合，否则全不合 + 告警事件。
   // 顺序：子仓先合、主仓最后（主仓往往引用子仓改动，反向合并 CI 易撞）。
-  // 门禁前置（docs/spec/pr-body-testplan-merge-gate.md）：先看 Claude 产出的 Test Plan——只有全部
-  // case 打勾（通过）才放行自动合并；存在未通过 / 未测试 case → 不合并 + 通知用户人工裁决。
+  // 用户既然勾选了「自动合并 PR」就以用户选择为准——不再用 Claude 产出的 Test Plan 通过状态做门禁，
+  // 只保留 GitHub 物理可合并性（mergeable/CLEAN）这一硬约束（不可合则跳过 + 通知人工裁决）。
   if (task.auto_merge_pr) {
     const prResults = results.filter(
       (r): r is { ctx: TaskRepoCtx; sub: "pr_created"; prUrl: string | null; reused: boolean } =>
         r.sub === "pr_created" && Boolean(r.prUrl)
     );
     if (prResults.length > 0) {
-      const testPlan = parseTestPlan(claudeOutput);
-      if (testPlan.allPassed) {
-        await tryAutoMergeAllOrNone(config, task, prResults);
-      } else {
-        await blockAutoMergeForTestPlan(config, task, mainPrUrl, testPlan);
-      }
+      await tryAutoMergeAllOrNone(config, task, prResults);
     }
   }
 }
 
-// Test Plan 门禁未通过：不自动合并，落 auto_merge_blocked 事件 + 给项目可见用户发 task_review_required
-// 通知（任务保持 success，PR 已建待人工处理——用户据通知决定手动合并还是续接任务）。
-async function blockAutoMergeForTestPlan(
-  config: WorkerConfig,
-  task: Task,
-  mainPrUrl: string | null,
-  testPlan: TestPlanResult
-): Promise<void> {
-  const pool = getPool();
-  const reason = testPlan.found
-    ? `Test Plan ${testPlan.passed}/${testPlan.total} 通过，存在未通过 / 未测试项`
-    : "产出中未找到 Test Plan";
-  const failing = testPlan.items.filter((i) => !i.passed).map((i) => i.label);
-  await addTaskEvent(
-    pool,
-    task.id,
-    config.workerId,
-    "auto_merge_blocked",
-    `${reason}，已跳过自动合并，待人工裁决`,
-    { total: testPlan.total, passed: testPlan.passed, found: testPlan.found, failing: failing.slice(0, 20) }
-  );
-  await notifyReviewRequired(task, mainPrUrl ?? `/tasks/${task.id}`, reason);
-}
-
-// 自动合并被跳过 → 发「需人工确认」通知给项目可见用户（Test Plan 未全通过 / PR 不可合并两路共用）。
+// 自动合并被跳过 → 发「需人工确认」通知给项目可见用户（PR 不可合并时触发）。
 // 任务保持 success（PR 已建待人工处理），用户据通知决定手动合并还是续接任务。
 async function notifyReviewRequired(task: Task, link: string, reason: string): Promise<void> {
   await emitTaskNotification(getPool(), {

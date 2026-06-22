@@ -1,9 +1,10 @@
 // 真·端到端：用真实产品代码 finalizeTaskMultiRepo（apps/worker/dist/executor.js）跑 PR 收尾流程，
-// 验证三件事——① PR body 渲染 Markdown（不再代码块）② Test Plan 门禁（全通过→合，未通过/未测试→拦）
-// ③ 不可合并 / 门禁拦下都发 task_review_required 通知。
+// 验证三件事——① PR body 渲染 Markdown（不再代码块）② 自动合并以用户选择为准：勾了 auto_merge_pr
+//   就合，不再用 Claude 产出的 Test Plan 通过状态做门禁（即使有未测试 / 失败用例也照合）③ 仅当 PR
+//   物理不可合并（mergeable/CLEAN 不满足）才跳过 + 发 task_review_required 通知。
 // 零污染：临时 PG 库 + 临时本地 git 仓（bare origin + clone + worktree）；gh 用 node.exe + --require 假冒。
 // 走的产品路径：finalize → git commit/push origin（真）→ gh pr list/create/view/merge（假）
-//   → prBody → parseTestPlan 门禁 → tryAutoMergeAllOrNone / blockAutoMergeForTestPlan → 事件 + 通知落库。
+//   → prBody → tryAutoMergeAllOrNone（仅查 GitHub mergeable）→ 事件 + 通知落库。
 // 用法：node docs/acceptance/pr-testplan-gate/scripts/e2e-finalize-gate.mjs
 import { mkdtemp, rm, readdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, copyFileSync } from "node:fs";
@@ -115,7 +116,8 @@ try {
   };
 
   const PASS_PLAN = ["## Summary", "做了改动。", "", "## Changes", "- s.txt:1 — 加了一行", "", "## Test Plan", "- [x] typecheck 通过", "- [x] build 通过"].join("\n");
-  const UNTESTED_PLAN = ["## Summary", "改了一半。", "", "## Changes", "- s.txt:1 — 加了一行", "", "## Test Plan", "- [x] typecheck 通过", "- [ ] e2e 未跑"].join("\n");
+  // 有未测试 + 失败（❌）用例的 Test Plan：旧版会被门禁拦下，新版以用户选择为准照常自动合并。
+  const FAIL_PLAN = ["## Summary", "改了一半。", "", "## Changes", "- s.txt:1 — 加了一行", "", "## Test Plan", "- [x] typecheck 通过", "- [ ] e2e 未跑", "- [ ] 回归用例 ❌"].join("\n");
 
   // 单场景执行器：seed 任务 + worktree + 改动 → finalize → 返回事件/通知/gh 调用记录。
   async function runScenario({ label, claudeOutput, mergeable, presetPrUrl }) {
@@ -175,16 +177,16 @@ try {
     assert(r.createBody.includes("原始需求"), "PR body 含折叠的原始任务需求");
   }
 
-  // ---- 场景 2：Test Plan 有未测试项 → 门禁拦下 ----
+  // ---- 场景 2：Test Plan 有未测试 / 失败用例，但用户勾了 auto_merge_pr → 仍自动合并（本次需求核心） ----
   {
-    const r = await runScenario({ label: "untested-blocked", claudeOutput: UNTESTED_PLAN, mergeable: true });
+    const r = await runScenario({ label: "failing-still-merges", claudeOutput: FAIL_PLAN, mergeable: true });
     console.log(`  events: ${r.events.join(" → ")}`);
     console.log(`  gh: ${r.ghCalls.map((c) => c.cmd).join(",")}  notifs: ${r.notifs.join(",") || "—"}`);
     assert(r.events.includes("pr_created"), "建了 PR（pr_created）");
-    assert(r.events.includes("auto_merge_blocked"), "Test Plan 未全通过 → 拦截（auto_merge_blocked）");
-    assert(!r.events.includes("auto_merged"), "未自动合并");
-    assert(!r.ghCalls.some((c) => c.cmd === "view" || c.cmd === "merge"), "门禁在 mergeable 检查前就拦下（无 view/merge）");
-    assert(r.notifs.includes("task_review_required"), "发了待人工确认通知（task_review_required）");
+    assert(r.events.includes("auto_merged"), "Test Plan 未全通过也以用户选择为准 → 自动合并（auto_merged）");
+    assert(!r.events.includes("auto_merge_blocked"), "不再有 Test Plan 门禁拦截事件（auto_merge_blocked）");
+    assert(r.ghCalls.some((c) => c.cmd === "merge"), "gh pr merge 被调用");
+    assert(!r.notifs.includes("task_review_required"), "未发待人工确认通知");
   }
 
   // ---- 场景 3：Test Plan 全通过但 PR 不可合并 → 跳过 + 通知（需求 3） ----
@@ -208,7 +210,7 @@ try {
     assert(r.ghCalls.some((c) => c.cmd === "edit"), "刷新正文：gh pr edit 被调用");
     assert(!r.editBody.includes("```text") && r.editBody.includes("## Summary") && r.editBody.includes("## Test Plan"),
       "刷新后的正文是渲染 Markdown（无 ```text、含结构化段）");
-    assert(r.events.includes("auto_merged"), "刷新后照常走门禁 → 自动合并");
+    assert(r.events.includes("auto_merged"), "刷新后照常自动合并");
   }
 
   console.log(failures === 0 ? "\n✓ 端到端全部断言通过" : `\n✗ ${failures} 条断言失败`);

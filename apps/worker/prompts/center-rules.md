@@ -34,17 +34,16 @@ Make that final message a standard PR description with these three sections:
   - Failed → `- [ ] <case> ❌` (unchecked, with a ❌)
   - Not run → `- [ ] <case>` (unchecked, empty)
 
-Only a **checked** box counts as "verified passing". The Worker reads this Test Plan to decide
-auto-merge: if **any** case is unchecked (failed or not run), it will NOT auto-merge the PR and
-will notify the requester to review. So run the relevant verification and check the boxes you
-actually verified; leave the rest unchecked rather than guessing.
+Only a **checked** box counts as "verified passing". So run the relevant verification and check the
+boxes you actually verified; leave the rest unchecked rather than guessing. The Test Plan is the
+reviewer's record of what was and wasn't checked — it does **not** gate auto-merge (if the requester
+chose auto-merge, the Worker merges as long as the PR is physically mergeable on GitHub).
 
 **Do not skip a verification you can actually run.** If the change is end-to-end testable in this
 environment (a script/command exists, a service can be started, the repo ships an e2e/integration
 harness), run it and check the box — don't list it as "not run" out of convenience. Only leave a
 case unchecked when running it is genuinely infeasible here (needs external creds/hardware/network
-you don't have), and say so briefly in the case text. An untested case blocks auto-merge, so the
-incentive is to verify, not to defer.
+you don't have), and say so briefly in the case text.
 
 (This applies only when you finish the task. If you must stop for input, use the stopping protocol
 described in the task prompt instead — that path does not open a PR.)
