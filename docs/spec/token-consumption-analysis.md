@@ -1,0 +1,120 @@
+# 任务 token 消耗分析（2026-06-23 上午）+ 工作流优化建议
+
+> 目标：分析今天上午几个任务的 token 消耗，定位**具体原因**与**消耗大户**，并评估**能否优化项目工作流以降低 token 消耗**。
+> 全部数字取自共享 dev 库实测（`tasks.total_tokens` + `task_events` + `task_sessions.jsonl`），复现脚本见 `token-consumption-analysis.queries.mjs`（需 `DATABASE_URL`）。
+
+## 1. 数据（今天本地时区有活动的任务）
+
+> 快照口径：数字为分析当时（2026-06-23 中午前后）`tasks.total_tokens` 实测；库是实时变化的——分析期间又有 1 个任务（0c6494ba）跑完、当日完成任务数从 5→6、累计从 102.6M→**105,446,211**，但**不改变任何结论**（它是单轮短会话、94.2% cache_read，恰好再次印证本文模式）。下表为当时全天有活动的 8 个任务（2 个仍在跑、total_tokens 逐轮才落，暂为 0）：
+
+| total_tokens | 占比 | status | model | auto_reply | dynamic_workflow | 轮次(turns) | resume 次数 | 任务 |
+|--:|--:|--|--|:--:|:--:|:--:|:--:|--|
+| **42,571,164** | 40.4% | merged | default | ✅ | – | 6 | 5 | 失败任务重试问题修复 |
+| **23,523,297** | 22.3% | merged | default | ✅ | ✅ | 2 | 1 | 基于ILCD合规字段调整-过程管理验证 |
+| **23,518,681** | 22.3% | merged | default | ✅ | – | 1 | 0 | 实时对话要支持设置定时发送消息 |
+| 9,857,965 | 9.4% | merged | default | ✅ | – | 4 | 3 | 新建任务项目含子项目时表单填写子项目信息 |
+| 3,137,231 | 3.0% | merged | default | ✅ | – | 1 | 0 | worker的Claude Code 版本获取好像不准了 |
+| 2,837,873 | 2.7% | success | default | ✅ | – | 1 | 0 | 实时对话新增弹窗优化（分析中途跑完） |
+
+**消耗大户**：Top 1 占 40.4%、Top 3 占 84.9%。头部任务都不是「跑得久」的任务，而是**轮次多 / 单轮重**的任务。
+
+## 2. 根因（结论先行，逐条附实测）
+
+### 结论 A：消耗的 91%–98% 是 `cache_read`——「反复重读上下文」，不是「生成内容」
+
+逐任务解析 `task_sessions.jsonl` 里每条 assistant 消息的 `usage`，四类 token 占比：
+
+| 任务 | input | output | cache_creation | **cache_read** |
+|--|--:|--:|--:|--:|
+| 2f524b68 | 0.03% | **0.79%** | 5.2% | **93.9%** |
+| 11ccb8ea | 0.03% | 0.58% | 1.7% | **97.7%** |
+| ccd309d5 | 0.09% | 0.82% | 2.7% | **96.4%** |
+| d8b66a53 | 0.10% | 1.27% | 7.8% | **90.8%** |
+| 263c6371 | 0.17% | 1.89% | 3.7% | **94.3%** |
+
+**output（真正"写出来的内容"）全程 < 2%。** 钱花在「每次工具调用都把已累积的整段上下文当作缓存重读一遍」。这是 agentic 编码的固有形态：每多一个工具往返（读文件 / 跑命令 / 编辑），下一次模型调用就要把**之前所有轮的上下文 + 工具结果**作为 `cache_read` 再读一次。
+
+> 计费提醒（避免误读）：`cache_read` 单价约为 input 的 **10%**，`total_tokens` 把四类等权相加，因此 **102.6M 这个口径里 94% 是按 1/10 计价的 token**，折算成「input 等价 token」后实际账单远低于面值。但**相对排名不变**——cache_read 体量太大，仍是成本主体。降本的唯一抓手就是**压低 cache_read 的体量**（= 缩短会话 + 减少重跑）。
+
+### 结论 B：消耗 ≈ (工具往返次数) × (每次调用的平均上下文大小)
+
+`tasks.total_tokens` 由 Worker 逐轮累加：每次 `claude -p --output-format json` 结束后把该次返回的 `usage` 四类求和累加（`apps/worker/src/executor.ts:304-310`、`sumUsageTokens` 在 `:325-334`，列定义见 `packages/db/migrations/034_task_total_tokens.sql`）。
+
+实测吻合此模型：263c6371（最简单任务）jsonl 里 **45 次 tool_use**、单轮最大上下文 ~115k，`45 × ~70k ≈ 3.15M`，与实际 `total_tokens=3,137,231` 几乎一致。即：**工具往返越多、上下文越大，token 越高**，且两者在长会话里同时膨胀（上下文随会话单调增长）。
+
+各任务规模（jsonl 实测）：
+
+| 任务 | assistant 消息 | tool_use 次数 | 单次最大上下文 |
+|--|--:|--:|--:|
+| 2f524b68 | 356 | 149 | 470,563 |
+| ccd309d5 | 276 | 112 | 325,647 |
+| 11ccb8ea | 257 | 125 | 302,575 |
+| d8b66a53 | 200 | 86 | 215,655 |
+| 263c6371 | 106 | 45 | 114,705 |
+
+### 结论 C：「同一会话反复 resume / 续接」让 cache_read 复利式膨胀——这是 Top1 的直接成因
+
+Top1（2f524b68，42.6M，占全天 41.5%）的时间线（`task_events` 实测）：
+
+```
+01:03 running → 01:25 turn 结束 → PR 已建 → 自动合并 → 01:25 已 merged   ← 第 1 轮就完成并合并了
+（7 小时空闲，等用户）
+08:29 resume → 08:53 turn 结束 → 复用 PR → auto_merge_skipped（不可合并）
+09:28 resume → 09:32 turn 结束 → auto_merge_skipped
+09:38 resume → 10:00 turn 结束 → auto_merge_skipped
+10:04 resume → 10:21 turn 结束 → auto_merge_skipped
+10:31 resume → 10:34 turn 结束 → auto_merge_skipped
+```
+
+要点：
+- **任务第 1 轮（22 分钟）就已合并**，之后是用户对同一任务**又续接了 5 次**做迭代完善。
+- **9.5h 墙钟里实际 compute 仅 ~93 分钟**，其余是轮次之间的空闲等待——所以"跑了 9.5 小时"是误读，**token 来自 6 次离散的完整 agentic 轮，不是一直在跑**。
+- 续接走 `resumeTask`（`executor.ts:1230-1275`）`--resume` 同一会话：**每次 resume 都要把之前所有轮累积的整段 transcript 重新读一遍**。到第 6 轮，单次调用上下文已达 **470k**（见上表），每个工具往返都在重读前 5 轮的历史 → cache_read 复利。
+- d8b66a53（9.9M，4 轮）同形态：第 1 轮已 merged，又续接 3 次。
+
+**resume 次数与 token 强正相关**：2f524b68(5 resume,42.6M) > d8b66a53(3 resume,9.9M)；单轮的 11ccb8ea/263c6371 则取决于单轮会话长度。
+
+### 反偏置 / 盲点（避免确认偏误）
+
+- **`dynamic_workflow` 不是本批的消耗推手（推翻直觉假设）**：ccd309d5 开了 `dynamic_workflow=1`，但其 jsonl **`isSidechain` 行数 = 0、未派生任何子代理**，cache_read（56.8M/会话）与关闭 workflow 的 11ccb8ea（52.9M）同量级。**没有证据表明 workflow 放大了 token**，不要为省 token 去动这个开关。
+- **`total_tokens` 是偏保守口径**：jsonl 把每条 assistant 消息的 usage 相加约为 `total_tokens` 的 ~2.3×（流式会产生多条 assistant 条目、cache_read 被重复计入）。本文一律以 `total_tokens`（系统权威口径、UI 所见）为准；结论 A 的占比是**比值**，不受求和口径影响，稳健。
+- **未收敛点**：单轮内 cache_read 的精确增长曲线（compaction 在 ~200k 触发后如何重置）需要逐条 jsonl 时序才能精确刻画，本文只用「往返次数 × 平均上下文」的一阶模型，足以支撑排序与归因，不足以做精确预算预测。
+- **样本小**：5 个完成任务、单日。下面的优化建议按"机理普适 + 本批证据"给，不宜外推成精确节省百分比。
+
+## 3. 工作流优化建议（按 影响 × 代价 排序）
+
+### P0｜减少「同一巨会话反复 resume」——影响最大、最直接命中 Top1
+
+- **现象**：迭代完善已合并任务时，继续 `--resume` 同一会话，会把全部历史作为 cache 重读，token 复利（2f524b68 一个任务吃掉全天 41.5%）。
+- **机理**：fresh 会话从小上下文起步；resume 第 N 轮要重读前 N-1 轮全部 transcript。
+- **可做的工作流改动**（需产品决策，非本次直接改）：
+  1. **大会话续接前给提示/护栏**：当会话上下文已超阈值（如单次调用 > 200k 或 resume 轮数 ≥ 3）时，Console 在续接入口提示"该会话已很大，建议新建任务从干净上下文做后续完善"。落点参考续接判定 `executor.ts:1241`（`resume = Boolean(task.claude_session_id)`）与 resume 入口 UI。
+  2. **"完善型"续接默认走 fresh**：对已 `merged` 的任务再发起的迭代，默认新建/全新工作树（taskPrompt 从头，小上下文）而非 resume 巨会话——`resumeTask` 已有 `resume=false` 全新分支（`executor.ts:1259-1261`），可由产品侧选择何时走它。
+  3. **`auto_reply` resume 已有 cap=2（`executor.ts:137`），但用户手动 resume 不设上限**——本批 5 次 resume 全是手动续接。可考虑对"已合并后再续接"的轮数也给软上限/提示。
+
+### P0｜按任务复杂度选模型（降本最稳，立刻可用，无需改代码）
+
+- **现象**：本批 8 个任务**全部 `model=default`**（Worker 不传 `--model`，跟随账号默认）。简单任务（263c6371 版本号探测 3.1M、d8b66a53 表单字段）和复杂任务用同一档模型。
+- **机理**：模型选择**不降 token 数**，但**降单价**——Sonnet 约为 Opus 的 1/5。把简单/机械任务下沉到 Sonnet/Haiku，账单按比例降。
+- **现成能力被闲置**：任务级模型选择器已实现（`TaskModel: default|opus|sonnet|haiku`，映射在 `executor.ts:185-196`），新建任务表单即可选——**本批 0 任务用过**。
+- **可做**：建立"默认 Sonnet、复杂任务才升 Opus"的发任务习惯；或把任务表单默认值从 `default` 调成 `sonnet`（需产品权衡质量）。
+
+### P1｜压缩"每次调用都重读"的固定前缀（小、安全、免费）
+
+- **实测固定前缀**（每个 API 往返都被 cache_read 重读）：`--append-system-prompt-file` 的 `center-rules.md` ~854 tok + 项目 `CLAUDE.md` ~1,469 tok + 全局 `~/.claude/CLAUDE.md` ~2,438 tok ≈ **~4.8k tok**（注入点 `executor.ts:203-204`）。
+- **量级**：2f524b68 的 149 次往返 × ~4.8k ≈ ~0.7M（约该任务 1.6%）。**单看占比小，但每 token 都乘以往返次数、且零成本**。
+- **可做**：精简 `apps/worker/prompts/center-rules.md` 与项目 `CLAUDE.md` 中低频/可按需加载的内容（把"偶尔才用到"的长说明移到 skill / docs 按需读，而非常驻系统提示）。低风险，收益随往返次数线性累加。
+
+### P2｜缩短单轮会话长度（部分固有，靠任务卫生改善）
+
+- **机理**：主成本是「往返次数 × 上下文」。单轮 11ccb8ea 一次就 23.5M（257 assistant / 125 tool_use），属正常但偏长的 agentic 会话。
+- **可做（习惯类，不强制代码）**：任务拆细、scope 收窄（一个 PR 一件事）；提示侧已有 worktreeAnchor 等约束减少越界重读（`executor.ts:427-434`）。这类靠"发任务的人"控制，代码侧难以一刀切。
+
+### 不建议动
+
+- **`dynamic_workflow` 开关**：见反偏置，本批无证据表明它放大 token。
+- **关闭 prompt caching**：caching 正是让 94% 的量按 1/10 计价的原因，关掉只会更贵。
+
+## 4. 一句话总结
+
+> 今天上午的 token 几乎全部（91–98%）是 **agentic 会话反复重读累积上下文的 `cache_read`**；真正的"大户"是**轮次多 / 单轮长 / 反复 resume 同一巨会话**的任务（Top1 一个占 40.4%，且其中多数墙钟是空闲等待、token 来自 6 次离散续接的复利）。**最有效的工作流降本顺序：① 迭代完善别一直 resume 巨会话、改走小上下文新会话；② 按复杂度选模型（现成能力，0 任务在用）；③ 顺手精简常驻系统提示。** `dynamic_workflow` 经核实不是推手，不要误调。

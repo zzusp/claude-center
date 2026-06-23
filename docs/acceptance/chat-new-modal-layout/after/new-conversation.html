@@ -1,4 +1,6 @@
-/* ClaudeCenter · Claude Light AI 设计系统
+<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>/* ClaudeCenter · Claude Light AI 设计系统
    参考 docs/spec/ui_ux.md + docs/spec/demo.png
    核心：信息 > 视觉，状态 > 装饰，结构 > 风格 */
 
@@ -6220,3 +6222,18 @@ a.ds-v:hover {
   font-size: 12px;
   color: var(--text-4);
 }
+</style>
+<style>html,body{margin:0}</style></head>
+<body><div class="app"><main class="main"><div class="chat-modal-backdrop">
+  <div class="chat-modal chat-modal-wide">
+    <header class="chat-modal-head">
+      <strong>新建对话</strong>
+      <button class="icon-btn" type="button" title="关闭"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/></svg></button>
+    </header>
+    <div class="chat-modal-body"><label class="chat-field"><span>标题（可选）</span><input value="" placeholder="不填则留空"></label><label class="chat-field chat-field-half"><span>项目</span><select><option>claude-center</option><option>demo-app</option><option>internal-tools</option></select></label><label class="chat-field chat-field-half"><span>分支</span><input value="main" placeholder="输入或选择分支"></label><label class="chat-field chat-field-half"><span>Worker（在线）</span><select><option>DESKTOP-9F3A</option></select></label><label class="chat-field chat-field-half"><span>模型</span><select><option>默认</option><option>Opus</option><option>Sonnet</option><option>Haiku</option></select></label><label class="chat-field"><span>自动回复（兜底）</span><div class="cc-select"><button type="button" class="cc-select-trigger" aria-haspopup="listbox" aria-expanded="false"><span class="cc-select-label">否 · 等人回复（默认）</span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="cc-select-caret" aria-hidden><path d="m6 9 6 6 6-6"/></svg></button></div></label><label class="chat-field"><span>首条消息（可选）</span><textarea rows="2" placeholder="填写则建对话后即开始；可配合下方定时发送"></textarea></label><label class="chat-field"><span>定时发送（可选，需先填首条消息）</span><div class="dt-picker disabled"><button type="button" class="dt-trigger" aria-haspopup="dialog" aria-expanded="false" disabled><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/></svg><span class="dt-trigger-label placeholder">立即发送；选择时间则定时发送</span></button></div></label></div>
+    <footer class="chat-modal-foot">
+      <button class="btn btn-sm" type="button">取消</button>
+      <button class="btn btn-sm btn-primary" type="button">创建并开始</button>
+    </footer>
+  </div>
+</div></main></div></body></html>
