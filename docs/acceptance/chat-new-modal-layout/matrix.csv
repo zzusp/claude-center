@@ -1,0 +1,8 @@
+case,描述,round-1
+desktop-width,桌面弹窗加宽到 560px,PASS
+desktop-two-col,桌面 body 2 列网格（项目+分支、Worker+模型 各并排同一行）,PASS
+desktop-no-overflow,桌面无横向溢出,PASS
+mobile-single-col,手机端(360/390/414) body 回落单列,PASS
+mobile-fit-width,手机端弹窗按视口宽自适应(320/350/374),PASS
+mobile-no-overflow,手机端三档均无横向溢出,PASS
+typecheck,五包 typecheck 绿,PASS

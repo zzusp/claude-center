@@ -704,7 +704,7 @@ export function NewConversationPanel({
 
   return (
     <div className="chat-modal-backdrop" onClick={onClose}>
-      <div className="chat-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="chat-modal chat-modal-wide" onClick={(e) => e.stopPropagation()}>
         <header className="chat-modal-head">
           <strong>新建对话</strong>
           <button className="icon-btn" type="button" onClick={onClose} title="关闭">
@@ -716,7 +716,7 @@ export function NewConversationPanel({
             <span>标题（可选）</span>
             <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="不填则留空" />
           </label>
-          <label className="chat-field">
+          <label className="chat-field chat-field-half">
             <span>项目</span>
             <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
               {projects.map((p) => (
@@ -726,7 +726,7 @@ export function NewConversationPanel({
               ))}
             </select>
           </label>
-          <label className="chat-field">
+          <label className="chat-field chat-field-half">
             <span>
               分支
               {branchState === "loading"
@@ -749,7 +749,7 @@ export function NewConversationPanel({
               ))}
             </datalist>
           </label>
-          <label className="chat-field">
+          <label className="chat-field chat-field-half">
             <span>Worker（在线）</span>
             <select value={workerId} onChange={(e) => setWorkerId(e.target.value)}>
               <option value="">选择 worker</option>
@@ -760,7 +760,7 @@ export function NewConversationPanel({
               ))}
             </select>
           </label>
-          <label className="chat-field">
+          <label className="chat-field chat-field-half">
             <span>模型</span>
             <select value={model} onChange={(e) => setModel(e.target.value)}>
               <option value="default">默认</option>
