@@ -60,23 +60,31 @@ async function gitTolerant(args: string[]): Promise<void> {
   }
 }
 
-// 强删 wtPath 目录（Node 递归删）。关键兜底：Windows 上 `git worktree remove --force` 对含 node_modules 的
-// 长路径常**删不净**——要么整条失败、要么只摘了 git 注册却把目录留在盘上，于是下次 `git worktree add` 撞
-// `fatal: '<path>' already exists`（实测 `--force` 也不豁免「目标目录已存在且非空」这一项），任务卡死在
-// worktree 准备阶段、续接重试每次同样过不去（真实 task 2ee00794 即此：dir 在、node_modules 在、.git 丢、未注册）。
-// Node 的 rmSync 对 >260 长路径 + 只读文件都能删（已实测），比 git 自带删除可靠。**关键**：必须带 maxRetries——
-// Windows 删刚 npm install 出来的 node_modules 常撞瞬时锁（杀软扫描 / 句柄未及时释放 → EBUSY/EPERM/ENOTEMPTY），
-// 不重试的 rmSync 会当场抛错被吞、目录残留、add 继续撞 already exists（这正是上一版 fix 仍复发的原因）。
-// maxRetries 是 Node 官方对这几类 Windows 错误的解药（线性退避重试）；给足额度兜杀软几秒的扫描窗口。
-// 真被活进程独占才放弃，交给随后的 add 抛明确错误由上层标 failed。
+// 强删 wtPath 目录（Node 递归删）。Windows 上 `git worktree remove --force` 对含 node_modules 的长路径常删不净，
+// 用 Node rmSync 兜底（能删 >260 长路径 + 只读文件）；maxRetries 兜杀软扫描 / 句柄未释放的瞬时锁（EBUSY/EPERM/ENOTEMPTY）。
+//
+// 【真因·第四轮才挖到，解释「拉新代码 + 重启 worker 仍每轮复发」】Worker 本身是 **Electron** 进程，Electron 给
+// Node `fs` 打了 **asar 集成补丁**：任何 fs 操作一旦碰到 `.asar` 文件，Electron 会把该归档**打开并进程级缓存/映射、
+// 整个进程生命周期不释放**。于是 Worker 删 worktree 内 `node_modules/electron/dist/resources/default_app.asar` 时，
+// rmSync 反而被 asar 补丁**把这个文件自锁住**（EBUSY，删不掉）——而且**每个新 Worker 第一次 rmSync 都会重新自锁**，
+// 所以重启 worker 永远治不好（实测：锁主就是当前运行的 Worker 进程本身，Restart Manager 确认）。
+// 解药：删除期间临时关掉 asar 集成（`process.noAsar = true`），让 `.asar` 当普通文件删、不缓存不映射。
+// 仅在本同步删除窗口内开启、finally 复原；rmSync 内部不 require Worker 自身代码，故即便打包版（自身在 app.asar 内）也安全。
+// 纯 Node（非 Electron）下 `process.noAsar` 无意义、无副作用。
+type NoAsarProc = { noAsar?: boolean };
 function rmWorktreeDir(wtPath: string): void {
   if (!existsSync(wtPath)) {
     return;
   }
+  const proc = process as NoAsarProc;
+  const prevNoAsar = proc.noAsar;
+  proc.noAsar = true; // 关 Electron asar 集成，避免删 default_app.asar 时被自锁
   try {
     rmSync(wtPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   } catch {
     // 删不掉留给 worktree add 报 "already exists"，上层据此标 failed。
+  } finally {
+    proc.noAsar = prevNoAsar;
   }
 }
 
@@ -87,6 +95,24 @@ export async function removeWorktree(localPath: string, wtPath: string): Promise
   await gitTolerant(["-C", localPath, "worktree", "remove", "--force", wtPath]);
   rmWorktreeDir(wtPath);
   await gitTolerant(["-C", localPath, "worktree", "prune"]);
+}
+
+// removeWorktree 后该路径理应已清空；若仍存在，说明目录被某个**运行中的进程**持有 OS 文件锁 / 占为 cwd，
+// 导致 git remove、rmSync、rename 全部失败、目录根本删不掉——`git worktree add` 必然撞 `already exists`，
+// 且**任何删除逻辑都无解**（实测 task 2ee00794：Worker 自身的 electron 进程 pid 持有该 worktree 内
+// node_modules/electron/.../default_app.asar 的句柄，自锁；Restart Manager 确认锁主即 Worker 进程本身）。
+// 此处抛出明确可执行的错误（而非让 add 抛晦涩的 already exists 让人反复重试），把根因 + 处置直接写进任务
+// error_message：重启 Worker 释放句柄后重试，重启后的新进程不再持锁，清理逻辑即可删掉残留目录、add 成功。
+function assertPathCleared(wtPath: string): void {
+  if (!existsSync(wtPath)) {
+    return;
+  }
+  throw new Error(
+    `工作树目录无法清理，被运行中的进程占用（OS 文件锁 / 进程 cwd）：${wtPath}\n` +
+      `git worktree remove / rmSync / rename 均失败 → 任何删除逻辑都无法腾出该路径，git worktree add 会一直撞 ` +
+      `"already exists"。常见为 Worker 自身的 electron 进程持有该 worktree 内 node_modules 的句柄（自锁）。\n` +
+      `处置：重启 ClaudeCenter Worker 释放句柄后重试——重启后的新进程不再持锁，清理逻辑会自动删掉残留目录、add 即成功。`
+  );
 }
 
 // 确保任务的工作树就绪。
@@ -102,6 +128,7 @@ export async function ensureWorktree(
     // removeWorktree 已 robust 清理（git remove + Node 强删 + prune），无论目标是已注册工作树还是孤儿残留目录
     //（含删不净的 node_modules）都清干净，随后的 add 不再撞 "already exists"。
     await removeWorktree(localPath, wtPath);
+    assertPathCleared(wtPath); // 清不掉（被进程占用）→ 抛明确可执行错误，而非让 add 抛晦涩的 already exists
     await runCommand(
       "git",
       ["-C", localPath, "worktree", "add", "--force", "-B", opts.workBranch, wtPath, opts.baseRef ?? opts.workBranch],
@@ -116,6 +143,7 @@ export async function ensureWorktree(
   }
   // 不是有效工作树（.git 丢失但目录作为孤儿残留 / 悬挂注册）：robust 清理后从已有 workBranch 重建（不再误报失败）。
   await removeWorktree(localPath, wtPath);
+  assertPathCleared(wtPath); // 同 fresh：清不掉（被进程占用）→ 抛明确可执行错误
   await runCommand(
     "git",
     ["-C", localPath, "worktree", "add", "--force", wtPath, opts.workBranch],

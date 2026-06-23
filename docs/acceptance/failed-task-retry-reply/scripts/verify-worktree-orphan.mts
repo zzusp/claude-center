@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { ensureWorktree, worktreePathFor } from "../../../../apps/worker/src/worktree.js";
 
 function git(cwd: string, args: string[]): string {
@@ -77,6 +77,32 @@ async function main_() {
   await ensureWorktree(main, wt, { workBranch, baseRef: workBranch, fresh: true });
   assert(existsSync(path.join(wt, ".git")) && isRegistered(main, wt), "D：fresh 重建已注册工作树成功（不再因 git remove 删不净而撞 already exists）");
   assert(!existsSync(path.join(wt, "dirty.txt")), "D：fresh 重建后旧脏文件已清（干净起点）");
+
+  // ---- 用例 E：目录被运行中的进程占用（无法删除，模拟真实 2ee00794：Worker electron 自锁 worktree）----
+  // 复现：起一个子进程把 cwd 钉在 wt 的子目录里 → Windows 下该目录及其祖先无法删除 → removeWorktree/rmSync 全失败。
+  // 期望：ensureWorktree 抛出**明确可执行**的「无法清理 / 被占用 → 重启」错误，而不是晦涩的 git "already exists"。
+  git(main, ["worktree", "remove", "--force", wt]);
+  git(main, ["worktree", "prune"]);
+  const lockedSub = path.join(wt, "node_modules", "locked");
+  mkdirSync(lockedSub, { recursive: true });
+  // 子进程把 cwd 钉在 lockedSub（不退出），Windows 即无法删除该目录及其祖先 wt。
+  const holder = spawn(process.execPath, ["-e", "setInterval(()=>{}, 1e9)"], { cwd: lockedSub, stdio: "ignore" });
+  await new Promise((r) => setTimeout(r, 500)); // 等子进程把 cwd 真正锁上
+  try {
+    let threw: Error | null = null;
+    try {
+      await ensureWorktree(main, wt, { workBranch, baseRef: workBranch, fresh: true });
+    } catch (e) {
+      threw = e instanceof Error ? e : new Error(String(e));
+    }
+    assert(threw !== null, "E：目录被占用、无法清理时 ensureWorktree 抛错（不静默吞）");
+    const msg = threw?.message ?? "";
+    assert(/无法清理/.test(msg) && /重启/.test(msg), `E：错误信息明确可执行（含「无法清理」+「重启」处置），实际：${msg.slice(0, 120)}`);
+    assert(!/^Command failed:/.test(msg), "E：不是晦涩的原始 git/shell 报错（Command failed...），而是根因+处置说明");
+  } finally {
+    holder.kill();
+    await new Promise((r) => setTimeout(r, 300));
+  }
 
   console.log("\nall worktree-orphan assertions passed");
 }
