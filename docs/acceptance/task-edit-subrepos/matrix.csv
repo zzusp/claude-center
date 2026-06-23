@@ -1,0 +1,7 @@
+case,description,round-1
+typecheck,五包 tsc --noEmit 全绿,PASS
+build,console next build 通过,PASS
+e2e-default-skipped,新建任务（不带 taskRepos）子仓默认 sub_status=skipped,PASS
+e2e-enable-branches,编辑表单启用子仓+自定义 base/work/target → task_repos 正确落库（非 skipped + 三分支匹配）,PASS
+e2e-disable,编辑表单取消勾选所有子仓（taskRepos=[]）→ 子仓回到 skipped,PASS
+ui-clickthrough,浏览器实点编辑表单勾选/改分支/保存并复核回填,NOT_RUN

@@ -1,11 +1,11 @@
 "use client";
 
-import type { Task } from "@claude-center/db";
+import type { ProjectRepo, Task, TaskRepo } from "@claude-center/db";
 import { Check, Send } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useAsyncAction } from "../lib/use-async-action";
 import { DateTimePicker, formatLocal, Select } from "./controls";
-import { DependencyPicker } from "./tasks-compose";
+import { DependencyPicker, SubRepoConfigSection, serializeTaskRepos, type SubStatesMap } from "./tasks-compose";
 
 // 任务编辑表单：详情页 + 任务流列表的编辑弹窗共用（仅草稿/定时态可编辑）。
 // 按「基本信息 / 分支配置 / 执行选项 / 调度」分区排版，与新建表单 ComposeTaskForm 保持一致。
@@ -31,6 +31,10 @@ export function TaskEditForm({
   const [candidatesLoaded, setCandidatesLoaded] = useState(false);
   const [dependsOn, setDependsOn] = useState<string[]>([]);
   const [depsReady, setDepsReady] = useState(false);
+  // 多仓任务（spec docs/spec/task-multi-repo.md）：项目子仓清单 + 每子仓启用/分支受控状态，与新建表单共用 SubRepoConfigSection。
+  // 预填来自任务现有 task_repos 快照：sub_status!=='skipped' 视为启用并沿用其分支，其余回退子仓默认分支。
+  const [subRepos, setSubRepos] = useState<ProjectRepo[]>([]);
+  const [subStates, setSubStates] = useState<SubStatesMap>({});
   // 提交意图：save 仅保存编辑（保留 draft/scheduled），publish 保存后立刻发布为 pending（待处理）。
   // 用 ref 而非 state，避免点击「保存并发布」后 setState 异步导致 handleSubmit 拿到旧值。
   const submitIntentRef = useRef<"save" | "publish">("save");
@@ -87,6 +91,51 @@ export function TaskEditForm({
     };
   }, [task.id, task.project_id, task.depends_on]);
 
+  // 拉项目子仓清单 + 任务现有 task_repos 快照，预填子仓启用/分支状态。
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      fetch(`/api/projects/${task.project_id}/repos`, { cache: "no-store" }).then((r) =>
+        r.ok ? (r.json() as Promise<{ repos: ProjectRepo[] }>) : Promise.reject(new Error())
+      ),
+      fetch(`/api/tasks/${task.id}`, { cache: "no-store" }).then((r) =>
+        r.ok ? (r.json() as Promise<{ taskRepos: TaskRepo[] }>) : Promise.reject(new Error())
+      )
+    ])
+      .then(([repoData, taskData]) => {
+        if (!active) return;
+        const subs = repoData.repos.filter((r) => r.role === "sub");
+        const snapshotByRepo = new Map((taskData.taskRepos ?? []).map((tr) => [tr.project_repo_id, tr]));
+        setSubRepos(subs);
+        setSubStates(
+          Object.fromEntries(
+            subs.map((s) => {
+              const snap = snapshotByRepo.get(s.id);
+              const enabled = snap ? snap.sub_status !== "skipped" : false;
+              return [
+                s.id,
+                {
+                  enabled,
+                  baseBranch: enabled && snap ? snap.base_branch : s.default_branch,
+                  workBranch: enabled && snap ? snap.work_branch : "",
+                  targetBranch: enabled && snap ? snap.target_branch : s.default_branch
+                }
+              ];
+            })
+          )
+        );
+      })
+      .catch(() => {
+        if (active) {
+          setSubRepos([]);
+          setSubStates({});
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [task.id, task.project_id]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -112,6 +161,9 @@ export function TaskEditForm({
           dynamicWorkflow,
           // 仅在依赖加载完成后才下发 dependsOn，避免「未加载完即保存」把原依赖清空（后端 undefined=保持不变）。
           dependsOn: depsReady ? dependsOn : undefined,
+          // 多仓任务：仅当项目有子仓且清单已加载（subRepos 非空即已加载成功）才整批下发，
+          // 否则不带该字段（后端 undefined=仅同步主仓行、保留原子仓配置），避免未加载就保存把子仓清空。
+          taskRepos: subRepos.length > 0 ? serializeTaskRepos(subStates) : undefined,
           scheduledAt: scheduledAtRaw ? new Date(scheduledAtRaw).toISOString() : null
         })
       });
@@ -294,6 +346,13 @@ export function TaskEditForm({
           )}
         </div>
       </section>
+
+      {subRepos.length > 0 ? (
+        <section className="form-section">
+          <h3 className="form-section-title">子仓配置</h3>
+          <SubRepoConfigSection subRepos={subRepos} subStates={subStates} onChange={setSubStates} />
+        </section>
+      ) : null}
 
       {error ? <div className="error-box">{error}</div> : null}
       <div className="form-actions">

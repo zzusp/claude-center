@@ -1,11 +1,4 @@
-import {
-  createProject,
-  getPool,
-  listProjectsForUser,
-  replaceProjectSubRepos,
-  type ProjectRepo,
-  type ProjectRepoInput
-} from "@claude-center/db";
+import { createProject, getPool, listProjectsForUser, type ProjectRepo } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, requireUser } from "../../lib/session";
 import { errorResponse, badRequest } from "../../lib/api";
@@ -54,59 +47,20 @@ export async function POST(request: NextRequest) {
       repoUrl?: string;
       defaultBranch?: string;
       description?: string;
-      subs?: Array<{ name?: string; repoUrl?: string; defaultBranch?: string; description?: string }>;
     };
 
     if (!body.name?.trim() || !body.repoUrl?.trim()) {
       return badRequest("Project name and repo URL are required");
     }
 
-    const repoUrl = body.repoUrl.trim();
-    const input = {
+    const project = await createProject(getPool(), {
       name: body.name.trim(),
-      repoUrl,
+      repoUrl: body.repoUrl.trim(),
       defaultBranch: body.defaultBranch?.trim() || "main",
       description: body.description?.trim() || ""
-    };
+    });
 
-    // 新建项目时可一并填写子仓（子项目）。校验与 PUT /repos 对齐：repoUrl 必填、不可与主仓相同、不可重复。
-    const subInputs: ProjectRepoInput[] = [];
-    for (const sub of body.subs ?? []) {
-      const subRepoUrl = sub.repoUrl?.trim();
-      if (!subRepoUrl) {
-        return badRequest("子仓必须填写 repoUrl");
-      }
-      if (subRepoUrl === repoUrl) {
-        return badRequest(`子仓 ${sub.name?.trim() || subRepoUrl} 的 repoUrl 不可与主仓相同`);
-      }
-      subInputs.push({
-        name: sub.name?.trim() || "",
-        repoUrl: subRepoUrl,
-        defaultBranch: sub.defaultBranch?.trim() || "main",
-        description: sub.description?.trim() || "",
-        position: subInputs.length + 1
-      });
-    }
-
-    // 无子仓：保持原行为（pool 直连）。有子仓：在一个事务里建项目 + 整批写子仓，保证原子性。
-    if (subInputs.length === 0) {
-      const project = await createProject(getPool(), input);
-      return NextResponse.json({ project }, { status: 201 });
-    }
-
-    const client = await getPool().connect();
-    try {
-      await client.query("BEGIN");
-      const project = await createProject(client, input);
-      await replaceProjectSubRepos(client, project.id, subInputs);
-      await client.query("COMMIT");
-      return NextResponse.json({ project }, { status: 201 });
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
+    return NextResponse.json({ project }, { status: 201 });
   } catch (error) {
     return errorResponse(error);
   }
