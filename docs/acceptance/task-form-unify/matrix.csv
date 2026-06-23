@@ -1,0 +1,8 @@
+case,round-1
+typecheck 5 包,PASS
+build 5 包（含 next webpack）,PASS
+e2e: 新建任务带 2 附件详情返回,PASS
+e2e: 编辑保留+新增+移除附件同步,PASS
+e2e: 被移除附件行真删除(二进制404),PASS
+e2e: 编辑清空附件全部移除,PASS
+e2e: 不带 attachmentIds 编辑保持原附件,PASS

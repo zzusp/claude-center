@@ -13,6 +13,7 @@ import {
   requestTaskCancellation,
   requestTaskRetry,
   setTaskDependencies,
+  syncTaskAttachments,
   unpublishTask,
   updateTask,
   type TaskRepoInput
@@ -23,6 +24,7 @@ import { requireTaskAccess } from "../../../lib/access";
 import { errorResponse, badRequest } from "../../../lib/api";
 import { projectChannel, publishRelay } from "../../../lib/relay-publish";
 import { buildTaskRepoInputs, type TaskRepoUserInput } from "../../../lib/task-repos-input";
+import { MAX_ATTACHMENTS_PER_OWNER } from "../../../lib/attachment-config";
 import type { Task, TaskModel, TaskSubmitMode } from "@claude-center/db";
 
 export const dynamic = "force-dynamic";
@@ -104,6 +106,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       // 多仓任务（spec docs/spec/task-multi-repo.md）：编辑时整批替换 task_repos。
       // 缺省时按主仓单行重新生成、其它子仓 skipped（兼容旧前端）。
       taskRepos?: TaskRepoUserInput[];
+      // 附件（spec docs/spec/task-attachments.md）：编辑时整批同步——desiredIds 为「保留 + 新增」全集。
+      // 显式数组才同步（新增项绑定 / 移除项删除）；undefined 时保持原附件不动（兼容不带附件 UI 的旧前端）。
+      attachmentIds?: string[];
     };
 
     // 项目隔离：非 admin 只能操作分配给自己项目下的任务。
@@ -147,6 +152,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const workBranch = isGit ? body.workBranch! : "";
       const targetBranch = isGit ? body.targetBranch! : "";
       const autoReply = body.autoReply === true;
+      // 附件：显式数组才同步。先做数量上限校验（与新建表单一致）。
+      if (Array.isArray(body.attachmentIds) && body.attachmentIds.length > MAX_ATTACHMENTS_PER_OWNER) {
+        return badRequest(`附件数量超过上限（${MAX_ATTACHMENTS_PER_OWNER}）`);
+      }
       // 多仓任务：在同事务里 updateTask + 整批替换 task_repos。先取项目仓清单再生成新 inputs。
       const client = await getPool().connect();
       let task: Task | null = null;
@@ -203,6 +212,16 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
                     updated_at = now()
               WHERE task_id = $1 AND role = 'main'`,
             [task.id, baseBranch, workBranch, targetBranch]
+          );
+        }
+        // 附件：显式数组才整批同步（新增项绑定 / 移除项删除）；undefined 保持原附件不动。
+        // admin 可借他人已上传的附件（ownerUserId=null），其它角色仅能用自己上传的。
+        if (Array.isArray(body.attachmentIds)) {
+          await syncTaskAttachments(
+            client,
+            task.id,
+            body.attachmentIds.filter((aid): aid is string => typeof aid === "string"),
+            user.role === "admin" ? null : user.id
           );
         }
         await client.query("COMMIT");
