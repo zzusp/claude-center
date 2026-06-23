@@ -60,23 +60,33 @@ async function gitTolerant(args: string[]): Promise<void> {
   }
 }
 
-// 移除一棵工作树并 prune 元数据。容错。
-export async function removeWorktree(localPath: string, wtPath: string): Promise<void> {
-  await gitTolerant(["-C", localPath, "worktree", "remove", "--force", wtPath]);
-  await gitTolerant(["-C", localPath, "worktree", "prune"]);
-}
-
-// 删掉残留在 wtPath 的「非工作树」孤儿目录：`git worktree remove` 只能拆「已注册工作树」，对注册元数据
-// 已丢失（被 prune 清掉）却仍占着磁盘的孤儿目录无能为力——此时若直接 `git worktree add`，git 会因目标
-// 目录已存在且非空而报 `fatal: '<path>' already exists`（实测 `--force` 也不豁免这一项），任务卡在
-// worktree 准备阶段、续接重试同样过不去。本函数 best-effort 删除该目录，让随后的 add 不再撞车；删不掉
-//（文件被占用等）则不阻断，交给 add 抛出明确错误由上层标 failed。
-function rmOrphanDir(wtPath: string): void {
+// 强删 wtPath 目录（Node 递归删）。关键兜底：Windows 上 `git worktree remove --force` 对含 node_modules 的
+// 长路径常**删不净**——要么整条失败、要么只摘了 git 注册却把目录留在盘上，于是下次 `git worktree add` 撞
+// `fatal: '<path>' already exists`（实测 `--force` 也不豁免「目标目录已存在且非空」这一项），任务卡死在
+// worktree 准备阶段、续接重试每次同样过不去（真实 task 2ee00794 即此：dir 在、node_modules 在、.git 丢、未注册）。
+// Node 的 rmSync 对 >260 长路径 + 只读文件都能删（已实测），比 git 自带删除可靠。**关键**：必须带 maxRetries——
+// Windows 删刚 npm install 出来的 node_modules 常撞瞬时锁（杀软扫描 / 句柄未及时释放 → EBUSY/EPERM/ENOTEMPTY），
+// 不重试的 rmSync 会当场抛错被吞、目录残留、add 继续撞 already exists（这正是上一版 fix 仍复发的原因）。
+// maxRetries 是 Node 官方对这几类 Windows 错误的解药（线性退避重试）；给足额度兜杀软几秒的扫描窗口。
+// 真被活进程独占才放弃，交给随后的 add 抛明确错误由上层标 failed。
+function rmWorktreeDir(wtPath: string): void {
+  if (!existsSync(wtPath)) {
+    return;
+  }
   try {
-    rmSync(wtPath, { recursive: true, force: true });
+    rmSync(wtPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   } catch {
     // 删不掉留给 worktree add 报 "already exists"，上层据此标 failed。
   }
+}
+
+// 移除一棵工作树并 prune 元数据。容错。
+// 顺序：先 git remove（摘注册、尽量删盘）→ Node 强删兜底（git 在 Windows 长路径/node_modules 上常删不净，
+// 留下无 .git 的孤儿目录）→ prune 清悬挂注册。三步后该路径在盘上与 git 注册里都不再残留，下次 add 不撞车。
+export async function removeWorktree(localPath: string, wtPath: string): Promise<void> {
+  await gitTolerant(["-C", localPath, "worktree", "remove", "--force", wtPath]);
+  rmWorktreeDir(wtPath);
+  await gitTolerant(["-C", localPath, "worktree", "prune"]);
 }
 
 // 确保任务的工作树就绪。
@@ -89,9 +99,9 @@ export async function ensureWorktree(
 ): Promise<void> {
   ensureWorktreesIgnored(localPath);
   if (opts.fresh) {
+    // removeWorktree 已 robust 清理（git remove + Node 强删 + prune），无论目标是已注册工作树还是孤儿残留目录
+    //（含删不净的 node_modules）都清干净，随后的 add 不再撞 "already exists"。
     await removeWorktree(localPath, wtPath);
-    // removeWorktree 只拆「已注册工作树」；注册已丢却残留磁盘的孤儿目录它管不到，先兜底删掉，否则 add 撞 "already exists"。
-    rmOrphanDir(wtPath);
     await runCommand(
       "git",
       ["-C", localPath, "worktree", "add", "--force", "-B", opts.workBranch, wtPath, opts.baseRef ?? opts.workBranch],
@@ -104,10 +114,8 @@ export async function ensureWorktree(
   if (existsSync(path.join(wtPath, ".git"))) {
     return;
   }
-  // 走到这里说明 wtPath 不是有效工作树：注册可能已被 prune，但目录作为孤儿残留（非空）。prune 清悬挂注册，
-  // 再兜底删掉孤儿目录，避免 worktree add 撞 "already exists"，最后从已有 workBranch 重建（不再误报失败）。
-  await gitTolerant(["-C", localPath, "worktree", "prune"]);
-  rmOrphanDir(wtPath);
+  // 不是有效工作树（.git 丢失但目录作为孤儿残留 / 悬挂注册）：robust 清理后从已有 workBranch 重建（不再误报失败）。
+  await removeWorktree(localPath, wtPath);
   await runCommand(
     "git",
     ["-C", localPath, "worktree", "add", "--force", wtPath, opts.workBranch],
