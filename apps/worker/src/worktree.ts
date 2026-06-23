@@ -89,6 +89,24 @@ export async function removeWorktree(localPath: string, wtPath: string): Promise
   await gitTolerant(["-C", localPath, "worktree", "prune"]);
 }
 
+// removeWorktree 后该路径理应已清空；若仍存在，说明目录被某个**运行中的进程**持有 OS 文件锁 / 占为 cwd，
+// 导致 git remove、rmSync、rename 全部失败、目录根本删不掉——`git worktree add` 必然撞 `already exists`，
+// 且**任何删除逻辑都无解**（实测 task 2ee00794：Worker 自身的 electron 进程 pid 持有该 worktree 内
+// node_modules/electron/.../default_app.asar 的句柄，自锁；Restart Manager 确认锁主即 Worker 进程本身）。
+// 此处抛出明确可执行的错误（而非让 add 抛晦涩的 already exists 让人反复重试），把根因 + 处置直接写进任务
+// error_message：重启 Worker 释放句柄后重试，重启后的新进程不再持锁，清理逻辑即可删掉残留目录、add 成功。
+function assertPathCleared(wtPath: string): void {
+  if (!existsSync(wtPath)) {
+    return;
+  }
+  throw new Error(
+    `工作树目录无法清理，被运行中的进程占用（OS 文件锁 / 进程 cwd）：${wtPath}\n` +
+      `git worktree remove / rmSync / rename 均失败 → 任何删除逻辑都无法腾出该路径，git worktree add 会一直撞 ` +
+      `"already exists"。常见为 Worker 自身的 electron 进程持有该 worktree 内 node_modules 的句柄（自锁）。\n` +
+      `处置：重启 ClaudeCenter Worker 释放句柄后重试——重启后的新进程不再持锁，清理逻辑会自动删掉残留目录、add 即成功。`
+  );
+}
+
 // 确保任务的工作树就绪。
 // fresh（新任务）：删旧 → 从 origin/<base> 新建工作分支 workBranch 的工作树。
 // recover（续接/打回重跑）：工作树在就复用；不在则从已有 workBranch 重建。
@@ -102,6 +120,7 @@ export async function ensureWorktree(
     // removeWorktree 已 robust 清理（git remove + Node 强删 + prune），无论目标是已注册工作树还是孤儿残留目录
     //（含删不净的 node_modules）都清干净，随后的 add 不再撞 "already exists"。
     await removeWorktree(localPath, wtPath);
+    assertPathCleared(wtPath); // 清不掉（被进程占用）→ 抛明确可执行错误，而非让 add 抛晦涩的 already exists
     await runCommand(
       "git",
       ["-C", localPath, "worktree", "add", "--force", "-B", opts.workBranch, wtPath, opts.baseRef ?? opts.workBranch],
@@ -116,6 +135,7 @@ export async function ensureWorktree(
   }
   // 不是有效工作树（.git 丢失但目录作为孤儿残留 / 悬挂注册）：robust 清理后从已有 workBranch 重建（不再误报失败）。
   await removeWorktree(localPath, wtPath);
+  assertPathCleared(wtPath); // 同 fresh：清不掉（被进程占用）→ 抛明确可执行错误
   await runCommand(
     "git",
     ["-C", localPath, "worktree", "add", "--force", wtPath, opts.workBranch],

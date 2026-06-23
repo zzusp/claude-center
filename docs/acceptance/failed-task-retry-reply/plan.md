@@ -28,6 +28,22 @@ DB ground truth（task 2ee00794，今早日志 + 现场磁盘状态）：
 关键实测：Node 的 `rmSync(recursive, force)` 能删 >260 长路径 + 只读文件的 node_modules 树（git 自带删除做不到）。
 故兜底删目录要用 Node 强删，不能靠 `git worktree remove`。
 
+### 根因 1.b（第三轮才挖到的真因）：Worker 进程**自锁** worktree 的 electron，目录根本删不掉
+
+前两版 fix（rmSync + retries）对**普通仓库**有效，但 task 2ee00794 仍复发。第三轮直接对**真实孤儿目录**实测：
+
+- `rmSync` → `EBUSY: ... unlink '...\node_modules\electron\dist\resources\default_app.asar'`
+- `Rename-Item`（改名挪开）→ `Access denied`
+- Restart Manager(`rstrtmgr.dll` RmGetList) 查锁主 → **PID 58096 = 运行中的 Worker 本身**（`electron .`，主检出）
+
+即：被开发的仓库就是 claude-center（electron 应用），worktree 里 `npm install` 装出 `node_modules/electron`，而
+**运行中的 Worker（electron 进程）持有该 worktree 内 `default_app.asar` 的 OS 句柄（自锁）**。只要 Worker 在跑，
+该目录就**无法删除、无法改名**——`git worktree remove` / `rmSync` / `rename` 全失败，`git worktree add` 必然
+`already exists`，**任何删除逻辑都无解**。`node_modules/electron` 经核验是真实安装（非 junction）、`default_app.asar`
+单链接（非 hardlink）。
+
+→ **唯一解是重启 Worker**：释放句柄 + 加载已构建的新代码；重启后的新进程不再持锁，清理逻辑即可删掉残留目录、add 成功。
+
 ### 根因 2：失败任务无会话时不允许回复续接
 
 - DB `claimNextResumableTask` 要求 `claude_session_id IS NOT NULL` 才认领终态任务——失败在 worktree 准备
@@ -49,13 +65,18 @@ DB ground truth（task 2ee00794，今早日志 + 现场磁盘状态）：
 4. `apps/console/app/ui/task-detail-session.tsx`：`terminalResumable` 不再要求会话非空；占位文案按是否有会话
    区分「续接同一会话」/「带补充重新执行」。
 5. 文档同步：`packages/db/src/task-state.ts` 的 `REPLYABLE_TERMINAL_STATUSES` 注释更新。
+6. `apps/worker/src/worktree.ts`：新增 `assertPathCleared`——`removeWorktree` 后若目录仍在（被运行中的进程
+   占用、删不掉，即根因 1.b 的 Worker 自锁），抛**明确可执行**错误（「被占用 → 重启 Worker」）而非让
+   `git worktree add` 抛晦涩的 `already exists`，让 error_message 自带根因 + 处置，不再让人反复重试瞎猜。
+   注意：这**不能**让锁存续期间的重试成功（删除逻辑对自锁无解），只把失败变得自解释；真正解除靠重启 Worker。
 
 ## 验证
 
 | 用例 | 脚本 | 结果 |
 | --- | --- | --- |
-| recover/fresh 撞孤儿目录(含 node_modules)能重建、复用不丢未提交改动、已注册工作树 fresh 重建（含 node_modules） | `scripts/verify-worktree-orphan.mts`（驱动真实 `ensureWorktree`/`removeWorktree`，12 断言） | PASS |
+| recover/fresh 撞孤儿目录(含 node_modules)能重建、复用不丢未提交改动、已注册工作树 fresh 重建；**目录被进程占用→抛明确可执行错误（非 already exists）** | `scripts/verify-worktree-orphan.mts`（驱动真实 `ensureWorktree`/`removeWorktree`，16 断言，含子进程占目录的真实锁场景 E） | PASS |
 | Node `rmSync` 能删 >260 长路径 + 只读的 node_modules 树（git remove 做不到） | 临时实测 | PASS |
+| 真实孤儿目录锁主定位：`rmSync`→EBUSY、`rename`→Access Denied、Restart Manager→锁主=Worker 进程(pid 58096) | 对真实 `worktree-2ee00794-...` 实测 | PASS |
 | 无会话失败任务收到回复后被认领续接（+ 不回归、防重领） | `scripts/smoke-reply-no-session.mts`（ephemeral PG） | PASS |
 | 原「停不下来」防重领行为不回归 | `scripts/smoke-resume-loop-stop.mts`（ephemeral PG） | PASS |
 | `npm run typecheck` / `npm run build`（5 包，含 next build） | — | PASS |
@@ -69,8 +90,16 @@ node scripts/run-smoke-against-ephemeral.mjs scripts/smoke-resume-loop-stop.mts
 # 只读诊断真实任务现场：node docs/acceptance/failed-task-retry-reply/scripts/diag-task.mjs [taskId]
 ```
 
-## 部署说明
+## 部署说明 / 当前任务处置（重要）
 
-worker 是常驻 Electron 桌面进程，用的是它**已构建/安装的代码**——本次修复需**重新构建并重启 worker** 才生效
-（今早 00:25 / 00:27 仍报相同错误是因为跑的还是旧代码）。重启后续接重试会自愈：fresh 路径的 `removeWorktree`
-会用 Node 强删把残留的 `worktree-2ee00794-...` 孤儿目录（含 node_modules）清掉，再 `worktree add` 即成功。
+**必须重启 ClaudeCenter Worker**——这是 task 2ee00794 唯一的解，原因有二，且二者都靠「重启」一并解决：
+
+1. **释放自锁**（根因 1.b）：运行中的 Worker 进程（electron，pid 58096）正持有残留孤儿目录
+   `worktree-2ee00794-...\node_modules\electron\...\default_app.asar` 的 OS 句柄。只要它在跑，该目录就删不掉、
+   改不了名 → `git worktree add` 永远 `already exists`。**已对真实目录验证：rmSync→EBUSY、rename→Access Denied、
+   Restart Manager 确认锁主就是 Worker 本身**。代码层无法在锁存续期间解除，重启新进程才会释放句柄。
+2. **加载新代码**：Worker 跑的是已构建代码，源码改了不自动生效。
+
+重启后：新 Worker 进程不再持锁 → 下一次续接重试时 `removeWorktree` 的 Node 强删即可删掉残留孤儿目录 →
+`worktree add` 成功 → 任务正常继续。若届时仍有别的进程占用，会得到 `assertPathCleared` 的明确报错（指明被占用、
+该重启），而不再是晦涩的 `already exists`。
