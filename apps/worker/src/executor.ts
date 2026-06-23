@@ -55,6 +55,7 @@ import {
   conversationWorktreePathFor,
   ensureSubRepoCloned,
   ensureWorktree,
+  isGitRepo,
   resolveSubRepoRelativePath,
   worktreePathFor
 } from "./worktree.js";
@@ -433,24 +434,45 @@ function worktreeAnchor(wtPath: string): string[] {
   ];
 }
 
-function taskPrompt(task: Task, attachments: AttachmentMeta[], wtPath: string): string {
+// 非 git 项目（docs/spec/non-git-projects.md）的工作目录锚点：直接在 localPath 就地改，没有 worktree / 分支 / commit / PR。
+function projectDirAnchor(cwd: string): string[] {
   return [
-    ...worktreeAnchor(wtPath),
+    `You are running inside the project directory at: ${cwd}`,
+    "This project is NOT under version control (no git): there are no branches, commits, or pull requests. Make the requested changes directly in this directory; they are applied in place.",
+    "This directory is your ONLY working directory: do NOT read, search, or edit files outside it. Prefer paths relative to this directory.",
+    ""
+  ];
+}
+
+// git 项目用 worktree 锚点；非 git 项目用「项目目录」锚点。cwd 为 Claude 的工作目录（git=worktree，非 git=localPath）。
+function dirAnchor(cwd: string, isGit: boolean): string[] {
+  return isGit ? worktreeAnchor(cwd) : projectDirAnchor(cwd);
+}
+
+function workHere(isGit: boolean): string {
+  return isGit
+    ? "Work directly in this worktree. Implement the requested code changes, keep edits scoped, and run the most relevant local verification command when possible."
+    : "Work directly in this directory. Implement the requested changes, keep edits scoped, and run the most relevant local verification command when possible.";
+}
+
+function taskPrompt(task: Task, attachments: AttachmentMeta[], cwd: string, isGit: boolean): string {
+  return [
+    ...dirAnchor(cwd, isGit),
     `ClaudeCenter task: ${task.title}`,
     "",
     "Goal:",
     task.description,
     "",
-    "Work directly in this worktree. Implement the requested code changes, keep edits scoped, and run the most relevant local verification command when possible.",
+    workHere(isGit),
     ...attachmentSection(attachments),
     "",
     ...replyDirective(task)
   ].join("\n");
 }
 
-function resumePrompt(task: Task, reply: string, attachments: AttachmentMeta[], wtPath: string): string {
+function resumePrompt(task: Task, reply: string, attachments: AttachmentMeta[], cwd: string, isGit: boolean): string {
   return [
-    ...worktreeAnchor(wtPath),
+    ...dirAnchor(cwd, isGit),
     "The user replied to your question:",
     "",
     reply,
@@ -465,9 +487,9 @@ function resumePrompt(task: Task, reply: string, attachments: AttachmentMeta[], 
 // 无会话续接 prompt:对失败 / 取消时 Claude 还没产出 session(如失败在 worktree 准备阶段)的任务,
 // 用户补一句话即可让它从头执行——没有可 --resume 的旧会话,故给完整任务描述 + 用户补充,等同首轮 taskPrompt
 // 但额外注入用户的补充说明(全新工作树,需重列任务原始附件)。
-function freshReplyPrompt(task: Task, reply: string, attachments: AttachmentMeta[], wtPath: string): string {
+function freshReplyPrompt(task: Task, reply: string, attachments: AttachmentMeta[], cwd: string, isGit: boolean): string {
   return [
-    ...worktreeAnchor(wtPath),
+    ...dirAnchor(cwd, isGit),
     `ClaudeCenter task: ${task.title}`,
     "",
     "Goal:",
@@ -477,7 +499,7 @@ function freshReplyPrompt(task: Task, reply: string, attachments: AttachmentMeta
     "",
     reply,
     "",
-    "Work directly in this worktree. Implement the requested code changes, keep edits scoped, and run the most relevant local verification command when possible.",
+    workHere(isGit),
     ...attachmentSection(attachments),
     "",
     ...replyDirective(task)
@@ -485,12 +507,13 @@ function freshReplyPrompt(task: Task, reply: string, attachments: AttachmentMeta
 }
 
 // 续接重试 prompt:failed 任务带上次失败原因(error_message);cancelled 任务无 error_message,
-// 用「此前被中断」措辞。让 Claude 带着「上次为什么没成」在当前分支接着干。
-function retryPrompt(task: Task, attachments: AttachmentMeta[], wtPath: string): string {
+// 用「此前被中断」措辞。让 Claude 带着「上次为什么没成」接着干（git 在当前分支，非 git 在项目目录就地）。
+function retryPrompt(task: Task, attachments: AttachmentMeta[], cwd: string, isGit: boolean): string {
+  const where = isGit ? "on the current branch" : "in the project directory";
   const head = task.error_message?.trim()
-    ? ["Your previous run failed with this error:", "", task.error_message.trim(), "", "Fix the cause and complete the task on the current branch."]
-    : ["Your previous run was interrupted before completing.", "", "Continue and complete the task on the current branch."];
-  return [...worktreeAnchor(wtPath), ...head, ...attachmentSection(attachments), "", ...replyDirective(task)].join("\n");
+    ? ["Your previous run failed with this error:", "", task.error_message.trim(), "", `Fix the cause and complete the task ${where}.`]
+    : ["Your previous run was interrupted before completing.", "", `Continue and complete the task ${where}.`];
+  return [...dirAnchor(cwd, isGit), ...head, ...attachmentSection(attachments), "", ...replyDirective(task)].join("\n");
 }
 
 // GitHub PR body 上限 65536 字符；正文主体（Claude 的结构化产出）留足额度，超长才从尾部截断
@@ -683,6 +706,7 @@ async function handleClaudeTurn(
   wtPath: string,
   ctxs: TaskRepoCtx[],
   turn: ClaudeTurn,
+  isGit: boolean,
   onSpawn?: (child: ChildProcess) => void
 ): Promise<void> {
   const pool = getPool();
@@ -705,7 +729,8 @@ async function handleClaudeTurn(
       // auto_reply 兜底分支：所有参与仓零改动 → 直接 fail（任务多半描述不全，再问也是同样结果）；
       // 任一仓有改动 → 自动塞一条 user 评论让现有 resumable 流续接，cap=AUTO_REPLY_MAX_ROUNDS。
       if (task.auto_reply) {
-        const hasChanges = await anyRepoHasChanges(ctxs, localPath, task.id);
+        // 非 git 项目无法用 git status 判定改动，恒按「有改动」处理（走续接兜底而非零改动直接 fail）。
+        const hasChanges = isGit ? await anyRepoHasChanges(ctxs, localPath, task.id) : true;
         if (!hasChanges) {
           await markTaskFailed(
             pool,
@@ -758,7 +783,7 @@ async function handleClaudeTurn(
       await materializeAttachments(wtPath, replyAtts);
       await addTaskEvent(pool, task.id, config.workerId, "resumed", "用户执行中留言，直接注入续接", { injected: true });
       current = await runTaskClaude(config, task.id, {
-        prompt: resumePrompt(task, reply, replyAtts, wtPath),
+        prompt: resumePrompt(task, reply, replyAtts, wtPath, isGit),
         cwd: wtPath,
         resumeSessionId: current.sessionId ?? undefined,
         model: task.model,
@@ -770,7 +795,32 @@ async function handleClaudeTurn(
     break;
   }
 
-  await finalizeTaskMultiRepo(config, task, localPath, wtPath, ctxs, current.result);
+  if (isGit) {
+    await finalizeTaskMultiRepo(config, task, localPath, wtPath, ctxs, current.result);
+  } else {
+    await finalizeNonGitTask(config, task, localPath, current.result);
+  }
+}
+
+// 非 git 项目收尾：就地改完即成功，无 commit/push/PR。pr_url 恒为 null（merge-check 候选已要求 pr_url 非空，天然排除）。
+async function finalizeNonGitTask(
+  config: WorkerConfig,
+  task: Task,
+  localPath: string,
+  claudeOutput: string
+): Promise<void> {
+  const pool = getPool();
+  await markTaskSuccess(
+    pool,
+    task.id,
+    config.workerId,
+    {
+      workdir: localPath,
+      nonGit: true,
+      claudeResult: claudeOutput
+    },
+    null
+  );
 }
 
 // 多仓 helper：任一参与仓 git status 非空即返回 true（auto_reply 兜底判定用）。
@@ -1196,25 +1246,26 @@ export async function executeTask(config: WorkerConfig, task: Task, hooks?: Exec
       throw new Error(`No local path linked for task ${task.id}`);
     }
 
-    // 多仓任务支持（spec §6）：循环 task_repos 各自签出 worktree。主仓 wtPath 是 Claude cwd；
-    // 子仓 worktree 原位嫁接到主 wtPath 内对应子目录，Claude 自然看到全部代码。
-    // 单仓项目仅一行主仓 → 行为等价于改造前。
-    const wtPath = worktreePathFor(localPath, task.id);
-    const ctxs = await prepareAllRepoWorktrees(task, localPath, true, config.workerId);
+    // 多仓任务支持（spec §6）：git 项目循环 task_repos 各自签出 worktree。主仓 wtPath 是 Claude cwd；
+    // 子仓 worktree 原位嫁接到主 wtPath 内对应子目录，Claude 自然看到全部代码。单仓项目仅一行主仓 → 等价于改造前。
+    // 非 git 项目（docs/spec/non-git-projects.md）：无 worktree / 无 task_repos，直接在 localPath 就地跑。
+    const isGit = isGitRepo(localPath);
+    const wtPath = isGit ? worktreePathFor(localPath, task.id) : localPath;
+    const ctxs = isGit ? await prepareAllRepoWorktrees(task, localPath, true, config.workerId) : [];
 
     // 附件落盘（spec docs/spec/task-attachments.md §Worker 流程）：写到 wtPath/.claude-attachments/，
-    // prompt 末尾列相对路径让 Claude 读。
+    // prompt 末尾列相对路径让 Claude 读（非 git 时 wtPath=localPath，附件落在项目目录里）。
     const taskAtts = await loadTaskAttachments(task.id);
     await materializeAttachments(wtPath, taskAtts);
 
     const turn = await runTaskClaude(config, task.id, {
-      prompt: taskPrompt(task, taskAtts, wtPath),
+      prompt: taskPrompt(task, taskAtts, wtPath, isGit),
       cwd: wtPath,
       model: task.model,
       dynamicWorkflow: task.dynamic_workflow,
       onSpawn: hooks?.onClaudeSpawn
     });
-    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, hooks?.onClaudeSpawn);
+    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, isGit, hooks?.onClaudeSpawn);
   } catch (error) {
     // 失败保留工作树:供「续接重试」精确恢复未提交改动(见 docs/spec/task-event-timeline-retry.md §4.3);
     // 不重试也不激活的残留树由 GC 在任务离开 failed/cancelled 后回收。
@@ -1246,9 +1297,11 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
       return;
     }
 
-    const wtPath = worktreePathFor(localPath, task.id);
-    // 有会话：复用所有参与仓的 worktree（被 GC 清理过则按 work_branch 重建）。无会话：fresh 从 origin/<base> 重建。
-    const ctxs = await prepareAllRepoWorktrees(task, localPath, !resume, config.workerId);
+    const isGit = isGitRepo(localPath);
+    const wtPath = isGit ? worktreePathFor(localPath, task.id) : localPath;
+    // git：有会话复用所有参与仓的 worktree（被 GC 清理过则按 work_branch 重建），无会话 fresh 从 origin/<base> 重建。
+    // 非 git：无 worktree / 无 task_repos，直接在 localPath 就地续接。
+    const ctxs = isGit ? await prepareAllRepoWorktrees(task, localPath, !resume, config.workerId) : [];
     // 落本轮回复的附件（已存在同 sha256 跳过）；任务原始附件可能在初轮已落但 GC 后会丢，所以一并补落。
     const replyAtts = await loadReplyAttachments(task.id);
     const taskAtts = await loadTaskAttachments(task.id);
@@ -1257,15 +1310,15 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
     const turn = await runTaskClaude(config, task.id, {
       // 有会话续接同一会话注入回复；无会话给完整任务描述 + 用户补充从头跑（全新工作树需重列任务原始附件）。
       prompt: resume
-        ? resumePrompt(task, reply, replyAtts, wtPath)
-        : freshReplyPrompt(task, reply, [...taskAtts, ...replyAtts], wtPath),
+        ? resumePrompt(task, reply, replyAtts, wtPath, isGit)
+        : freshReplyPrompt(task, reply, [...taskAtts, ...replyAtts], wtPath, isGit),
       cwd: wtPath,
       resumeSessionId: task.claude_session_id ?? undefined,
       model: task.model,
       dynamicWorkflow: task.dynamic_workflow,
       onSpawn: hooks?.onClaudeSpawn
     });
-    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, hooks?.onClaudeSpawn);
+    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, isGit, hooks?.onClaudeSpawn);
   } catch (error) {
     // 失败保留工作树(供续接重试),不删树。
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
@@ -1290,9 +1343,11 @@ export async function retryFailedTask(config: WorkerConfig, task: Task, hooks?: 
     }
 
     const resume = Boolean(task.claude_session_id);
-    const wtPath = worktreePathFor(localPath, task.id);
-    // 多仓重试：有 session 复用所有仓 worktree；无 session 所有仓 fresh:true 重建。
-    const ctxs = await prepareAllRepoWorktrees(task, localPath, !resume, config.workerId);
+    const isGit = isGitRepo(localPath);
+    const wtPath = isGit ? worktreePathFor(localPath, task.id) : localPath;
+    // git 多仓重试：有 session 复用所有仓 worktree；无 session 所有仓 fresh:true 重建。
+    // 非 git：无 worktree / 无 task_repos，直接在 localPath 就地重试。
+    const ctxs = isGit ? await prepareAllRepoWorktrees(task, localPath, !resume, config.workerId) : [];
     // 重试一律重落任务原始附件（无论 resume / fresh）；fresh 时 worktree 全新没附件，resume 时也补落兜底。
     const taskAtts = await loadTaskAttachments(task.id);
     await materializeAttachments(wtPath, taskAtts);
@@ -1301,14 +1356,14 @@ export async function retryFailedTask(config: WorkerConfig, task: Task, hooks?: 
     });
 
     const turn = await runTaskClaude(config, task.id, {
-      prompt: resume ? retryPrompt(task, taskAtts, wtPath) : taskPrompt(task, taskAtts, wtPath),
+      prompt: resume ? retryPrompt(task, taskAtts, wtPath, isGit) : taskPrompt(task, taskAtts, wtPath, isGit),
       cwd: wtPath,
       resumeSessionId: task.claude_session_id ?? undefined,
       model: task.model,
       dynamicWorkflow: task.dynamic_workflow,
       onSpawn: hooks?.onClaudeSpawn
     });
-    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, hooks?.onClaudeSpawn);
+    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, isGit, hooks?.onClaudeSpawn);
   } catch (error) {
     await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
       failedAt: new Date().toISOString()
@@ -1443,14 +1498,18 @@ export async function executeConversationTurn(
       throw new Error(`Conversation ${conv.id} has no pending user prompt`);
     }
 
-    // 只读检出：每会话一棵 worktree（项目内 .claude/worktrees/），检出到 origin/<branch>。首轮新建，续轮复用；全程不 commit。
-    const wtPath = conversationWorktreePathFor(localPath, conv.id);
-    await runCommand("git", ["-C", localPath, "fetch", "origin"], { timeoutMs: 10 * 60_000 });
-    await ensureWorktree(localPath, wtPath, {
-      workBranch: `cc-conv-${conv.id}`,
-      baseRef: `origin/${conv.branch}`,
-      fresh: !existsSync(path.join(wtPath, ".git"))
-    });
+    // git 项目：只读检出——每会话一棵 worktree（项目内 .claude/worktrees/），检出到 origin/<branch>。首轮新建，续轮复用；全程不 commit。
+    // 非 git 项目（docs/spec/non-git-projects.md）：无分支可检出，直接在 localPath 就地跑（无 worktree / 无 fetch）。
+    const isGit = isGitRepo(localPath);
+    const wtPath = isGit ? conversationWorktreePathFor(localPath, conv.id) : localPath;
+    if (isGit) {
+      await runCommand("git", ["-C", localPath, "fetch", "origin"], { timeoutMs: 10 * 60_000 });
+      await ensureWorktree(localPath, wtPath, {
+        workBranch: `cc-conv-${conv.id}`,
+        baseRef: `origin/${conv.branch}`,
+        fresh: !existsSync(path.join(wtPath, ".git"))
+      });
+    }
 
     // 附件落盘到 worktree 内 .claude-attachments/（同 sha256 跨轮跳过），并把相对路径附到 prompt 末尾，
     // 让本地 claude -p 读到（图片走 vision）。与 task / comment 同一套 §Worker 流程（task-attachments.md）。

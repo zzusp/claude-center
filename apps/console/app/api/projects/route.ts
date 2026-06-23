@@ -47,17 +47,24 @@ export async function POST(request: NextRequest) {
       repoUrl?: string;
       defaultBranch?: string;
       description?: string;
+      vcs?: string;
     };
 
-    if (!body.name?.trim() || !body.repoUrl?.trim()) {
-      return badRequest("Project name and repo URL are required");
+    // 非 git 项目（vcs='none'）：本地目录，不需要 repo_url / 分支。git 项目仍强校验 repo_url。
+    const vcs = body.vcs === "none" ? "none" : "git";
+    if (!body.name?.trim()) {
+      return badRequest("Project name is required");
+    }
+    if (vcs === "git" && !body.repoUrl?.trim()) {
+      return badRequest("Git project requires a repo URL");
     }
 
     const project = await createProject(getPool(), {
       name: body.name.trim(),
-      repoUrl: body.repoUrl.trim(),
-      defaultBranch: body.defaultBranch?.trim() || "main",
-      description: body.description?.trim() || ""
+      repoUrl: vcs === "git" ? body.repoUrl!.trim() : null,
+      defaultBranch: vcs === "git" ? body.defaultBranch?.trim() || "main" : "",
+      description: body.description?.trim() || "",
+      vcs
     });
 
     return NextResponse.json({ project }, { status: 201 });

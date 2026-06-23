@@ -48,10 +48,15 @@ function ComposeTaskForm({
   // 前置任务选择：受控 id 列表，DependencyPicker 渲染 hidden dependsOn 输入供 FormData 取值。
   const [dependsOn, setDependsOn] = useState<string[]>([]);
 
+  // 非 git 项目（vcs='none'）：无分支 / 无 PR / 无子仓——隐藏分支配置、提交模式、自动合并、子仓区，且不拉分支。
+  const selectedProject = projects.find((p) => p.id === selectedProjectId);
+  const isGit = (selectedProject?.vcs ?? "git") === "git";
+
   useEffect(() => {
     // 切换项目后清空前置选择（前置任务限同项目，跨项目的旧选择已失效）。
     setDependsOn([]);
-    if (!selectedProjectId) {
+    if (!selectedProjectId || !isGit) {
+      // 未选项目 / 非 git 项目都无远程分支与子仓可拉。
       setBranches([]);
       setBranchState("idle");
       setSubRepos([]);
@@ -98,7 +103,7 @@ function ComposeTaskForm({
     return () => {
       active = false;
     };
-  }, [selectedProjectId]);
+  }, [selectedProjectId, isGit]);
 
   const branchHint =
     branchState === "loading"
@@ -160,55 +165,66 @@ function ComposeTaskForm({
         </div>
       </section>
 
-      <section className="form-section">
-        <h3 className="form-section-title">
-          分支配置
-          <span className="form-section-title-hint">{branchHint}</span>
-        </h3>
-        <div className="form-row">
-          <div className="field">
-            <label className="field-label">签出分支</label>
-            <input name="baseBranch" list="cc-branch-list" defaultValue="main" placeholder="main" />
+      {isGit ? (
+        <section className="form-section">
+          <h3 className="form-section-title">
+            分支配置
+            <span className="form-section-title-hint">{branchHint}</span>
+          </h3>
+          <div className="form-row">
+            <div className="field">
+              <label className="field-label">签出分支</label>
+              <input name="baseBranch" list="cc-branch-list" defaultValue="main" placeholder="main" />
+            </div>
+            <div className="field">
+              <label className="field-label">
+                PR 目标分支 <span className="field-hint">留空同签出分支</span>
+              </label>
+              <input name="targetBranch" list="cc-branch-list" placeholder="main" />
+            </div>
           </div>
-          <div className="field">
-            <label className="field-label">
-              PR 目标分支 <span className="field-hint">留空同签出分支</span>
-            </label>
-            <input name="targetBranch" list="cc-branch-list" placeholder="main" />
+          <datalist id="cc-branch-list">
+            {branches.map((branch) => (
+              <option key={branch} value={branch} />
+            ))}
+          </datalist>
+          <div className="form-row">
+            <div className="field">
+              <label className="field-label">
+                工作分支 <span className="field-hint">留空自动生成</span>
+              </label>
+              <input name="workBranch" placeholder="cc/..." />
+            </div>
+            <div className="field">
+              <label className="field-label">提交模式</label>
+              <Select
+                name="submitMode"
+                value={submitMode}
+                onChange={(value) => setSubmitMode(value as "pr" | "push")}
+                options={[
+                  { value: "pr", label: "创建 PR" },
+                  { value: "push", label: "直接提交推送" }
+                ]}
+                ariaLabel="提交模式"
+              />
+            </div>
           </div>
-        </div>
-        <datalist id="cc-branch-list">
-          {branches.map((branch) => (
-            <option key={branch} value={branch} />
-          ))}
-        </datalist>
-        <div className="form-row">
+        </section>
+      ) : (
+        <section className="form-section">
+          <h3 className="form-section-title">非 Git 项目</h3>
           <div className="field">
-            <label className="field-label">
-              工作分支 <span className="field-hint">留空自动生成</span>
-            </label>
-            <input name="workBranch" placeholder="cc/..." />
+            <span className="field-hint">
+              该项目是非 Git 本地目录：Worker 在关联目录里直接执行 Claude、就地修改文件，无分支 / 提交 / PR。
+            </span>
           </div>
-          <div className="field">
-            <label className="field-label">提交模式</label>
-            <Select
-              name="submitMode"
-              value={submitMode}
-              onChange={(value) => setSubmitMode(value as "pr" | "push")}
-              options={[
-                { value: "pr", label: "创建 PR" },
-                { value: "push", label: "直接提交推送" }
-              ]}
-              ariaLabel="提交模式"
-            />
-          </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <section className="form-section">
         <h3 className="form-section-title">执行选项</h3>
         <div className="form-row">
-          {submitMode === "pr" ? (
+          {isGit && submitMode === "pr" ? (
             <div className="field">
               <label className="field-label">
                 自动合并 PR <span className="field-hint">由 Worker 自动 gh pr merge --merge</span>

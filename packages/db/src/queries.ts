@@ -21,6 +21,7 @@ import type {
   Notification,
   NotificationType,
   Project,
+  ProjectVcs,
   Role,
   Task,
   TaskComment,
@@ -78,17 +79,21 @@ export async function listProjects(client: pg.Pool | pg.PoolClient): Promise<Pro
 
 export async function createProject(
   client: pg.Pool | pg.PoolClient,
-  input: { name: string; repoUrl: string; defaultBranch: string; description: string }
+  input: { name: string; repoUrl: string | null; defaultBranch: string; description: string; vcs?: ProjectVcs }
 ): Promise<Project> {
+  const vcs: ProjectVcs = input.vcs === "none" ? "none" : "git";
   const result = await client.query<Project>(
-    `INSERT INTO projects (name, repo_url, default_branch, description)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO projects (name, repo_url, default_branch, description, vcs)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-    [input.name, input.repoUrl, input.defaultBranch, input.description]
+    [input.name, input.repoUrl, input.defaultBranch, input.description, vcs]
   );
   const project = result.rows[0]!;
-  // 多仓任务支持：项目建立时同时落 project_repos 主仓行（'.'），与 projects 保持一致。
-  await syncMainProjectRepo(client, project.id);
+  // 多仓任务支持：git 项目建立时同时落 project_repos 主仓行（'.'），与 projects 保持一致。
+  // 非 git 项目（vcs='none'）无 repo_url、不参与多仓机制，跳过。
+  if (vcs === "git") {
+    await syncMainProjectRepo(client, project.id);
+  }
   return project;
 }
 
@@ -100,7 +105,7 @@ export async function getProject(client: pg.Pool | pg.PoolClient, id: string): P
 export async function updateProject(
   client: pg.Pool | pg.PoolClient,
   id: string,
-  input: { name: string; repoUrl: string; defaultBranch: string; description: string }
+  input: { name: string; repoUrl: string | null; defaultBranch: string; description: string }
 ): Promise<Project | null> {
   const result = await client.query<Project>(
     `UPDATE projects
@@ -114,7 +119,8 @@ export async function updateProject(
     [id, input.name, input.repoUrl, input.defaultBranch, input.description]
   );
   const project = result.rows[0] ?? null;
-  if (project) {
+  // vcs 不可改：只有 git 项目同步主仓行（非 git 项目无 project_repos）。
+  if (project && project.vcs === "git") {
     // 多仓任务支持：项目元信息（repo_url / default_branch / name）变更后同步主仓行。
     await syncMainProjectRepo(client, project.id);
   }
@@ -1113,7 +1119,8 @@ export async function upsertWorkerProjectLink(
        repo_identity = EXCLUDED.repo_identity,
        enabled = true,
        updated_at = now()`,
-    [input.workerId, project.id, input.localPath, input.repoUrl ?? project.repo_url]
+    // repo_identity 不可为 NULL：非 git 项目无 repo_url，用项目名兜底（仍能唯一识别该关联）。
+    [input.workerId, project.id, input.localPath, input.repoUrl ?? project.repo_url ?? project.name]
   );
 }
 

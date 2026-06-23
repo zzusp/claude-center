@@ -173,7 +173,13 @@ export function ChatView({
                 <button type="button" className="chat-li-main" onClick={() => setActiveId(c.id)}>
                   <span className="chat-li-title">{c.title || "未命名对话"}</span>
                   <span className="chat-li-meta">
-                    <Server size={11} /> {c.worker_name} <GitBranch size={11} /> {c.branch}
+                    <Server size={11} /> {c.worker_name}
+                    {c.branch ? (
+                      <>
+                        {" "}
+                        <GitBranch size={11} /> {c.branch}
+                      </>
+                    ) : null}
                   </span>
                   <span className="chat-li-foot">
                     <span className="mono">{c.project_name}</span>

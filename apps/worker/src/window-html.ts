@@ -1313,7 +1313,7 @@ export function windowHtml(): string {
               "</div>").join("") : '<span class="empty">未关联任何项目</span>';
             const sel = $("cloudProject");
             sel.innerHTML = (cloud && cloud.length)
-              ? cloud.map((p) => '<option value="' + esc(p.name) + '">' + esc(p.name) + "</option>").join("")
+              ? cloud.map((p) => '<option value="' + esc(p.name) + '">' + esc(p.name) + (p.vcs === "none" ? "（非 Git）" : "") + "</option>").join("")
               : '<option value="">（无云端项目）</option>';
           }
 

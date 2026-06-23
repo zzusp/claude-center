@@ -44,6 +44,8 @@ export function TaskEditForm({
   // 回到正确 UTC。曾经直接 slice(0,16) 取 UTC 墙钟当本地用，保存会把时刻按时区偏移整体提前（东八区 -8h），
   // 导致定时任务没到点就被提升认领（见 docs/spec/task-scheduled.md）。
   const scheduledAtDefault = task.scheduled_at ? formatLocal(new Date(task.scheduled_at)) : "";
+  // 非 git 项目任务无分支（work_branch 为空占位）：隐藏分支配置 / 提交模式 / 自动合并。
+  const isGit = Boolean(task.work_branch);
 
   // 拉前置任务候选（同项目）+ 当前依赖。当前依赖优先用 task.depends_on（详情页已带），
   // 列表页传入的 task 不含该字段时回退到单任务详情端点取。两者就绪后置 depsReady=true。
@@ -206,43 +208,52 @@ export function TaskEditForm({
         </div>
       </section>
 
-      <section className="form-section">
-        <h3 className="form-section-title">分支配置</h3>
-        <div className="form-row">
-          <div className="field">
-            <label className="field-label">签出分支</label>
-            <input name="baseBranch" defaultValue={task.base_branch} disabled={busy} />
+      {isGit ? (
+        <section className="form-section">
+          <h3 className="form-section-title">分支配置</h3>
+          <div className="form-row">
+            <div className="field">
+              <label className="field-label">签出分支</label>
+              <input name="baseBranch" defaultValue={task.base_branch} disabled={busy} />
+            </div>
+            <div className="field">
+              <label className="field-label">PR 目标分支</label>
+              <input name="targetBranch" defaultValue={task.target_branch} disabled={busy} />
+            </div>
           </div>
-          <div className="field">
-            <label className="field-label">PR 目标分支</label>
-            <input name="targetBranch" defaultValue={task.target_branch} disabled={busy} />
+          <div className="form-row">
+            <div className="field">
+              <label className="field-label">工作分支</label>
+              <input name="workBranch" defaultValue={task.work_branch} disabled={busy} />
+            </div>
+            <div className="field">
+              <label className="field-label">提交模式</label>
+              <Select
+                value={submitMode}
+                onChange={(value) => setSubmitMode(value as "pr" | "push")}
+                options={[
+                  { value: "pr", label: "创建 PR" },
+                  { value: "push", label: "直接提交推送" }
+                ]}
+                disabled={busy}
+                ariaLabel="提交模式"
+              />
+            </div>
           </div>
-        </div>
-        <div className="form-row">
+        </section>
+      ) : (
+        <section className="form-section">
+          <h3 className="form-section-title">非 Git 项目</h3>
           <div className="field">
-            <label className="field-label">工作分支</label>
-            <input name="workBranch" defaultValue={task.work_branch} disabled={busy} />
+            <span className="field-hint">该任务属于非 Git 项目：就地修改、无分支 / 提交模式 / PR。</span>
           </div>
-          <div className="field">
-            <label className="field-label">提交模式</label>
-            <Select
-              value={submitMode}
-              onChange={(value) => setSubmitMode(value as "pr" | "push")}
-              options={[
-                { value: "pr", label: "创建 PR" },
-                { value: "push", label: "直接提交推送" }
-              ]}
-              disabled={busy}
-              ariaLabel="提交模式"
-            />
-          </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <section className="form-section">
         <h3 className="form-section-title">执行选项</h3>
         <div className="form-row">
-          {submitMode === "pr" ? (
+          {isGit && submitMode === "pr" ? (
             <div className="field">
               <label className="field-label">自动合并 PR</label>
               <Select
