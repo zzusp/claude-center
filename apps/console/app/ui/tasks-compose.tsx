@@ -65,23 +65,28 @@ function ComposeTaskForm({
     }
     let active = true;
     setBranchState("loading");
-    Promise.all([
-      fetch(`/api/projects/${selectedProjectId}/branches`, { cache: "no-store" }).then(async (response) => {
+    // 分支与子仓各自独立拉取、各自成败：分支接口失败（如服务器没装 git，/branches 返回 502）
+    // 不应连累子仓显示——之前用 Promise.all 把两者捆在一起，分支一报错整体 reject、子仓也被清空。
+    fetch(`/api/projects/${selectedProjectId}/branches`, { cache: "no-store" })
+      .then(async (response) => {
         if (!response.ok) throw new Error();
         const data = (await response.json()) as { branches: string[] };
-        return data.branches;
-      }),
-      fetch(`/api/projects/${selectedProjectId}/repos`, { cache: "no-store" }).then(async (response) => {
+        if (!active) return;
+        setBranches(data.branches);
+        setBranchState("idle");
+      })
+      .catch(() => {
+        if (active) {
+          setBranches([]);
+          setBranchState("error");
+        }
+      });
+    fetch(`/api/projects/${selectedProjectId}/repos`, { cache: "no-store" })
+      .then(async (response) => {
         if (!response.ok) throw new Error();
         const data = (await response.json()) as { repos: ProjectRepo[] };
-        return data.repos;
-      })
-    ])
-      .then(([bs, repos]) => {
         if (!active) return;
-        setBranches(bs);
-        setBranchState("idle");
-        const subs = repos.filter((r) => r.role === "sub");
+        const subs = data.repos.filter((r) => r.role === "sub");
         setSubRepos(subs);
         setSubStates(
           Object.fromEntries(
@@ -94,8 +99,6 @@ function ComposeTaskForm({
       })
       .catch(() => {
         if (active) {
-          setBranches([]);
-          setBranchState("error");
           setSubRepos([]);
           setSubStates({});
         }
