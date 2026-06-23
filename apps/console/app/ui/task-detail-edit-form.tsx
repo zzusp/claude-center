@@ -1,14 +1,16 @@
 "use client";
 
-import type { ProjectRepo, Task, TaskRepo } from "@claude-center/db";
+import type { AttachmentMeta, ProjectRepo, Task, TaskRepo } from "@claude-center/db";
 import { Check, Send } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useAsyncAction } from "../lib/use-async-action";
 import { DateTimePicker, formatLocal, Select } from "./controls";
+import { AttachmentUploader } from "./attachment-uploader";
 import { DependencyPicker, SubRepoConfigSection, serializeTaskRepos, type SubStatesMap } from "./tasks-compose";
 
-// 任务编辑表单：详情页 + 任务流列表的编辑弹窗共用（仅草稿/定时态可编辑）。
-// 按「基本信息 / 分支配置 / 执行选项 / 调度」分区排版，与新建表单 ComposeTaskForm 保持一致。
+// 任务编辑表单：详情页 + 任务流列表的编辑弹窗共用（仅草稿/定时态可编辑，未发布前所有字段均可改）。
+// 按「基本信息(含附件) / 分支配置 / 执行选项 / 调度 / 子仓配置」分区排版，字段位置 / 提示 / 可编辑项
+// 与新建表单 ComposeTaskForm 逐项对齐——唯一差异是编辑不含「项目」选择（任务项目不可迁移）。
 export function TaskEditForm({
   task,
   onSaved,
@@ -25,6 +27,11 @@ export function TaskEditForm({
   const [autoDecisionHints, setAutoDecisionHints] = useState(task.auto_decision_hints);
   const [model, setModel] = useState(task.model);
   const [dynamicWorkflow, setDynamicWorkflow] = useState(task.dynamic_workflow);
+  // 附件编辑：预填来自任务已绑定附件（task.attachments，详情页已带；列表页 task 不含时由下方 effect 拉取）。
+  // 上传新附件 / 移除已绑附件后，提交时把 attachments.map(a=>a.id) 作为 attachmentIds 整批下发，后端同步增删。
+  const [attachments, setAttachments] = useState<AttachmentMeta[]>(task.attachments ?? []);
+  // 远程分支候选：与新建表单一致，给签出 / PR 目标分支输入提供 datalist 自动补全（拉取失败可手填）。
+  const [branches, setBranches] = useState<string[]>([]);
   // 前置任务编辑：候选任务（同项目）按需拉取；dependsOn 受控；depsReady 防止「未加载完就保存」误清空依赖。
   // depsReady=false 时提交不带 dependsOn 字段，后端按 undefined 保持原依赖不动。
   const [depCandidates, setDepCandidates] = useState<Task[]>([]);
@@ -93,7 +100,27 @@ export function TaskEditForm({
     };
   }, [task.id, task.project_id, task.depends_on]);
 
-  // 拉项目子仓清单 + 任务现有 task_repos 快照，预填子仓启用/分支状态。
+  // 远程分支：与新建表单一致，给签出 / PR 目标分支输入提供 datalist 自动补全。非 git 任务无分支可拉。
+  useEffect(() => {
+    if (!isGit) {
+      setBranches([]);
+      return;
+    }
+    let active = true;
+    fetch(`/api/projects/${task.project_id}/branches`, { cache: "no-store" })
+      .then((r) => (r.ok ? (r.json() as Promise<{ branches: string[] }>) : Promise.reject(new Error())))
+      .then((data) => {
+        if (active) setBranches(data.branches);
+      })
+      .catch(() => {
+        if (active) setBranches([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [task.project_id, isGit]);
+
+  // 拉项目子仓清单 + 任务现有 task_repos 快照（预填子仓启用/分支状态）+ 已绑定附件（列表页 task 不含 attachments 时回补）。
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -101,11 +128,13 @@ export function TaskEditForm({
         r.ok ? (r.json() as Promise<{ repos: ProjectRepo[] }>) : Promise.reject(new Error())
       ),
       fetch(`/api/tasks/${task.id}`, { cache: "no-store" }).then((r) =>
-        r.ok ? (r.json() as Promise<{ taskRepos: TaskRepo[] }>) : Promise.reject(new Error())
+        r.ok ? (r.json() as Promise<{ task: Task; taskRepos: TaskRepo[] }>) : Promise.reject(new Error())
       )
     ])
       .then(([repoData, taskData]) => {
         if (!active) return;
+        // 已绑定附件以服务端最新快照为准（列表页传入的 task 不带 attachments 字段）。
+        setAttachments(taskData.task?.attachments ?? []);
         const subs = repoData.repos.filter((r) => r.role === "sub");
         const snapshotByRepo = new Map((taskData.taskRepos ?? []).map((tr) => [tr.project_repo_id, tr]));
         setSubRepos(subs);
@@ -166,6 +195,8 @@ export function TaskEditForm({
           // 多仓任务：仅当项目有子仓且清单已加载（subRepos 非空即已加载成功）才整批下发，
           // 否则不带该字段（后端 undefined=仅同步主仓行、保留原子仓配置），避免未加载就保存把子仓清空。
           taskRepos: subRepos.length > 0 ? serializeTaskRepos(subStates) : undefined,
+          // 附件：整批下发期望全集（保留 + 新增），后端按差异增删。
+          attachmentIds: attachments.map((a) => a.id),
           scheduledAt: scheduledAtRaw ? new Date(scheduledAtRaw).toISOString() : null
         })
       });
@@ -203,8 +234,11 @@ export function TaskEditForm({
           <input name="title" defaultValue={task.title} required disabled={busy} />
         </div>
         <div className="field">
-          <label className="field-label">目标</label>
-          <textarea name="description" rows={4} defaultValue={task.description} required disabled={busy} />
+          <label className="field-label">
+            目标 <span className="field-hint">可粘贴 / 拖拽 / 选择图片或文件作为补充资料</span>
+          </label>
+          <textarea name="description" rows={6} defaultValue={task.description} required disabled={busy} />
+          <AttachmentUploader attachments={attachments} onChange={setAttachments} disabled={busy} />
         </div>
       </section>
 
@@ -214,16 +248,25 @@ export function TaskEditForm({
           <div className="form-row">
             <div className="field">
               <label className="field-label">签出分支</label>
-              <input name="baseBranch" defaultValue={task.base_branch} disabled={busy} />
+              <input name="baseBranch" list="cc-edit-branch-list" defaultValue={task.base_branch} disabled={busy} />
             </div>
             <div className="field">
-              <label className="field-label">PR 目标分支</label>
-              <input name="targetBranch" defaultValue={task.target_branch} disabled={busy} />
+              <label className="field-label">
+                PR 目标分支 <span className="field-hint">留空同签出分支</span>
+              </label>
+              <input name="targetBranch" list="cc-edit-branch-list" defaultValue={task.target_branch} disabled={busy} />
             </div>
           </div>
+          <datalist id="cc-edit-branch-list">
+            {branches.map((branch) => (
+              <option key={branch} value={branch} />
+            ))}
+          </datalist>
           <div className="form-row">
             <div className="field">
-              <label className="field-label">工作分支</label>
+              <label className="field-label">
+                工作分支 <span className="field-hint">留空自动生成</span>
+              </label>
               <input name="workBranch" defaultValue={task.work_branch} disabled={busy} />
             </div>
             <div className="field">
@@ -255,7 +298,9 @@ export function TaskEditForm({
         <div className="form-row">
           {isGit && submitMode === "pr" ? (
             <div className="field">
-              <label className="field-label">自动合并 PR</label>
+              <label className="field-label">
+                自动合并 PR <span className="field-hint">由 Worker 自动 gh pr merge --merge</span>
+              </label>
               <Select
                 value={autoMergePr ? "on" : "off"}
                 onChange={(value) => setAutoMergePr(value === "on")}
@@ -271,7 +316,26 @@ export function TaskEditForm({
             <div className="field" aria-hidden />
           )}
           <div className="field">
-            <label className="field-label">执行模型</label>
+            <label className="field-label">
+              自动回复（兜底） <span className="field-hint">真停了：零改动→失败，有改动→续接 2 轮</span>
+            </label>
+            <Select
+              value={autoReply ? "on" : "off"}
+              onChange={(value) => setAutoReply(value === "on")}
+              options={[
+                { value: "off", label: "否 · 等人回复（默认）" },
+                { value: "on", label: "是 · 无人值守，按规则兜底" }
+              ]}
+              disabled={busy}
+              ariaLabel="自动回复"
+            />
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="field">
+            <label className="field-label">
+              执行模型 <span className="field-hint">默认跟随 Worker</span>
+            </label>
             <Select
               value={model}
               onChange={(value) => setModel(value as typeof model)}
@@ -283,21 +347,6 @@ export function TaskEditForm({
               ]}
               disabled={busy}
               ariaLabel="执行模型"
-            />
-          </div>
-        </div>
-        <div className="form-row">
-          <div className="field">
-            <label className="field-label">自动回复（兜底）</label>
-            <Select
-              value={autoReply ? "on" : "off"}
-              onChange={(value) => setAutoReply(value === "on")}
-              options={[
-                { value: "off", label: "否 · 等人回复（默认）" },
-                { value: "on", label: "是 · 无人值守，按规则兜底" }
-              ]}
-              disabled={busy}
-              ariaLabel="自动回复"
             />
           </div>
           <div className="field">
@@ -319,7 +368,7 @@ export function TaskEditForm({
         {autoReply ? (
           <div className="field">
             <label className="field-label">
-              决策预案 <span className="field-hint">可选；auto_reply=true 时拼入 prompt</span>
+              决策预案 <span className="field-hint">可选，喂给 Claude 当决策偏好（如“优先最小改动，跳过测试”）</span>
             </label>
             <textarea
               rows={2}
@@ -336,7 +385,7 @@ export function TaskEditForm({
         <h3 className="form-section-title">调度</h3>
         <div className="field">
           <label className="field-label">
-            定时发布 <span className="field-hint">留空则为草稿</span>
+            定时发布 <span className="field-hint">留空即建为草稿手动发布；设定时间则到点自动进入待处理队列</span>
           </label>
           <DateTimePicker
             name="scheduledAt"

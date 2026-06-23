@@ -3026,6 +3026,34 @@ export async function bindAttachmentsToTask(
   }
 }
 
+// 编辑任务时整批同步附件：desiredIds 为「保留 + 新增」的期望全集。
+// - 新增（当前未绑定 + 归属本人/admin）→ 绑到本任务（复用 bindAttachmentsToTask 的归属校验）
+// - 移除（当前已绑定本任务、但不在 desiredIds 内）→ 删除（FK CASCADE 连带删 blob）
+// 已绑定本任务且仍在 desiredIds 内的保持不动。ownerUserId=null 表示 admin（绕过 owner 校验）。
+// 在调用方事务内执行；新增项归属/绑定校验不过会抛错触发回滚。
+export async function syncTaskAttachments(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  desiredIds: string[],
+  ownerUserId: string | null
+): Promise<void> {
+  const desired = [...new Set(desiredIds)];
+  const currentRes = await client.query<{ id: string }>(
+    `SELECT id FROM attachments WHERE task_id = $1`,
+    [taskId]
+  );
+  const current = currentRes.rows.map((row) => row.id);
+  const toRemove = current.filter((id) => !desired.includes(id));
+  const toAdd = desired.filter((id) => !current.includes(id));
+  if (toRemove.length > 0) {
+    await client.query(`DELETE FROM attachments WHERE task_id = $1 AND id = ANY($2::uuid[])`, [
+      taskId,
+      toRemove
+    ]);
+  }
+  await bindAttachmentsToTask(client, taskId, toAdd, ownerUserId);
+}
+
 // 绑定附件到评论：同 bindAttachmentsToTask。
 export async function bindAttachmentsToComment(
   client: pg.Pool | pg.PoolClient,
