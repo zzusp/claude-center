@@ -369,13 +369,16 @@ export class ClaudeCenterWorker {
 
   // —— 桌面端项目关联 —— //
 
-  // 云端项目清单（供桌面端下拉选择关联目标）。
-  async listCloudProjects(): Promise<{ id: string; name: string; repo_url: string; default_branch: string }[]> {
+  // 云端项目清单（供桌面端下拉选择关联目标）。非 git 项目 repo_url 为 null，桌面端据 vcs 标注。
+  async listCloudProjects(): Promise<
+    { id: string; name: string; repo_url: string | null; vcs: "git" | "none"; default_branch: string }[]
+  > {
     const projects = await listProjects(getPool());
     return projects.map((project) => ({
       id: project.id,
       name: project.name,
       repo_url: project.repo_url,
+      vcs: project.vcs,
       default_branch: project.default_branch
     }));
   }

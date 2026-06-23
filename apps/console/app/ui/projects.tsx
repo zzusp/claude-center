@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { Fragment, FormEvent, useEffect, useMemo, useState } from "react";
 import { basenameFromRepoUrl, Empty, fmtDateTime, fmtTime } from "./shared";
-import { FormModal, useConfirm } from "./controls";
+import { FormModal, Select, useConfirm } from "./controls";
 
 // 列表项：Project + 该项目的子仓清单（由 /api/projects 一次聚合）。
 export type ProjectListItem = Project & { subRepos: ProjectRepo[] };
@@ -295,36 +295,42 @@ function ProjectsView({
                               <td className="mono">
                                 <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                                   <FolderGit2 size={14} className="ico" />
-                                  {project.repo_url}
+                                  {project.vcs === "git" ? project.repo_url : "非 Git · 本地目录"}
                                 </span>
                               </td>
                               <td>
-                                <span className="tag">
-                                  <GitBranch size={13} className="ico" />
-                                  {project.default_branch}
-                                </span>
+                                {project.vcs === "git" ? (
+                                  <span className="tag">
+                                    <GitBranch size={13} className="ico" />
+                                    {project.default_branch}
+                                  </span>
+                                ) : (
+                                  <span className="t-meta">—</span>
+                                )}
                               </td>
                               <td className="t-right t-num">{fmtDateTime(project.created_at)}</td>
                               {canManageProjects ? (
                                 <td className="t-right">
                                   <div className="row-actions">
-                                    <button
-                                      type="button"
-                                      className="icon-btn"
-                                      title="添加子仓"
-                                      onClick={() => {
-                                        setModal({ mode: "addSub", project });
-                                        setCreating(false);
-                                        // 添加后自动展开,方便看到新行
-                                        setExpanded((prev) => {
-                                          const next = new Set(prev);
-                                          next.add(project.id);
-                                          return next;
-                                        });
-                                      }}
-                                    >
-                                      <Plus size={14} />
-                                    </button>
+                                    {project.vcs === "git" ? (
+                                      <button
+                                        type="button"
+                                        className="icon-btn"
+                                        title="添加子仓"
+                                        onClick={() => {
+                                          setModal({ mode: "addSub", project });
+                                          setCreating(false);
+                                          // 添加后自动展开,方便看到新行
+                                          setExpanded((prev) => {
+                                            const next = new Set(prev);
+                                            next.add(project.id);
+                                            return next;
+                                          });
+                                        }}
+                                      >
+                                        <Plus size={14} />
+                                      </button>
+                                    ) : null}
                                     <button
                                       type="button"
                                       className="icon-btn"
@@ -575,15 +581,20 @@ function ProjectForm({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // vcs 建项目时定死、编辑不可改：git=有 repo_url/分支/PR；none=非 git 本地目录（就地改、无分支无 PR）。
+  const [vcs, setVcs] = useState<"git" | "none">(project?.vcs ?? "git");
+  const isGit = vcs === "git";
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const body = {
       name: String(data.get("name") ?? "").trim(),
-      repoUrl: String(data.get("repoUrl") ?? "").trim(),
-      defaultBranch: String(data.get("defaultBranch") ?? "").trim(),
-      description: String(data.get("description") ?? "").trim()
+      repoUrl: isGit ? String(data.get("repoUrl") ?? "").trim() : "",
+      defaultBranch: isGit ? String(data.get("defaultBranch") ?? "").trim() : "",
+      description: String(data.get("description") ?? "").trim(),
+      // vcs 仅建项目时随表单提交；编辑接口不改 vcs。
+      ...(mode === "create" ? { vcs } : {})
     };
     setBusy(true);
     setError(null);
@@ -624,18 +635,42 @@ function ProjectForm({
         <input name="name" defaultValue={project?.name ?? ""} placeholder="claude-center" required />
       </div>
       <div className="field">
-        <label className="field-label">Git 仓库地址(主仓)</label>
-        <input name="repoUrl" defaultValue={project?.repo_url ?? ""} placeholder="https://github.com/acme/repo.git" required />
+        <label className="field-label">项目类型</label>
+        {mode === "create" ? (
+          <Select
+            value={vcs}
+            onChange={(value) => setVcs(value as "git" | "none")}
+            options={[
+              { value: "git", label: "Git 托管 · 有分支 / PR" },
+              { value: "none", label: "非 Git 本地目录 · 就地修改" }
+            ]}
+            ariaLabel="项目类型"
+          />
+        ) : (
+          <div className="t-meta">{isGit ? "Git 托管（不可更改）" : "非 Git 本地目录（不可更改）"}</div>
+        )}
       </div>
-      <div className="field">
-        <label className="field-label">默认分支</label>
-        <input name="defaultBranch" defaultValue={project?.default_branch ?? "main"} placeholder="main" />
-      </div>
+      {isGit ? (
+        <>
+          <div className="field">
+            <label className="field-label">Git 仓库地址(主仓)</label>
+            <input name="repoUrl" defaultValue={project?.repo_url ?? ""} placeholder="https://github.com/acme/repo.git" required />
+          </div>
+          <div className="field">
+            <label className="field-label">默认分支</label>
+            <input name="defaultBranch" defaultValue={project?.default_branch ?? "main"} placeholder="main" />
+          </div>
+        </>
+      ) : (
+        <div className="t-meta">
+          非 Git 项目无需仓库地址 / 分支：Worker 直接在本机关联目录里运行 Claude、就地修改文件，不产生分支或 PR。
+        </div>
+      )}
       <div className="field">
         <label className="field-label">描述</label>
         <textarea name="description" defaultValue={project?.description ?? ""} rows={3} placeholder="项目说明" />
       </div>
-      {mode === "edit" ? (
+      {mode === "edit" && isGit ? (
         <div className="t-meta">子仓在列表行点击「添加子仓」逐条管理；编辑 / 删除在展开的子仓表格上直接操作。</div>
       ) : null}
       {error ? <div className="error-box">{error}</div> : null}

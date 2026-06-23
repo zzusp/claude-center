@@ -131,9 +131,21 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
 
     if (body.action === "update") {
-      if (!body.title || !body.description || !body.baseBranch || !body.workBranch || !body.targetBranch || !body.submitMode || !body.model) {
+      // 非 git 项目任务无分支 / 提交模式 / task_repos：按项目 vcs 决定校验与处理。
+      const vcsRow = await getPool().query<{ vcs: string }>(
+        `SELECT p.vcs FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`,
+        [id]
+      );
+      const isGit = (vcsRow.rows[0]?.vcs ?? "git") === "git";
+      if (!body.title || !body.description || !body.model) {
         return badRequest("缺少必要字段");
       }
+      if (isGit && (!body.baseBranch || !body.workBranch || !body.targetBranch || !body.submitMode)) {
+        return badRequest("缺少必要字段");
+      }
+      const baseBranch = isGit ? body.baseBranch! : "";
+      const workBranch = isGit ? body.workBranch! : "";
+      const targetBranch = isGit ? body.targetBranch! : "";
       const autoReply = body.autoReply === true;
       // 多仓任务：在同事务里 updateTask + 整批替换 task_repos。先取项目仓清单再生成新 inputs。
       const client = await getPool().connect();
@@ -143,11 +155,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         task = await updateTask(client, id, {
           title: body.title,
           description: body.description,
-          baseBranch: body.baseBranch,
-          workBranch: body.workBranch,
-          targetBranch: body.targetBranch,
-          submitMode: body.submitMode,
-          autoMergePr: body.autoMergePr ?? false,
+          baseBranch,
+          workBranch,
+          targetBranch,
+          submitMode: isGit ? body.submitMode! : "pr",
+          autoMergePr: isGit && (body.autoMergePr ?? false),
           autoReply,
           autoDecisionHints: autoReply ? (body.autoDecisionHints ?? "").trim() : "",
           model: body.model,
@@ -166,22 +178,22 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
             body.dependsOn.filter((dep): dep is string => typeof dep === "string")
           );
         }
-        // task_repos 处理策略：
+        // task_repos 处理策略（仅 git 项目有 task_repos；非 git 项目无此表行，跳过）：
         // - body.taskRepos 显式数组 → 整批替换（用户在 UI 上编辑过多仓配置）
         // - body.taskRepos === undefined → 仅同步主仓行的 base/work/target（保留子仓配置不动）
         // 这样编辑表单（暂不带多仓 UI）保存时不会把子仓配置全清成 skipped。
-        if (Array.isArray(body.taskRepos)) {
+        if (isGit && Array.isArray(body.taskRepos)) {
           const projectRepos = await listProjectRepos(client, task.project_id);
           const taskRepoInputs = buildTaskRepoInputs({
             projectRepos,
             body,
-            baseBranch: body.baseBranch,
-            workBranch: body.workBranch,
-            targetBranch: body.targetBranch
+            baseBranch,
+            workBranch,
+            targetBranch
           });
           await deleteTaskRepos(client, task.id);
           await createTaskRepos(client, task.id, taskRepoInputs);
-        } else {
+        } else if (isGit) {
           // 仅同步主仓行（task 表 base/work/target 是主仓镜像，task_repos main 行必须保持一致）
           await client.query(
             `UPDATE task_repos
@@ -190,7 +202,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
                     target_branch = $4,
                     updated_at = now()
               WHERE task_id = $1 AND role = 'main'`,
-            [task.id, body.baseBranch, body.workBranch, body.targetBranch]
+            [task.id, baseBranch, workBranch, targetBranch]
           );
         }
         await client.query("COMMIT");

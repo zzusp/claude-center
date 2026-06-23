@@ -43,6 +43,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       if (!project) {
         return NextResponse.json({ error: "Project not found" }, { status: 404 });
       }
+      // 非 git 项目（无 repo_url）没有远程分支可拉，直接返回空列表（任务/对话表单据此隐藏分支选择）。
+      if (project.vcs !== "git" || !project.repo_url) {
+        return NextResponse.json({ branches: [] });
+      }
       repoUrl = project.repo_url;
       defaultBranch = project.default_branch;
     }

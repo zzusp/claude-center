@@ -74,13 +74,20 @@ export function OverviewTab({
           <div className="kv">
             <KvRow k="任务 ID" v={task.id} mono />
             <KvRow k="项目" v={task.project_name ?? task.project_id} />
-            <KvRow k="签出分支" v={task.base_branch} mono />
-            <KvRow k="工作分支" v={task.work_branch} mono />
-            <KvRow k="目标分支" v={task.target_branch} mono />
-            <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
-            {task.submit_mode === "pr" ? (
-              <KvRow k="自动合并 PR" v={task.auto_merge_pr ? "是 · 创建后自动合并" : "否"} />
-            ) : null}
+            {/* 非 git 项目任务无分支（work_branch 为空占位）：就地修改、无分支 / PR。 */}
+            {task.work_branch ? (
+              <>
+                <KvRow k="签出分支" v={task.base_branch} mono />
+                <KvRow k="工作分支" v={task.work_branch} mono />
+                <KvRow k="目标分支" v={task.target_branch} mono />
+                <KvRow k="提交模式" v={task.submit_mode === "push" ? "直接提交推送" : "创建 PR"} />
+                {task.submit_mode === "pr" ? (
+                  <KvRow k="自动合并 PR" v={task.auto_merge_pr ? "是 · 创建后自动合并" : "否"} />
+                ) : null}
+              </>
+            ) : (
+              <KvRow k="项目类型" v="非 Git · 就地修改（无分支 / PR）" />
+            )}
             <KvRow k="自动回复" v={task.auto_reply ? "是 · 无人值守兜底（cap=2）" : "否"} />
             <KvRow k="动态工作流" v={task.dynamic_workflow ? "是 · 启用" : "否"} />
             <KvRow k="执行模型" v={modelLabel} />

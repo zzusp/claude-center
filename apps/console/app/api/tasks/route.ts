@@ -4,6 +4,7 @@ import {
   createTask,
   createTaskRepos,
   getPool,
+  getProject,
   listProjectRepos,
   listTasks,
   listTaskStatsForUser,
@@ -157,11 +158,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "无权在该项目下创建任务" }, { status: 403 });
     }
 
-    const baseBranch = body.baseBranch?.trim() || "main";
-    const submitMode = body.submitMode === "push" ? "push" : "pr";
-    // 自动合并 PR 仅对 PR 模式有效：push 模式直推目标分支、无 PR 可合。
-    const autoMergePr = submitMode === "pr" && body.autoMergePr === true;
-    // 自动回复（兜底）：与 submit_mode 解耦。hints 仅在 auto_reply=true 时有意义；不勾时一律落空串。
+    // 非 git 项目（vcs='none'，本地目录）：无分支 / 无 PR / 无多仓。分支字段一律空占位、不建 task_repos，
+    // Worker 端按 localPath 下无 .git 走「就地修改」路径。git 项目行为完全不变。
+    const project = await getProject(getPool(), body.projectId);
+    if (!project) {
+      return badRequest("项目不存在");
+    }
+    const isGit = project.vcs === "git";
+
+    const baseBranch = isGit ? body.baseBranch?.trim() || "main" : "";
+    // 提交模式 / 自动合并仅对 git 项目有意义。
+    const submitMode = isGit && body.submitMode === "push" ? "push" : "pr";
+    // 自动合并 PR 仅对 git 的 PR 模式有效：push 模式直推目标分支、无 PR 可合。
+    const autoMergePr = isGit && submitMode === "pr" && body.autoMergePr === true;
+    // 自动回复（兜底）：与 submit_mode 解耦，git / 非 git 均可用。hints 仅在 auto_reply=true 时有意义；不勾时一律落空串。
     const autoReply = body.autoReply === true;
     const autoDecisionHints = autoReply ? (body.autoDecisionHints ?? "").trim() : "";
 
@@ -179,20 +189,24 @@ export async function POST(request: NextRequest) {
       return badRequest(`附件数量超过上限（${MAX_ATTACHMENTS_PER_OWNER}）`);
     }
 
+    const workBranch = isGit ? body.workBranch?.trim() || defaultWorkBranch(body.title) : "";
+    const targetBranch = isGit ? body.targetBranch?.trim() || baseBranch : "";
     // 多仓任务：解析 taskRepos[] 或按主仓单行兜底。在 createTask 同事务里插入 task_repos。
-    const projectRepos = await listProjectRepos(getPool(), body.projectId);
-    if (projectRepos.length === 0) {
-      return badRequest("项目仓清单为空（异常状态：主仓行应已由 createProject 自动同步）");
+    // 非 git 项目不参与多仓机制（无 project_repos / task_repos）。
+    let taskRepoInputs: ReturnType<typeof buildTaskRepoInputs> | null = null;
+    if (isGit) {
+      const projectRepos = await listProjectRepos(getPool(), body.projectId);
+      if (projectRepos.length === 0) {
+        return badRequest("项目仓清单为空（异常状态：主仓行应已由 createProject 自动同步）");
+      }
+      taskRepoInputs = buildTaskRepoInputs({
+        projectRepos,
+        body,
+        baseBranch,
+        workBranch,
+        targetBranch
+      });
     }
-    const workBranch = body.workBranch?.trim() || defaultWorkBranch(body.title);
-    const targetBranch = body.targetBranch?.trim() || baseBranch;
-    const taskRepoInputs = buildTaskRepoInputs({
-      projectRepos,
-      body,
-      baseBranch,
-      workBranch,
-      targetBranch
-    });
 
     // 任务与其前置依赖、task_repos 须原子入库：任一校验失败应整体回滚。
     const client = await getPool().connect();
@@ -214,7 +228,9 @@ export async function POST(request: NextRequest) {
         scheduledAt
       });
       await addTaskDependencies(client, task.id, dependsOn);
-      await createTaskRepos(client, task.id, taskRepoInputs);
+      if (taskRepoInputs) {
+        await createTaskRepos(client, task.id, taskRepoInputs);
+      }
       // 附件绑定：admin 可借他人上传的附件，其它角色仅能用自己上传的（owner_user_id 校验）。
       await bindAttachmentsToTask(
         client,

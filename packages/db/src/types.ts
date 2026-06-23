@@ -21,6 +21,9 @@ export type TaskModel = "default" | "opus" | "sonnet" | "haiku";
 
 export type Role = "admin" | "publisher" | "commenter" | "viewer";
 
+// 项目版本控制类型：git=git 托管（有 repo_url/分支/PR）；none=非 git 本地目录（就地修改、无分支无 PR）。
+export type ProjectVcs = "git" | "none";
+
 export type User = {
   id: string;
   username: string;
@@ -47,7 +50,10 @@ export type Session = {
 export type Project = {
   id: string;
   name: string;
-  repo_url: string;
+  // git 仓库地址；vcs='none' 的非 git 项目为 null。
+  repo_url: string | null;
+  // 版本控制类型，见 ProjectVcs。
+  vcs: ProjectVcs;
   default_branch: string;
   description: string;
   archived_at: string | null;

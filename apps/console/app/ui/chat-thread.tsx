@@ -324,8 +324,13 @@ export function ChatThread({
             <strong>{conversation.title || "未命名对话"}</strong>
           )}
           <span className="chat-thread-sub">
-            <Server size={12} /> {conversation.worker_name} <GitBranch size={12} /> {conversation.branch} ·{" "}
-            {conversation.project_name}
+            <Server size={12} /> {conversation.worker_name}{" "}
+            {conversation.branch ? (
+              <>
+                <GitBranch size={12} /> {conversation.branch}{" "}
+              </>
+            ) : null}
+            · {conversation.project_name}
             {conversation.auto_reply ? (
               <span className="chat-tag chat-tag-auto" title="已开启自动回复（无人值守）">
                 <Bot size={11} /> 自动回复
@@ -635,10 +640,14 @@ export function NewConversationPanel({
   const [err, setErr] = useState("");
 
   const onlineWorkers = workers.filter((w) => w.status === "online");
+  // 非 git 项目（vcs='none'）无分支概念：隐藏分支字段、不拉远程分支、创建时不要求 branch。
+  const isGit = (projects.find((p) => p.id === projectId)?.vcs ?? "git") === "git";
 
   useEffect(() => {
-    if (!projectId) {
+    if (!projectId || !isGit) {
       setBranches([]);
+      setBranchState("idle");
+      setBranch("");
       return;
     }
     setBranchState("loading");
@@ -663,8 +672,12 @@ export function NewConversationPanel({
   }, [projectId]);
 
   async function create(): Promise<void> {
-    if (!projectId || !workerId || !branch) {
-      setErr("请选择项目、分支和 worker");
+    if (!projectId || !workerId) {
+      setErr("请选择项目和 worker");
+      return;
+    }
+    if (isGit && !branch) {
+      setErr("请选择分支");
       return;
     }
     const msg = firstMessage.trim();
@@ -680,7 +693,7 @@ export function NewConversationPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           projectId,
-          branch,
+          branch: isGit ? branch : "",
           workerId,
           model,
           title,
@@ -726,29 +739,35 @@ export function NewConversationPanel({
               ))}
             </select>
           </label>
-          <label className="chat-field">
-            <span>
-              分支
-              {branchState === "loading"
-                ? "（加载中…）"
-                : branchState === "error"
-                  ? "（加载失败，可手动输入）"
-                  : ""}
-            </span>
-            {/* 用 input + datalist 而非 select：分支列表拉取失败时仍可手动输入分支名，
-                成功时 datalist 给出远程分支下拉建议。与发布任务表单的分支输入一致。 */}
-            <input
-              value={branch}
-              onChange={(e) => setBranch(e.target.value)}
-              list="cc-conv-branch-list"
-              placeholder="输入或选择分支"
-            />
-            <datalist id="cc-conv-branch-list">
-              {branches.map((b) => (
-                <option key={b} value={b} />
-              ))}
-            </datalist>
-          </label>
+          {isGit ? (
+            <label className="chat-field">
+              <span>
+                分支
+                {branchState === "loading"
+                  ? "（加载中…）"
+                  : branchState === "error"
+                    ? "（加载失败，可手动输入）"
+                    : ""}
+              </span>
+              {/* 用 input + datalist 而非 select：分支列表拉取失败时仍可手动输入分支名，
+                  成功时 datalist 给出远程分支下拉建议。与发布任务表单的分支输入一致。 */}
+              <input
+                value={branch}
+                onChange={(e) => setBranch(e.target.value)}
+                list="cc-conv-branch-list"
+                placeholder="输入或选择分支"
+              />
+              <datalist id="cc-conv-branch-list">
+                {branches.map((b) => (
+                  <option key={b} value={b} />
+                ))}
+              </datalist>
+            </label>
+          ) : (
+            <div className="chat-field">
+              <span className="field-hint">非 Git 项目：无分支，Worker 在关联目录里就地对话。</span>
+            </div>
+          )}
           <label className="chat-field">
             <span>Worker（在线）</span>
             <select value={workerId} onChange={(e) => setWorkerId(e.target.value)}>

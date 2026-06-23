@@ -1,4 +1,4 @@
-import { deleteProject, getPool, updateProject } from "@claude-center/db";
+import { deleteProject, getPool, getProject, updateProject } from "@claude-center/db";
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "../../../lib/session";
 import { errorResponse, badRequest } from "../../../lib/api";
@@ -17,14 +17,23 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       description?: string;
     };
 
-    if (!body.name?.trim() || !body.repoUrl?.trim()) {
-      return badRequest("项目名与仓库地址不能为空");
+    // vcs 不可改：按项目现有类型决定校验。非 git 项目不要求 repo_url。
+    const existing = await getProject(getPool(), id);
+    if (!existing) {
+      return NextResponse.json({ error: "项目不存在" }, { status: 404 });
+    }
+    const isGit = existing.vcs === "git";
+    if (!body.name?.trim()) {
+      return badRequest("项目名不能为空");
+    }
+    if (isGit && !body.repoUrl?.trim()) {
+      return badRequest("Git 项目的仓库地址不能为空");
     }
 
     const updated = await updateProject(getPool(), id, {
       name: body.name.trim(),
-      repoUrl: body.repoUrl.trim(),
-      defaultBranch: body.defaultBranch?.trim() || "main",
+      repoUrl: isGit ? body.repoUrl!.trim() : null,
+      defaultBranch: isGit ? body.defaultBranch?.trim() || "main" : "",
       description: body.description?.trim() ?? ""
     });
     if (!updated) {

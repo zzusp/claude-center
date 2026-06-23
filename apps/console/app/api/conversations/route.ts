@@ -2,6 +2,7 @@ import {
   addConversationMessage,
   createConversation,
   getPool,
+  getProject,
   getWorker,
   listConversations,
   listUserProjectIds,
@@ -38,9 +39,19 @@ export async function POST(request: NextRequest) {
       firstMessage?: string;
       scheduledAt?: string;
     };
-    if (!body.projectId || !body.workerId || !body.branch?.trim()) {
-      return badRequest("projectId、workerId、branch 必填");
+    if (!body.projectId || !body.workerId) {
+      return badRequest("projectId、workerId 必填");
     }
+    // 非 git 项目（vcs='none'）无分支概念：branch 可空（Worker 在 localPath 就地跑）。git 项目仍要求 branch。
+    const project = await getProject(getPool(), body.projectId);
+    if (!project) {
+      return badRequest("项目不存在");
+    }
+    const isGit = project.vcs === "git";
+    if (isGit && !body.branch?.trim()) {
+      return badRequest("Git 项目对话必须指定 branch");
+    }
+    const branch = isGit ? body.branch!.trim() : "";
     // 定时发送时间（可选，仅在带首条消息时有意义）：必须可解析且为将来时间。
     const firstMessage = body.firstMessage?.trim() ?? "";
     let scheduledAt: string | null = null;
@@ -75,7 +86,7 @@ export async function POST(request: NextRequest) {
     const conversation = await createConversation(getPool(), {
       projectId: body.projectId,
       workerId: body.workerId,
-      branch: body.branch.trim(),
+      branch,
       model,
       title: body.title?.trim() || "",
       autoReply: body.autoReply === true,

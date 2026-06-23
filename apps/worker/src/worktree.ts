@@ -20,6 +20,12 @@ export function worktreesRoot(localPath: string): string {
   return path.join(localPath, ".claude", "worktrees");
 }
 
+// 项目本地目录是否为 git 仓库（执行真相）：localPath 下存在 .git（目录=普通仓 / 文件=worktree/submodule）即为 git。
+// 非 git 项目（docs/spec/non-git-projects.md）由此判定走「就地修改」路径：不建 worktree、不 commit/push/PR。
+export function isGitRepo(localPath: string): boolean {
+  return existsSync(path.join(localPath, ".git"));
+}
+
 export function worktreePathFor(localPath: string, taskId: string): string {
   return path.join(worktreesRoot(localPath), `${TASK_WT_PREFIX}${taskId}`);
 }
