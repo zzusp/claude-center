@@ -564,10 +564,6 @@ function SubRepoPie({ data, total }: { data: { id: string; name: string; n: numb
   );
 }
 
-// 新建项目时内联填写的子仓草稿（尚无 project_repos 行,提交后随 POST /api/projects 的 subs 一并落库）。
-type DraftSub = { name: string; repoUrl: string; defaultBranch: string; description: string };
-const emptyDraftSub = (): DraftSub => ({ name: "", repoUrl: "", defaultBranch: "main", description: "" });
-
 function ProjectForm({
   mode,
   project,
@@ -579,12 +575,6 @@ function ProjectForm({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // 仅新建模式可内联填写子仓；编辑模式仍在列表行逐条增删（见下方 t-meta 提示）。
-  const [subs, setSubs] = useState<DraftSub[]>([]);
-
-  function patchSub(index: number, patch: Partial<DraftSub>) {
-    setSubs((prev) => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)));
-  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -595,33 +585,6 @@ function ProjectForm({
       defaultBranch: String(data.get("defaultBranch") ?? "").trim(),
       description: String(data.get("description") ?? "").trim()
     };
-    // 子仓：丢弃完全空行,其余做必填 / 与主仓重名 / 子仓间重复校验（与后端一致,提前友好报错）。
-    const cleanedSubs = subs
-      .map((s) => ({
-        name: s.name.trim(),
-        repoUrl: s.repoUrl.trim(),
-        defaultBranch: s.defaultBranch.trim() || "main",
-        description: s.description.trim()
-      }))
-      .filter((s) => s.name || s.repoUrl || s.description);
-    if (mode === "create") {
-      const seen = new Set<string>();
-      for (const s of cleanedSubs) {
-        if (!s.repoUrl) {
-          setError("子仓必须填写 Git 仓库地址");
-          return;
-        }
-        if (s.repoUrl === body.repoUrl) {
-          setError("子仓 Git 地址不可与主仓相同");
-          return;
-        }
-        if (seen.has(s.repoUrl)) {
-          setError(`子仓 Git 地址重复：${s.repoUrl}`);
-          return;
-        }
-        seen.add(s.repoUrl);
-      }
-    }
     setBusy(true);
     setError(null);
     try {
@@ -629,14 +592,13 @@ function ProjectForm({
         const response = await fetch("/api/projects", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...body, subs: cleanedSubs })
+          body: JSON.stringify(body)
         });
         if (!response.ok) {
           const payload = (await response.json().catch(() => ({}))) as { error?: string };
           throw new Error(payload.error ?? `创建失败：${response.status}`);
         }
-        const subNote = cleanedSubs.length > 0 ? `（含 ${cleanedSubs.length} 个子仓）` : "";
-        await onDone(`已创建项目 ${body.name}${subNote}`);
+        await onDone(`已创建项目 ${body.name}`);
       } else if (project) {
         const response = await fetch(`/api/projects/${project.id}`, {
           method: "PATCH",
@@ -673,75 +635,9 @@ function ProjectForm({
         <label className="field-label">描述</label>
         <textarea name="description" defaultValue={project?.description ?? ""} rows={3} placeholder="项目说明" />
       </div>
-      {mode === "create" ? (
-        <div className="field">
-          <label className="field-label">
-            子仓（子项目） <span className="field-hint">可选，含子项目的项目可在此一并填写，创建后也能在列表逐条增删</span>
-          </label>
-          <div className="sub-repo-list">
-            {subs.map((sub, index) => (
-              <div
-                key={index}
-                className="sub-repo-row"
-                style={{ border: "1px solid var(--border)", borderRadius: 6, padding: 8, marginBottom: 8 }}
-              >
-                <div className="form-row">
-                  <div className="field">
-                    <label className="field-label">项目名</label>
-                    <input
-                      value={sub.name}
-                      onChange={(e) => patchSub(index, { name: e.target.value })}
-                      placeholder="widgets-lib"
-                    />
-                  </div>
-                  <div className="field">
-                    <label className="field-label">Git 仓库地址</label>
-                    <input
-                      value={sub.repoUrl}
-                      onChange={(e) => patchSub(index, { repoUrl: e.target.value })}
-                      placeholder="https://github.com/acme/widgets-lib.git"
-                    />
-                  </div>
-                </div>
-                <div className="form-row">
-                  <div className="field">
-                    <label className="field-label">默认分支</label>
-                    <input
-                      value={sub.defaultBranch}
-                      onChange={(e) => patchSub(index, { defaultBranch: e.target.value })}
-                      placeholder="main"
-                    />
-                  </div>
-                  <div className="field">
-                    <label className="field-label">描述</label>
-                    <input
-                      value={sub.description}
-                      onChange={(e) => patchSub(index, { description: e.target.value })}
-                      placeholder="子仓说明（可选）"
-                    />
-                  </div>
-                </div>
-                <div className="t-right">
-                  <button
-                    type="button"
-                    className="icon-btn danger"
-                    title="移除该子仓"
-                    onClick={() => setSubs((prev) => prev.filter((_, i) => i !== index))}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-          <button type="button" className="btn btn-sm" onClick={() => setSubs((prev) => [...prev, emptyDraftSub()])}>
-            <Plus size={16} />
-            添加子仓
-          </button>
-        </div>
-      ) : (
+      {mode === "edit" ? (
         <div className="t-meta">子仓在列表行点击「添加子仓」逐条管理；编辑 / 删除在展开的子仓表格上直接操作。</div>
-      )}
+      ) : null}
       {error ? <div className="error-box">{error}</div> : null}
       <button className="btn btn-primary" type="submit" disabled={busy}>
         {mode === "create" ? <Plus size={16} /> : <Save size={16} />}

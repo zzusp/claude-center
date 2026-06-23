@@ -383,7 +383,7 @@ export function DependencyPicker({
 }
 
 // 仅启用的子仓被序列化到 taskRepos。后端按 enabled=false / 缺省一律落 sub_status='skipped'。
-function serializeTaskRepos(subStates: SubStatesMap): Array<{
+export function serializeTaskRepos(subStates: SubStatesMap): Array<{
   projectRepoId: string;
   baseBranch: string;
   workBranch: string;
@@ -402,7 +402,8 @@ function serializeTaskRepos(subStates: SubStatesMap): Array<{
 }
 
 // 子仓配置 section：每个子仓一行，启用 checkbox + 三个分支输入（启用后才可编辑）。
-function SubRepoConfigSection({
+// 新建任务（ComposeTaskForm）与编辑任务（TaskEditForm）共用，保持两处子仓填写体验一致。
+export function SubRepoConfigSection({
   subRepos,
   subStates,
   onChange
