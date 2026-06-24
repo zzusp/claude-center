@@ -1,9 +1,15 @@
-# ClaudeCenter Web 端部署 compose（console + relay）。postgres 走宿主机自建（端口 55432），
+# ClaudeCenter Web 端部署 compose。postgres 走宿主机自建（端口 55432），
 # 不在 compose 内起。env_file 指向 /opt/claude-center/.env，由 ops 维护（不入 git）。
 #
+# console 是默认部署目标；relay（SSE 中转，可选实时线）发布频率低，归入 compose profile
+# `relay`，默认不随主部署启动——relay 不可用时 console 自动回退 DB 轮询，功能不降级。
+#
 # 使用：
-#   docker compose build --build-arg APP_VERSION=$APP_VERSION console relay
-#   docker compose up -d console relay
+#   # 主部署（只 console）
+#   docker compose build --build-arg APP_VERSION=$APP_VERSION console
+#   docker compose up -d console
+#   # 手动发 relay（需要时单独跑，一条命令 build+up）
+#   docker compose --profile relay up -d --build relay
 #
 # 健康检查 + 重启策略由 image HEALTHCHECK + restart: unless-stopped 兜底。
 services:
@@ -27,9 +33,10 @@ services:
       - "3000:3000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      - relay
 
+  # relay：SSE 中转（可选实时线），发布频率低，归入 `relay` profile，默认部署不启动。
+  # console 连不上 relay 会自动回退 DB 轮询，故不再 depends_on relay（去掉它避免 depends_on
+  # 把 profile 服务隐式拉起）。手动发：docker compose --profile relay up -d --build relay
   relay:
     image: claude-center-relay:${APP_VERSION:-dev}
     build:
@@ -37,6 +44,8 @@ services:
       dockerfile: apps/relay/Dockerfile
     container_name: claude-center-relay
     restart: unless-stopped
+    profiles:
+      - relay
     env_file:
       - .env
     environment:

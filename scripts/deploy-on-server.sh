@@ -63,11 +63,13 @@ chmod 600 .env || true
 # 3) docker compose build/up
 export APP_VERSION
 
-echo "[deploy] docker compose build console relay (APP_VERSION=$APP_VERSION)"
-docker compose build console relay
+# relay（SSE 中转，可选实时线）发布频率低，已归入 compose `relay` profile，不随主部署。
+# 需要时手动发：docker compose --profile relay up -d --build relay
+echo "[deploy] docker compose build console (APP_VERSION=$APP_VERSION)"
+docker compose build console
 
-echo "[deploy] docker compose up -d console relay"
-docker compose up -d console relay
+echo "[deploy] docker compose up -d console"
+docker compose up -d console
 
 # 4) 健康检查
 echo "[deploy] 等待 console 就绪（最多 60s）"
@@ -86,13 +88,6 @@ for i in $(seq 1 12); do
   fi
   sleep 5
 done
-
-code=$(curl -s -o /dev/null -m 3 -w '%{http_code}' http://127.0.0.1:8787/healthz || echo 000)
-if [[ "$code" == "200" ]]; then
-  echo "[deploy] relay OK (HTTP 200)"
-else
-  echo "[deploy] relay 健康检查未通过（HTTP $code），不阻塞——SSE 不可用时 console 回退轮询"
-fi
 
 # 5) 清理
 docker image prune -f >/dev/null 2>&1 || true

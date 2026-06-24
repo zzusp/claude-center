@@ -1,6 +1,6 @@
 # Web 端 CI 发版 Runbook
 
-> 给「打 `cc-vX.Y.Z` tag → console + relay 自动部署到生产服务器」这条路径写的运维手册：
+> 给「打 `cc-vX.Y.Z` tag → console 自动部署到生产服务器」这条路径写的运维手册：
 > 触发命令、CI 内部流程、关键设计为什么这样写、踩坑史与排错、回滚流程。
 >
 > 配套：[`docs/spec/deployment-pipeline.md`](../spec/deployment-pipeline.md)（综合方案 spec）、
@@ -18,9 +18,13 @@ gh run watch  # 或 https://github.com/zzusp/claude-center/actions
 
 CI 跑完后：
 
-- console + relay 在 `http://115.159.161.47:3000` / `:8787` 跑新版本
+- console 在 `http://115.159.161.47:3000` 跑新版本
 - Release：`https://github.com/zzusp/claude-center/releases/tag/cc-vX.Y.Z`
 - console 顶栏左侧 brand 区下方显示 `v{X.Y.Z}`
+
+> relay（SSE 中转，可选实时线）发布频率低，**不随 tag 自动部署**——已归入 compose `relay`
+> profile。需要时手动发：`docker compose --profile relay up -d --build relay`（见 §7）。
+> relay 不在线时 console 自动回退 DB 轮询，功能不降级。
 
 ## 1. 触发命令的内部行为
 
@@ -50,7 +54,7 @@ push tag cc-v[0-9]+.[0-9]+.[0-9]+
       │   ├─ Parse tag → APP_VERSION (outputs.app_version)
       │   ├─ npm ci --ignore-scripts
       │   ├─ npm run typecheck
-      │   ├─ npm run build (五包全编)
+      │   ├─ Build smoke (db / relay-client / console 三包；relay 改手动发，不在 CI 编)
       │   ├─ Extract release notes → artifacts/notes.md
       │   └─ Upload notes artifact (供 release job 用)
       │
@@ -64,8 +68,8 @@ push tag cc-v[0-9]+.[0-9]+.[0-9]+
       │   │     ├─ tar xzf → 临时区
       │   │     ├─ rsync -a --delete --exclude='.env' <stage>/ /opt/claude-center/
       │   │     ├─ export APP_VERSION=X.Y.Z
-      │   │     ├─ docker compose build console relay
-      │   │     ├─ docker compose up -d console relay
+      │   │     ├─ docker compose build console
+      │   │     ├─ docker compose up -d console
       │   │     ├─ 等 console 就绪（最多 60s，curl /api/dashboard 看 401/200）
       │   │     └─ docker image prune -f
       │   └─ External health check (从 runner 走公网 curl http://${DEPLOY_HOST}:3000/api/dashboard，5 次重试)
@@ -181,7 +185,7 @@ build:
 
 ```bash
 export APP_VERSION   # 从 ssh env 传入
-docker compose build console relay
+docker compose build console
 ```
 
 CI 链：`cc-v0.2.0` tag → workflow 解析得到 `0.2.0` → ssh env `APP_VERSION=0.2.0` → compose build args → Dockerfile ENV → Next build 把它编进客户端 chunk → `apps/console/app/ui/shell.tsx` 读 `process.env.NEXT_PUBLIC_APP_VERSION` 显示在顶栏 brand 区下方。
@@ -300,7 +304,7 @@ workflow 写 `environment: DEPLOY`（大小写敏感，与仓库 Settings → En
 | `Trust host` | secrets.DEPLOY_KNOWN_HOSTS 没配。本地 `ssh-keyscan -p 22 <host>` 输出粘进 secret |
 | `Upload bundle` scp 失败 | host/port/user secret 错、或服务器 sshd 拒；用 secret 的值在本地手工 ssh 复现 |
 | `Run deploy-on-server.sh` 卡在 `git fetch` | 还在跑旧版脚本——确认 workflow 用的是 `/tmp/deploy-on-server.sh` 而不是 `/opt/claude-center/scripts/...` |
-| `Run deploy-on-server.sh` docker build 失败 | 上 ssh 跑 `cd /opt/claude-center && docker compose build console relay` 复现，看具体哪个 COPY 步骤错；常见 `public not found`（§3.4 类）、registry mirror 不通（§3.8） |
+| `Run deploy-on-server.sh` docker build 失败 | 上 ssh 跑 `cd /opt/claude-center && docker compose build console` 复现，看具体哪个 COPY 步骤错；常见 `public not found`（§3.4 类）、registry mirror 不通（§3.8） |
 | `Run deploy-on-server.sh` `console 未就绪 HTTP 4xx 5xx` | docker compose logs --tail 80 console 看应用日志；常见 `@claude-center/db not found`（§3.4 漏 COPY）、`DATABASE_URL` env 没拿到（容器内 `env \| grep DATABASE`） |
 | `External health check` | 5 次重试都拒：从 CI runner 走公网到 `${DEPLOY_HOST}:3000` 阻塞——防火墙 / 端口映射 / docker port binding 检查 |
 
@@ -351,10 +355,11 @@ npm run verify:console   # 401→200，scheduler.ok=true 才算 OK
 # 2) 本地 docker compose build
 $env:APP_VERSION='0.2.0-test'
 docker compose config --quiet   # 语法 / env 校验
-docker compose build console relay
-docker compose up -d console relay
+docker compose build console
+docker compose up -d console
 docker compose logs --tail=80 console
 docker compose ps   # 看 health
+# 验证 relay（可选实时线）时再单独跑：docker compose --profile relay up -d --build relay
 ```
 
 > 本地不能完全复现服务器环境（postgres 监听、防火墙、mirror）——但能 catch 80% 的 Dockerfile / compose 配置 bug，避免 CI 来回打 tag 调试。
@@ -377,7 +382,7 @@ docker compose ps   # 看 health
 |---|---|
 | `.github/workflows/deploy-web.yml` | CI workflow |
 | `apps/console/Dockerfile` | console 多阶段构建（Next standalone） |
-| `apps/relay/Dockerfile` | relay 服务镜像 |
+| `apps/relay/Dockerfile` | relay 服务镜像（归入 compose `relay` profile，手动发，见 §7） |
 | `docker-compose.yml` | 部署组合 |
 | `apps/console/next.config.mjs` (`output: standalone`) | standalone build 配置 |
 | `apps/console/instrumentation.ts` / `instrumentation-node.ts` | 后台调度器（edge DCE 写法） |
