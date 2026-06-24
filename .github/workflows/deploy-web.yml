@@ -109,10 +109,12 @@ jobs:
         run: |
           set -e
           # 把 runner 上 checkout 出的 tag 内容打包。排除 .git / node_modules / 产物。
+          # docs/ 不参与 docker build / 运行时，整目录排除以缩小跨境 scp（Upload bundle 是 deploy 头号瓶颈；
+          # 本地实测排除 docs 后 bundle ~20MB → ~0.5MB）。服务器 rsync --delete 会顺带清掉 /opt 下旧 docs，无害。
           # bundle 解压后的根目录直接是仓库内容（不带 wrapper 目录），与 deploy-on-server.sh 的解析一致。
           tar czf /tmp/cc-deploy-${APP_VERSION}.tar.gz \
             --exclude='node_modules' --exclude='.next' --exclude='dist' \
-            --exclude='.git' --exclude='apps/worker/release' --exclude='docs/tmp' \
+            --exclude='.git' --exclude='apps/worker/release' --exclude='docs' \
             --exclude='.env' --exclude='.env.*' \
             .
           ls -la /tmp/cc-deploy-${APP_VERSION}.tar.gz

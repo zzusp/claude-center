@@ -62,7 +62,7 @@ push tag cc-v[0-9]+.[0-9]+.[0-9]+
       │   ├─ Checkout @ tag                  ← runner 上再 checkout 一份做 bundle 源
       │   ├─ Setup SSH (webfactory/ssh-agent + secrets.DEPLOY_SSH_KEY)
       │   ├─ Trust host (写 secrets.DEPLOY_KNOWN_HOSTS 到 ~/.ssh/known_hosts)
-      │   ├─ Pack release bundle (tar czf /tmp/cc-deploy-X.Y.Z.tar.gz，排除 node_modules/.git/.next/.env)
+      │   ├─ Pack release bundle (tar czf /tmp/cc-deploy-X.Y.Z.tar.gz，排除 node_modules/.git/.next/docs/.env)
       │   ├─ Upload bundle + deploy script (scp 两个文件到服务器 /tmp/)
       │   ├─ Run deploy-on-server.sh (ssh sudo bash /tmp/deploy-on-server.sh X.Y.Z /tmp/cc-deploy-X.Y.Z.tar.gz)
       │   │     ├─ tar xzf → 临时区
@@ -92,7 +92,7 @@ push tag cc-v[0-9]+.[0-9]+.[0-9]+
 
 - CI runner 在境外，能直连 `github.com` ✓
 - runner 上 `actions/checkout @ tag` 拿到全套代码
-- `tar czf` 打包（排除 `.git` / `node_modules` / `.next` / `dist` / `.env`）
+- `tar czf` 打包（排除 `.git` / `node_modules` / `.next` / `dist` / `docs` / `.env`）—— docs 不参与部署，排除以缩小跨境 scp
 - `scp` 到服务器 `/tmp/cc-deploy-X.Y.Z.tar.gz`
 - 同时把 `scripts/deploy-on-server.sh` 也 scp 到 `/tmp/`（**避免「先 rsync 才能拿到新版脚本」的鸡生蛋**）
 - `ssh` 跑 `sudo bash /tmp/deploy-on-server.sh X.Y.Z /tmp/cc-deploy-X.Y.Z.tar.gz`
