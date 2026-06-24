@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-06-24
+
+### Changed
+
+- CI 发布包（release bundle）排除 `docs/`：deploy 的跨境上传（scp tarball 到国内服务器）是头号瓶颈，docs 不参与 docker build / 运行时，从 bundle 整目录排除——git 跟踪的 docs 7.84MB 砍掉，跨境传输量大减（本地实测 tar 从 ~20MB → ~0.5MB）。纯部署流程优化，不影响 console / relay 运行时行为。
+
 ## [0.2.12] - 2026-06-24
 
 ### Fixed
