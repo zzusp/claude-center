@@ -73,9 +73,43 @@ async function rounds(short) {
   console.log(`  ${short}: turns=${m.claude_turn_finished || 0} resumes=${m.resumed || 0} automerge_skipped=${m.auto_merge_skipped || 0}`);
 }
 
+async function resumeBoundaries(short) {
+  // §2 结论 C 机制澄清：找 jsonl 里 >5min 的 assistant 间隔（= 续接/缓存过期边界），
+  // 看该次 API 调用的 cache_creation（冷缓存满价重写） vs cache_read（温缓存），并打印上下文增长。
+  const r = await pool.query(
+    `SELECT ts.jsonl FROM task_sessions ts JOIN tasks t ON t.id=ts.task_id WHERE t.id::text LIKE $1||'%'`,
+    [short]
+  );
+  if (!r.rows.length) return console.log(`${short}: no session`);
+  const msgs = [];
+  for (const line of r.rows[0].jsonl.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    let o;
+    try { o = JSON.parse(t); } catch { continue; }
+    const u = o.message?.usage;
+    if (o.type === "assistant" && u) {
+      msgs.push({
+        ts: o.timestamp,
+        cc: u.cache_creation_input_tokens || 0,
+        cr: u.cache_read_input_tokens || 0,
+        ctx: (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0)
+      });
+    }
+  }
+  console.log(`\n# ${short} resume/缓存过期边界（>5min 间隔）  上下文: 首5条≈${msgs.slice(0,5).map(m=>m.ctx).join("/")}  末5条≈${msgs.slice(-5).map(m=>m.ctx).join("/")}`);
+  for (let i = 1; i < msgs.length; i++) {
+    const gapMin = (new Date(msgs[i].ts) - new Date(msgs[i - 1].ts)) / 60000;
+    if (gapMin > 5)
+      console.log(`  idx ${String(i).padStart(3)} gap=${gapMin.toFixed(0)}min  cache_creation=${fmt(msgs[i].cc)} cache_read=${fmt(msgs[i].cr)} ctx=${fmt(msgs[i].ctx)}`);
+  }
+}
+
 const shorts = await dayTasks();
 console.log("\n# §2 结论 A/B 用量构成");
 for (const s of shorts) await usageComposition(s);
 console.log("\n# §2 结论 C 轮次");
 for (const s of shorts) await rounds(s);
+console.log("\n# §2 结论 C 机制澄清：续接/冷缓存边界（Top1 与 d8b66a53）");
+for (const s of ["2f524b68", "d8b66a53"]) await resumeBoundaries(s);
 await pool.end();
