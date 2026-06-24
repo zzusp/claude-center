@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-06-24
+
+### Fixed
+
+- console 镜像装 git 改走阿里云 apk 源：cc-v0.2.11 在国内生产服务器 `apk add git` 走 alpine 默认源 `dl-cdn.alpinelinux.org` 跨境拉包 >500s 超时、SSH `Broken pipe` 致 deploy 失败（`docker build` 在 `set -e` 下退出、未执行到 `up`，线上旧版 0.2.10 未受影响）；Dockerfile 先 `sed` 把 apk 源换成 `mirrors.aliyun.com` 再 `apk add git`，本地实测装 git 13.8s、最终镜像 `git 2.54.0` 可用。
+
 ## [0.2.11] - 2026-06-24
 
 ### Changed
