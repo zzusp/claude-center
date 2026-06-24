@@ -65,7 +65,6 @@ jobs:
           npm -w @claude-center/db run build
           npm -w @claude-center/relay-client run build
           npm -w @claude-center/console run build
-          npm -w @claude-center/relay run build
 
       - name: Extract release notes
         id: notes

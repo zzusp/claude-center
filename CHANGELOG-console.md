@@ -8,6 +8,16 @@
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-06-24
+
+### Changed
+
+- relay（SSE 中转，可选实时线）退出 `cc-vX.Y.Z` tag 的自动部署：归入 docker compose `relay` profile，主部署（CI + `deploy-on-server.sh`）只 build/up `console`；relay 发布频率低，需要时手动发 `docker compose --profile relay up -d --build relay`。console 不再 `depends_on` relay（避免隐式拉起 profile 服务），relay 不在线时自动回退 DB 轮询、功能不降级；CI 也不再 smoke 编译 relay 包。
+
+### Fixed
+
+- console 容器镜像补装 `git`：服务端拉取远程分支（`git ls-remote`）与任务合并检测（`git merge-base --is-ancestor`）依赖 `git`，但 `node:alpine` 基镜像不含，线上这两条路径会失败；Dockerfile run 阶段 `apk add --no-cache git` 修复（实测最终镜像内 `git 2.54.0` 可用）。
+
 ## [0.2.10] - 2026-06-23
 
 ### Added
