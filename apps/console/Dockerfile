@@ -42,6 +42,9 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# 运行时依赖：console 服务端用 execFile 调 git（branches/route.ts 拉远程分支、merge-check.ts 祖先判定），
+# alpine 基镜像不含 git，必须显式安装。放 run 阶段——build 阶段装的运行时镜像带不过来（多阶段只 COPY standalone 产物）。
+RUN apk add --no-cache git
 # 非 root 用户。
 RUN addgroup -S app && adduser -S app -G app
 # standalone 目录结构：app/apps/console/server.js + app/node_modules（顶层）+ app/apps/console/.next/...
