@@ -145,6 +145,9 @@ export async function ensureWorktree(
 
   // 续接 / 重试：工作树的 .git 是指向主仓的文件，存在即视为可复用（持有上一轮未提交改动，直接接着干）。
   if (existsSync(path.join(wtPath, ".git"))) {
+    // 终态收尾时会 detach HEAD 释放 work_branch（避免人类命名的子仓 work_branch 永久占用，撞主检出手动签出）；
+    // 复用时把 HEAD 重新绑回 work_branch，让后续 commit / push 落在分支上而非 detached HEAD。
+    await reattachRepoWorktree(wtPath, opts.workBranch);
     return;
   }
   // 不是有效工作树（.git 丢失但目录作为孤儿残留 / 悬挂注册）：robust 清理后从已有 workBranch 重建（不再误报失败）。
@@ -155,6 +158,29 @@ export async function ensureWorktree(
     ["-C", localPath, "worktree", "add", "--force", wtPath, opts.workBranch],
     { timeoutMs: 10 * 60_000 }
   );
+}
+
+// 终态保留 worktree 时释放 work_branch 占用：把 worktree 的 HEAD detach 到当前 commit。
+// 背景：多仓任务的**子仓** work_branch 常是用户输入的人类命名（如 `feature/foo`），任务进 success/merged/failed/cancelled
+// 后子仓 worktree 永久保留（spec：供人工验收/复用），其 git 注册一直 hold 着 work_branch，用户在主检出
+// 想签出同名分支时撞 `already checked out`。detach 后 worktree 内容/未提交改动全保留，但分支腾出来。
+// 续接重试时由 ensureWorktree 复用路径里的 reattachRepoWorktree 再绑回 work_branch。
+// 容错：worktree 不存在 / git 命令异常都不抛——影响仅是占用未释放，GC 兜底；不能因此阻塞终态写库。
+export async function detachRepoWorktree(repoWt: string): Promise<void> {
+  if (!existsSync(path.join(repoWt, ".git"))) {
+    return;
+  }
+  await gitTolerant(["-C", repoWt, "switch", "--detach"]);
+}
+
+// detach 后续接复用 worktree 时把 HEAD 重新绑回 work_branch（detach 是上一轮终态收尾做的）。
+// 容错：若已在该分支（未经 detach 的复用路径）会被 git 视为 no-op；分支名异常等情形也容错忽略，
+// 保留未提交改动给上层 Claude 继续干。switch 在 detached → 已存在本地分支且 commit 相同时是无副作用的绑定操作。
+export async function reattachRepoWorktree(repoWt: string, workBranch: string): Promise<void> {
+  if (!existsSync(path.join(repoWt, ".git"))) {
+    return;
+  }
+  await gitTolerant(["-C", repoWt, "switch", workBranch]);
 }
 
 // 多仓任务支持（docs/spec/task-multi-repo.md §6、docs/spec/project-repos-runtime-path.md）：

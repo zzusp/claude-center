@@ -53,6 +53,7 @@ import {
 import {
   assertSubRepoPathIgnoredInMain,
   conversationWorktreePathFor,
+  detachRepoWorktree,
   ensureSubRepoCloned,
   ensureWorktree,
   isGitRepo,
@@ -732,6 +733,7 @@ async function handleClaudeTurn(
         // 非 git 项目无法用 git status 判定改动，恒按「有改动」处理（走续接兜底而非零改动直接 fail）。
         const hasChanges = isGit ? await anyRepoHasChanges(ctxs, localPath, task.id) : true;
         if (!hasChanges) {
+          if (isGit) await detachAllRepoWorktrees(localPath, task.id, ctxs);
           await markTaskFailed(
             pool,
             task.id,
@@ -744,6 +746,7 @@ async function handleClaudeTurn(
         }
         const usedRounds = await countAutoReplyRounds(task.id);
         if (usedRounds >= AUTO_REPLY_MAX_ROUNDS) {
+          if (isGit) await detachAllRepoWorktrees(localPath, task.id, ctxs);
           await markTaskFailed(
             pool,
             task.id,
@@ -869,6 +872,19 @@ async function findExistingPrUrl(
     return list[0]?.url ?? null;
   } catch {
     return null;
+  }
+}
+
+// 任务进终态前对所有参与仓 worktree detach HEAD 释放 work_branch 占用。
+// 背景：子仓 work_branch 常是用户输入的人类命名（如 `feature/foo`），任务终态后 worktree 永久保留供人工
+// 验收/复用（listActiveTaskIdsForWorker 把 success/merged/failed/cancelled 都进 GC keep 名单），但 git 注册
+// 一直 hold 着 work_branch → 用户在主检出想签出同名分支时撞 `already checked out`。
+// detach 后内容/未提交改动全保留，分支腾出；续接重试时 ensureWorktree 复用路径会自动 reattach。
+// 容错：detach 内部失败已被吞掉（gitTolerant），这里仅保证 skipped 仓不动。
+async function detachAllRepoWorktrees(localPath: string, taskId: string, ctxs: TaskRepoCtx[]): Promise<void> {
+  for (const ctx of ctxs) {
+    if (ctx.sub_status === "skipped") continue;
+    await detachRepoWorktree(repoWtFor(localPath, taskId, ctx));
   }
 }
 
@@ -1055,6 +1071,7 @@ export async function finalizeTaskMultiRepo(
     const summary = failures
       .map((f) => `${f.ctx.role === "main" ? "主仓" : f.ctx.relative_path}: ${(f as { error: string }).error}`)
       .join("\n");
+    await detachAllRepoWorktrees(localPath, task.id, ctxs);
     await markTaskFailed(pool, task.id, config.workerId, summary, {
       workdir: wtPath,
       failedAt: new Date().toISOString(),
@@ -1072,6 +1089,7 @@ export async function finalizeTaskMultiRepo(
     // submit_mode='push':所有参与仓 push 完即 success(终态,无 PR 可合)。
     // 「不再清理 worktree」(spec drop-accepted-rejected.md):保留 worktree 供用户本地复用,
     // 由 GC 兜底回收(GC keep 列表已含 success,真孤儿才被清)。
+    await detachAllRepoWorktrees(localPath, task.id, ctxs);
     await markTaskSuccess(
       pool,
       task.id,
@@ -1088,6 +1106,7 @@ export async function finalizeTaskMultiRepo(
   }
 
   // submit_mode='pr':标记 success(Console 30s 轮询若检测到 PR 合并会自动翻 merged),保留所有 worktree。
+  await detachAllRepoWorktrees(localPath, task.id, ctxs);
   await markTaskSuccess(
     pool,
     task.id,
