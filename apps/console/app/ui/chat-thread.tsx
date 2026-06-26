@@ -541,7 +541,7 @@ export function ChatThread({
               />
               {busy ? (
                 <button
-                  className="chat-composer-btn chat-send-stop"
+                  className="chat-send chat-send-stop"
                   type="button"
                   onClick={() => void cancelTurn()}
                   title="终止本轮回答"
@@ -551,7 +551,7 @@ export function ChatThread({
                 </button>
               ) : (
                 <button
-                  className="chat-composer-btn"
+                  className="chat-send"
                   type="button"
                   disabled={sending || (!input.trim() && draftAtts.length === 0)}
                   onClick={send}

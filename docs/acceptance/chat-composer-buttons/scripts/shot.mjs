@@ -8,7 +8,8 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FEATURE = path.resolve(__dirname, "..");
-const OUT = path.join(FEATURE, "round-1");
+const ROUND = process.env.ROUND || "round-1";
+const OUT = path.join(FEATURE, ROUND);
 const BASE = process.env.CONSOLE_BASE || "http://127.0.0.1:3010";
 
 const env = readFileSync(path.resolve(FEATURE, "../../../.env"), "utf8");
