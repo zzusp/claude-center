@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("workerApi", {
   setPreCommand: (command) => ipcRenderer.invoke("worker:setPreCommand", command),
   setRelayConfig: (input) => ipcRenderer.invoke("worker:setRelayConfig", input),
   setDatabaseConfig: (url) => ipcRenderer.invoke("worker:setDatabaseConfig", url),
+  setDingtalkConfig: (input) => ipcRenderer.invoke("worker:setDingtalkConfig", input),
   listCloudProjects: () => ipcRenderer.invoke("worker:listCloudProjects"),
   listProjectLinks: () => ipcRenderer.invoke("worker:listProjectLinks"),
   pickFolder: () => ipcRenderer.invoke("worker:pickFolder"),

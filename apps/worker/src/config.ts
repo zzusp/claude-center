@@ -55,6 +55,9 @@ export type WorkerConfig = {
   relayPublishToken: string;
   // 订阅中转的 worker 鉴权 token（CLAUDE_CENTER_RELAY_WORKER_TOKEN）。
   relayWorkerToken: string;
+  // 钉钉 CLI 可选能力：用户在桌面端开关 + 配置命令；启用后参与能力自检并作为客户端能力之一上报。
+  dingtalkEnabled: boolean;
+  dingtalkCommand: string;
 };
 
 // worker.json 持久化:workerId（稳定身份）+ 跨重启保留的客户端策略（allowRemoteControl/maxParallel）
@@ -73,6 +76,9 @@ export type WorkerState = {
   relayUrl?: string;
   relayPublishToken?: string;
   relayWorkerToken?: string;
+  // 钉钉 CLI 可选能力开关与命令（路径或 PATH 上的可执行文件名）；持久化，跨重启保留。
+  dingtalkEnabled?: boolean;
+  dingtalkCommand?: string;
 };
 
 function dataDirOf(): string {
@@ -217,6 +223,9 @@ export function readWorkerConfig(): WorkerConfig {
     // 桌面端持久化优先（设过即覆盖 env），其次 env，最后空。与 terminalCommand/claudePreCommand 同模式。
     relayUrl: state.relayUrl ?? (process.env.CLAUDE_CENTER_RELAY_URL?.trim() || ""),
     relayPublishToken: state.relayPublishToken ?? (process.env.CLAUDE_CENTER_RELAY_PUBLISH_TOKEN?.trim() || ""),
-    relayWorkerToken: state.relayWorkerToken ?? (process.env.CLAUDE_CENTER_RELAY_WORKER_TOKEN?.trim() || "")
+    relayWorkerToken: state.relayWorkerToken ?? (process.env.CLAUDE_CENTER_RELAY_WORKER_TOKEN?.trim() || ""),
+    // 钉钉 CLI 开关与命令：默认关闭、命令空；桌面端持久化优先于 env。
+    dingtalkEnabled: state.dingtalkEnabled ?? readBool("CLAUDE_CENTER_DINGTALK_ENABLED", false),
+    dingtalkCommand: state.dingtalkCommand ?? (process.env.CLAUDE_CENTER_DINGTALK_COMMAND?.trim() || "")
   };
 }

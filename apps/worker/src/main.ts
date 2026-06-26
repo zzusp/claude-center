@@ -62,6 +62,9 @@ app.whenReady().then(() => {
   ipcMain.handle("worker:setDatabaseConfig", (_event, url: string) =>
     worker?.setDatabaseConfig(url) ?? { ok: false, error: "worker 未就绪" }
   );
+  ipcMain.handle("worker:setDingtalkConfig", (_event, input: { enabled: boolean; command: string }) =>
+    worker?.setDingtalkConfig(input)
+  );
   ipcMain.handle("worker:listCloudProjects", () => worker?.listCloudProjects() ?? []);
   ipcMain.handle("worker:listProjectLinks", () => worker?.listProjectLinks() ?? []);
   ipcMain.handle("worker:addProjectLink", (_event, input: { projectName: string; localPath: string }) =>
