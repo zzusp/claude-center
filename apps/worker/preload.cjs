@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld("workerApi", {
   pickFolder: () => ipcRenderer.invoke("worker:pickFolder"),
   addProjectLink: (input) => ipcRenderer.invoke("worker:addProjectLink", input),
   removeProjectLink: (input) => ipcRenderer.invoke("worker:removeProjectLink", input),
+  listProjectWorktrees: () => ipcRenderer.invoke("worker:listProjectWorktrees"),
+  removeProjectWorktrees: (items) => ipcRenderer.invoke("worker:removeProjectWorktrees", items),
   cancelTask: (taskId) => ipcRenderer.invoke("worker:cancelTask", taskId),
   listMyTasks: (opts) => ipcRenderer.invoke("worker:listMyTasks", opts),
   getTaskDetail: (taskId) => ipcRenderer.invoke("worker:getTaskDetail", taskId),

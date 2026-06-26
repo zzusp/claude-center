@@ -73,6 +73,11 @@ app.whenReady().then(() => {
   ipcMain.handle("worker:removeProjectLink", (_event, input: { projectName: string; localPath: string }) =>
     worker?.removeProjectLink(input)
   );
+  // 桌面端「项目 worktree 清理」：列表 + 批量删除（仅本机关联项目的 .claude/worktrees/，可清理项前端勾选后下发）。
+  ipcMain.handle("worker:listProjectWorktrees", () => worker?.listProjectWorktrees() ?? []);
+  ipcMain.handle("worker:removeProjectWorktrees", (_event, items: { localPath: string; wtPath: string }[]) =>
+    worker?.removeProjectWorktrees(items) ?? { removed: 0, failed: [] }
+  );
   ipcMain.handle("worker:cancelTask", (_event, taskId: string) => worker?.cancelTask(taskId) ?? false);
 
   // 桌面端任务面板（仅本 worker）：总览 / peek 详情 / 本机回复 / 续接重试。
