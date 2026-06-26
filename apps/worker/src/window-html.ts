@@ -615,6 +615,22 @@ export function windowHtml(): string {
                 </section>
 
                 <section class="card">
+                  <div class="card-head"><h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></span>钉钉 CLI</h2></div>
+                  <div class="card-body">
+                    <div class="set-row">
+                      <span class="set-label">启用钉钉 CLI<span class="set-hint">开启后参与启动能力自检并作为客户端能力之一上报</span></span>
+                      <label class="switch"><input type="checkbox" id="dingtalkToggle" /><span class="slider"></span></label>
+                    </div>
+                    <div class="term-form">
+                      <span class="term-label">钉钉 CLI 命令（可执行文件全路径，或已加入 PATH 的命令名，如 dingtalk）</span>
+                      <input id="dingtalkCommand" class="path-input" placeholder="如 dingtalk 或 D:\\tools\\dingtalk\\cli.exe（留空 = 仅启用槽位，自检结果为缺失）" />
+                      <button id="saveDingtalk" class="btn btn-sm btn-primary term-save" type="button">保存</button>
+                      <span class="term-hint" id="dingtalkHint">保存后立即重新自检，能力区与「能力就绪」统计实时刷新。</span>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="card">
                   <div class="card-head"><h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><circle cx="12" cy="20" r="1"/></svg></span>SSE 中转服务</h2></div>
                   <div class="card-body">
                     <div class="term-form">
@@ -1251,7 +1267,9 @@ export function windowHtml(): string {
 
             // 能力自检
             const caps = s.capabilities || {};
-            $("caps").innerHTML = [capDot("git", caps.git), capDot("gh", caps.gh), capDot("claude", caps.claude), capDot("node.js", caps.nodejs), capDot("python", caps.python)].join("");
+            const capRows = [capDot("git", caps.git), capDot("gh", caps.gh), capDot("claude", caps.claude), capDot("node.js", caps.nodejs), capDot("python", caps.python)];
+            if (caps.dingtalk) capRows.push(capDot("钉钉 CLI", caps.dingtalk));
+            $("caps").innerHTML = capRows.join("");
 
             // 套餐用量
             const u = s.usage || {};
@@ -1266,14 +1284,16 @@ export function windowHtml(): string {
             $("statActive").innerHTML = s.activeCount + '<span class="unit">/ ' + s.maxParallel + "</span>";
             $("statActiveFoot").textContent = "并发上限 " + s.maxParallel;
             const capList = [caps.git, caps.gh, caps.claude, caps.nodejs, caps.python];
+            if (caps.dingtalk) capList.push(caps.dingtalk);
             const capOk = capList.filter(function (c) { return c && c.ok; }).length;
-            $("statCaps").innerHTML = capOk + '<span class="unit">/ 5</span>';
+            $("statCaps").innerHTML = capOk + '<span class="unit">/ ' + capList.length + '</span>';
             const miss = [];
             if (!(caps.git && caps.git.ok)) miss.push("git");
             if (!(caps.gh && caps.gh.ok)) miss.push("gh");
             if (!(caps.claude && caps.claude.ok)) miss.push("claude");
             if (!(caps.nodejs && caps.nodejs.ok)) miss.push("node.js");
             if (!(caps.python && caps.python.ok)) miss.push("python");
+            if (caps.dingtalk && !caps.dingtalk.ok) miss.push("钉钉 CLI");
             $("statCapsFoot").textContent = miss.length ? "缺：" + miss.join("、") : "全部就绪";
             const relayShort = { connected: (s.relayChannels || 0) + " 频道", connecting: "连接中", reconnecting: "重连中", disabled: "未启用" }[s.relayState] || "未启用";
             $("statRelay").textContent = relayShort;
@@ -1384,6 +1404,30 @@ export function windowHtml(): string {
             finally { btn.disabled = false; }
           });
 
+          // —— 钉钉 CLI 配置（持久化进 worker.json，覆盖 env，保存后立即重新自检能力）——
+          async function loadDingtalk() {
+            let s = null;
+            try { s = await window.workerApi.getState(); } catch (e) {}
+            if (!s) return;
+            if (document.activeElement !== $("dingtalkToggle")) $("dingtalkToggle").checked = !!s.dingtalkEnabled;
+            if (document.activeElement !== $("dingtalkCommand")) $("dingtalkCommand").value = s.dingtalkCommand || "";
+          }
+          $("saveDingtalk").addEventListener("click", async () => {
+            const btn = $("saveDingtalk"), hint = $("dingtalkHint");
+            const enabled = !!$("dingtalkToggle").checked;
+            const command = $("dingtalkCommand").value.trim();
+            btn.disabled = true; hint.textContent = "保存并重新自检中…";
+            try {
+              await window.workerApi.setDingtalkConfig({ enabled, command });
+              hint.textContent = enabled
+                ? (command ? "已保存，能力区已刷新（探测命令：" + command + "）" : "已保存（启用槽位，但命令为空，自检结果为缺失）")
+                : "已保存，钉钉 CLI 已关闭";
+              await loadDingtalk();
+              refresh();
+            } catch (e) { hint.textContent = "保存失败：" + (e && e.message ? e.message : e); }
+            finally { btn.disabled = false; }
+          });
+
           // —— 数据库连接串配置（持久化进 worker.json，覆盖 env，保存即时连接并重启循环）——
           async function loadDb() {
             let s = null;
@@ -1481,7 +1525,7 @@ export function windowHtml(): string {
           });
 
           showPage("overview");
-          refresh(); loadProjects(); reloadTasks(); reloadConversations(); loadTerminals(); loadRelay(); loadDb();
+          refresh(); loadProjects(); reloadTasks(); reloadConversations(); loadTerminals(); loadRelay(); loadDb(); loadDingtalk();
           // 冷启动预热：主进程现在窗口先于 worker.start() 渲染（DB 不可达也能出窗口），但能力自检/OS/用量要等
           // start() 完成后才有值；只靠 15s 常规轮询会让能力区空窗最长 15s。开局再快轮询几次，start() 一就绪
           //（通常 1-3s）能力即显示，之后回落到 15s 常规节奏。

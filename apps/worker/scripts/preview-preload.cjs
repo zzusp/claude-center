@@ -19,7 +19,10 @@ const STATE = {
   capabilities: {
     git: { ok: true, version: "2.43.0" },
     gh: { ok: true, version: "2.40.1" },
-    claude: { ok: true, version: "1.2.7" }
+    claude: { ok: true, version: "1.2.7" },
+    nodejs: { ok: true, version: "20.10.0" },
+    python: { ok: true, version: "3.11.6" },
+    dingtalk: { ok: true, version: "0.4.1" }
   },
   os: { platform: "darwin", label: "macOS 14.4 (arm64)" },
   terminalCommand: "",
@@ -28,6 +31,8 @@ const STATE = {
   relayChannels: 3,
   databaseUrl: "postgresql://app:****@db.internal:5432/claude_center",
   dbState: "connected",
+  dingtalkEnabled: true,
+  dingtalkCommand: "dingtalk",
   logs: Array.from({ length: 40 }).map((_, i) => ({
     ts: iso(-(40 - i) * 60000),
     level: i % 9 === 0 ? "error" : "info",
@@ -82,6 +87,7 @@ const api = {
   setPreCommand: async () => {},
   setRelayConfig: async () => {},
   setDatabaseConfig: async () => ({ ok: true, error: null }),
+  setDingtalkConfig: async () => {},
   listCloudProjects: async () => [{ name: "claude-center" }, { name: "demo-app" }],
   listProjectLinks: async () => [
     { project_name: "claude-center", local_path: "D:/project/claude-center" },

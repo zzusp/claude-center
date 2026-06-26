@@ -28,7 +28,15 @@ export type ClaudeInspect = {
 // 单个外部依赖的可用性自检结果:能否调用 + 解析出的版本号 + 可执行文件路径。
 export type Capability = { ok: boolean; version: string | null; path: string | null };
 // worker 执行任务依赖的外部命令的自检结果。registerWorker 用其替换原硬编码 capabilities。
-export type Capabilities = { git: Capability; gh: Capability; claude: Capability; nodejs: Capability; python: Capability };
+// dingtalk 是可选客户端能力：用户在桌面端开关，关闭时整槽不存在（不计入"X/N 能力就绪"）。
+export type Capabilities = {
+  git: Capability;
+  gh: Capability;
+  claude: Capability;
+  nodejs: Capability;
+  python: Capability;
+  dingtalk?: Capability;
+};
 
 // 语义版本号通配：主流 CLI 的 `--version` 输出都含形如 1.2.3 的版本号（可带 -rc.1 / .post 等后缀）。
 const SEMVER_RE = /(\d+\.\d+\.\d+(?:[-.\w]*)?)/;
@@ -71,6 +79,7 @@ async function probeCommand(
 }
 
 // 启动时自检 worker 执行任务所需的外部命令是否可用。结果上报 DB(Console 可见)+ 桌面 UI 红绿点展示。
+// 钉钉 CLI 是用户开关的可选能力：关闭或命令为空则不返回 dingtalk 槽位（既不参与 X/N 统计也不上报 DB）。
 export async function detectCapabilities(config: WorkerConfig): Promise<Capabilities> {
   const [git, gh, claude, nodejs, pythonMain, python3] = await Promise.all([
     probeCommand("git"),
@@ -81,7 +90,13 @@ export async function detectCapabilities(config: WorkerConfig): Promise<Capabili
     probeCommand("python3")
   ]);
   const python = pythonMain.ok ? pythonMain : python3;
-  return { git, gh, claude, nodejs, python };
+  const base: Capabilities = { git, gh, claude, nodejs, python };
+  if (config.dingtalkEnabled) {
+    base.dingtalk = config.dingtalkCommand
+      ? await probeCommand(config.dingtalkCommand)
+      : { ok: false, version: null, path: null };
+  }
+  return base;
 }
 
 // macOS 上 os.release() 返回的是 Darwin 内核版本（如 "22.6.0"），不是用户认知的 macOS 产品版本

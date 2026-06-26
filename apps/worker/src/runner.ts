@@ -143,6 +143,10 @@ export type WorkerStatusSnapshot = {
   databaseUrl: string;
   // 数据库连接健康度（顶栏红点 + 设置卡片提示）。
   dbState: DbState;
+  // 钉钉 CLI 可选能力的当前配置：开关 + 命令（回显桌面端「设置 → 钉钉 CLI」卡片）。
+  // 启用且自检到时，capabilities.dingtalk 同时出现并参与「能力就绪」统计。
+  dingtalkEnabled: boolean;
+  dingtalkCommand: string;
 };
 
 const UNKNOWN_CAPABILITY = { ok: false, version: null, path: null };
@@ -202,7 +206,7 @@ export class ClaudeCenterWorker {
 
   async start(): Promise<void> {
     this.capabilities = await detectCapabilities(this.config);
-    this.log("info", `Capabilities — git:${this.cap("git")} gh:${this.cap("gh")} claude:${this.cap("claude")} node:${this.cap("nodejs")} python:${this.cap("python")}`);
+    this.log("info", `Capabilities — git:${this.cap("git")} gh:${this.cap("gh")} claude:${this.cap("claude")} node:${this.cap("nodejs")} python:${this.cap("python")}${this.config.dingtalkEnabled ? ` dingtalk:${this.cap("dingtalk")}` : ""}`);
     if (!this.capabilities.claude.ok) {
       this.log("error", "claude CLI not detected on this worker — tasks will fail until it is installed / on PATH");
     }
@@ -317,6 +321,36 @@ export class ClaudeCenterWorker {
     this.relay.reconfigure();
     await this.refreshLinkedProjects();
     this.log("info", this.config.relayUrl ? `SSE 中转已配置：${this.config.relayUrl}` : "SSE 中转已禁用（纯数据库轮询）");
+  }
+
+  // 桌面端配置钉钉 CLI：持久化进 worker.json（覆盖同名 env）→ 立即重新自检能力并以最新 capabilities 上报 DB。
+  // 关闭时清掉 capabilities.dingtalk 槽位（不再参与"X/N 能力就绪"统计、不再上报）；启用且命令非空时探测 --version。
+  async setDingtalkConfig(input: { enabled: boolean; command: string }): Promise<void> {
+    this.config.dingtalkEnabled = input.enabled;
+    this.config.dingtalkCommand = input.command.trim();
+    persistWorkerState(this.config.dataDir, {
+      dingtalkEnabled: this.config.dingtalkEnabled,
+      dingtalkCommand: this.config.dingtalkCommand
+    });
+    this.capabilities = await detectCapabilities(this.config);
+    await registerWorker(getPool(), {
+      id: this.config.workerId,
+      name: this.config.workerName,
+      hostName: this.config.hostName,
+      appVersion: this.config.appVersion,
+      capabilities: this.snapshotCapabilities(),
+      metadata: { projectCount: this.config.projects.length },
+      allowRemoteControl: this.config.allowRemoteControl,
+      maxParallel: this.config.maxParallel,
+      terminalCommand: this.config.terminalCommand,
+      claudePreCommand: this.config.claudePreCommand
+    });
+    this.log(
+      "info",
+      this.config.dingtalkEnabled
+        ? `钉钉 CLI 已启用（命令：${this.config.dingtalkCommand || "未配置"}）— ${this.cap("dingtalk")}`
+        : "钉钉 CLI 已关闭"
+    );
   }
 
   // 桌面端配置数据库连接串：持久化进 worker.json（覆盖同名 env）→ 切换连接池 → 重启所有循环（以新库重新注册/轮询）。
@@ -546,7 +580,9 @@ export class ClaudeCenterWorker {
       relayPublishToken: this.config.relayPublishToken,
       relayWorkerToken: this.config.relayWorkerToken,
       databaseUrl: this.config.databaseUrl,
-      dbState
+      dbState,
+      dingtalkEnabled: this.config.dingtalkEnabled,
+      dingtalkCommand: this.config.dingtalkCommand
     };
   }
 
@@ -559,6 +595,7 @@ export class ClaudeCenterWorker {
 
   private cap(name: keyof Capabilities): string {
     const capability = this.capabilities[name];
+    if (!capability) return "off";
     return capability.ok ? capability.version ?? "ok" : "missing";
   }
 
@@ -575,6 +612,19 @@ export class ClaudeCenterWorker {
     }
   }
 
+  // 上报给 DB 的能力子集：核心三件套始终带；钉钉 CLI 仅在用户启用时带（关闭即从 capabilities 槽位中消失）。
+  private snapshotCapabilities(): Record<string, unknown> {
+    const payload: Record<string, unknown> = {
+      git: this.capabilities.git,
+      gh: this.capabilities.gh,
+      claude: this.capabilities.claude
+    };
+    if (this.capabilities.dingtalk) {
+      payload.dingtalk = this.capabilities.dingtalk;
+    }
+    return payload;
+  }
+
   private async register(): Promise<void> {
     const pool = getPool();
     await registerWorker(pool, {
@@ -582,11 +632,7 @@ export class ClaudeCenterWorker {
       name: this.config.workerName,
       hostName: this.config.hostName,
       appVersion: this.config.appVersion,
-      capabilities: {
-        git: this.capabilities.git,
-        gh: this.capabilities.gh,
-        claude: this.capabilities.claude
-      },
+      capabilities: this.snapshotCapabilities(),
       metadata: {
         projectCount: this.config.projects.length
       },
