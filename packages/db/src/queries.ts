@@ -1076,6 +1076,20 @@ export async function getWorkerRuntime(
   return result.rows[0] ?? null;
 }
 
+// 桌面端 worktree 清理面板用：按 id 列表批量查任务状态，供 UI 区分「在跑（不可清理）」与「已终态/孤儿（可清理）」。
+// 不存在的 id 不会出现在结果里，调用方把缺席视为 orphan（可清理）。
+export async function getTaskStatusesByIds(
+  client: pg.Pool | pg.PoolClient,
+  ids: string[]
+): Promise<{ id: string; status: string }[]> {
+  if (!ids.length) return [];
+  const result = await client.query<{ id: string; status: string }>(
+    `SELECT id, status FROM tasks WHERE id = ANY($1::uuid[])`,
+    [ids]
+  );
+  return result.rows;
+}
+
 // worktree GC 用：该 worker 仍「持有工作树」的任务 id（非终态）。终态任务的残留工作树会被清掉。
 export async function listActiveTaskIdsForWorker(
   client: pg.Pool | pg.PoolClient,

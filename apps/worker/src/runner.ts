@@ -8,6 +8,7 @@ import {
   claimNextTask,
   failConversationTurn,
   getConversation,
+  getTaskStatusesByIds,
   getTaskWithDeps,
   getPool,
   pingDatabase,
@@ -76,7 +77,7 @@ import {
 } from "./inspect.js";
 import { isSameProcessAlive, killByPid, killProcessTree } from "./shell.js";
 import { startConversationSessionSync } from "./session.js";
-import { gcWorktrees } from "./worktree.js";
+import { gcWorktrees, listProjectWorktrees, removeWorktree, type ProjectWorktreeItem } from "./worktree.js";
 import { WorkerRelay, type RelayStatus } from "./relay.js";
 import { projectChannel, type RelayEvent } from "@claude-center/relay-client";
 
@@ -99,6 +100,23 @@ export type ActiveTaskView = {
 };
 
 export type LogLine = { ts: string; level: "info" | "error"; message: string };
+
+// 桌面端「项目 worktree 清理」一项的状态展示。
+// cleanable=true 时桌面端可勾选并批量删除；false 时只读、不允许选中（在跑 / 非托管 dev 树）。
+export type ProjectWorktreeView = ProjectWorktreeItem & {
+  // 工作树所在项目（关联项）的名称（桌面端按项目分组展示用）。
+  projectName: string;
+  // 项目主仓本地路径（删除时调用 removeWorktree(localPath, wtPath) 用）。
+  localPath: string;
+  cleanable: boolean;
+  // 不可清理的原因，或可清理一类的语义（"任务进行中" / "孤儿（任务不存在）" / "对话进行中" / "开发用，非任务托管" 等）。
+  reason: string;
+};
+
+export type ProjectWorktreeRemoveResult = {
+  removed: number;
+  failed: { wtPath: string; error: string }[];
+};
 
 // 一条在途执行的内部跟踪:promise + 元信息 + Claude 子进程句柄(供取消杀进程)+ 取消标记。
 type ActiveEntry = {
@@ -468,6 +486,121 @@ export class ClaudeCenterWorker {
     });
     this.log("info", `Unlinked project ${input.projectName} → ${input.localPath}`);
     void this.refreshLinkedProjects();
+  }
+
+  // 桌面端「项目 worktree 清理」：扫描当前关联项目的 .claude/worktrees/，按是否可清理分组上送。
+  // 分类口径（与 gcWorktrees 一致地保守，避免误清用户在用的树）：
+  //   - kind=task：DB 中任务在 claimed/running/waiting → 不可清理（任务进行中）；
+  //                          success/merged/failed/cancelled → 可清理（任务已结束，重试不会再用此树）；
+  //                          任务不存在 → 可清理（孤儿）。
+  //   - kind=conversation：本机仍 in-flight 的对话轮 conversation → 不可清理（对话进行中）；其它 → 可清理（对话已结束）。
+  //   - kind=other：Claude Code dev / 用户自管的 slug 树 → 不可清理（非任务托管，保护用户在用工作树）。
+  // 桌面端 1h 周期触发；空配置（未关联项目）返回空数组。
+  async listProjectWorktrees(): Promise<ProjectWorktreeView[]> {
+    const items: ProjectWorktreeView[] = [];
+    const pool = getPool();
+    // 一次性拉本机 in-flight 对话轮的 conversationId 集，供 conv 树「在跑」判定。
+    let inflightConvIds = new Set<string>();
+    try {
+      const turns = await listInflightConversationTurnsForWorker(pool, this.config.workerId);
+      inflightConvIds = new Set(turns.map((t) => t.conversation_id));
+    } catch (error) {
+      this.log("error", `listProjectWorktrees inflight conv: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    for (const project of this.config.projects) {
+      let trees: ProjectWorktreeItem[] = [];
+      try {
+        trees = await listProjectWorktrees(project.localPath);
+      } catch (error) {
+        this.log("error", `listProjectWorktrees ${project.projectName}: ${error instanceof Error ? error.message : String(error)}`);
+        continue;
+      }
+      if (!trees.length) continue;
+
+      // 批量查任务状态（仅 task 类的树需要查 DB）。
+      const taskIds = trees.filter((t) => t.kind === "task" && t.refId).map((t) => t.refId!);
+      const statusById = new Map<string, string>();
+      if (taskIds.length) {
+        try {
+          const rows = await getTaskStatusesByIds(pool, taskIds);
+          for (const row of rows) statusById.set(row.id, row.status);
+        } catch (error) {
+          this.log("error", `listProjectWorktrees task statuses ${project.projectName}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      const IN_FLIGHT = new Set(["claimed", "running", "waiting"]);
+
+      for (const tree of trees) {
+        let cleanable = false;
+        let reason = "";
+        if (tree.kind === "task") {
+          const status = tree.refId ? statusById.get(tree.refId) : undefined;
+          if (!status) {
+            cleanable = true;
+            reason = "孤儿（任务不存在）";
+          } else if (IN_FLIGHT.has(status)) {
+            cleanable = false;
+            reason = `任务进行中（${status}）`;
+          } else {
+            cleanable = true;
+            reason = `任务已结束（${status}）`;
+          }
+        } else if (tree.kind === "conversation") {
+          if (tree.refId && inflightConvIds.has(tree.refId)) {
+            cleanable = false;
+            reason = "对话进行中";
+          } else {
+            cleanable = true;
+            reason = "对话已结束";
+          }
+        } else {
+          cleanable = false;
+          reason = "非任务托管（用户开发用，请勿清理）";
+        }
+        items.push({
+          ...tree,
+          projectName: project.projectName ?? project.repoUrl ?? project.localPath,
+          localPath: project.localPath,
+          cleanable,
+          reason
+        });
+      }
+    }
+    return items;
+  }
+
+  // 桌面端批量清理 worktree：逐个调用 removeWorktree（容错 + Node 强删兜底），并发布每项的成功/失败。
+  // 输入由 listProjectWorktrees 上送的项目 localPath + 工作树绝对路径决定，桌面端仅允许勾选 cleanable=true 的项。
+  // 后端再做一道闸门：用最新分类校验确实可清理才动手，防止 UI 缓存过期 / 删到正在跑的树。
+  async removeProjectWorktrees(
+    items: { localPath: string; wtPath: string }[]
+  ): Promise<ProjectWorktreeRemoveResult> {
+    const failed: { wtPath: string; error: string }[] = [];
+    let removed = 0;
+    if (!items.length) {
+      return { removed, failed };
+    }
+    // 最新分类用于双重校验：UI 上送的 cleanable 状态可能已过期（如 1h 周期之间任务又被认领）。
+    const current = await this.listProjectWorktrees();
+    const cleanableByPath = new Map(current.filter((c) => c.cleanable).map((c) => [c.wtPath, c]));
+    for (const item of items) {
+      const known = cleanableByPath.get(item.wtPath);
+      if (!known || known.localPath !== item.localPath) {
+        failed.push({ wtPath: item.wtPath, error: "状态已变化或不可清理，请刷新后重试" });
+        continue;
+      }
+      try {
+        await removeWorktree(item.localPath, item.wtPath);
+        removed += 1;
+        this.log("info", `worktree removed: ${item.wtPath}`);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        failed.push({ wtPath: item.wtPath, error: msg });
+        this.log("error", `worktree remove ${item.wtPath}: ${msg}`);
+      }
+    }
+    return { removed, failed };
   }
 
   // 桌面端取消一个在途任务：打取消请求戳 + 立即扫描处理一轮（杀进程并翻终态）。返回是否为可取消的在途任务。

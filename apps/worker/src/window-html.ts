@@ -391,6 +391,27 @@ export function windowHtml(): string {
           .tasks-loading-spin { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--running); border-radius: 50%; animation: cc-spin 0.7s linear infinite; flex-shrink: 0; }
           .tasks-empty { display: flex; align-items: center; justify-content: center; padding: 40px 16px; color: var(--text-4); font-size: 13px; }
           @keyframes cc-ring { 0% { transform: scale(.7); opacity: .25; } 70% { transform: scale(1.7); opacity: 0; } 100% { opacity: 0; } }
+
+          /* Worktree list (项目页底部) */
+          .wt-toolbar { display: flex; align-items: center; gap: 10px; }
+          .wt-toolbar .wt-info { font-size: 11.5px; color: var(--text-4); font-variant-numeric: tabular-nums; }
+          .wt-group { margin-top: 8px; }
+          .wt-group:first-child { margin-top: 0; }
+          .wt-group-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; font-size: 12px; color: var(--text-3); }
+          .wt-group-head .wt-group-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+          .wt-group-head .wt-group-count { color: var(--text-4); font-weight: 500; }
+          .wt-group-head .wt-group-act { display: inline-flex; align-items: center; gap: 8px; }
+          .wt-item { display: grid; grid-template-columns: 22px 1fr auto auto; column-gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--border); }
+          .wt-item:first-child { border-top: 0; }
+          .wt-item input[type=checkbox] { margin: 0; }
+          .wt-item.locked { opacity: .68; }
+          .wt-main { min-width: 0; }
+          .wt-name { display: block; font-size: 13px; font-weight: 600; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); }
+          .wt-sub { display: block; font-size: 11.5px; color: var(--text-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .wt-meta { font-size: 11.5px; color: var(--text-4); font-variant-numeric: tabular-nums; white-space: nowrap; }
+          .wt-kind { display: inline-block; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-3); font-size: 11px; font-weight: 500; }
+          .wt-empty { padding: 14px 0 4px; color: var(--text-4); font-size: 12.5px; }
+          .wt-hint { font-size: 11.5px; color: var(--text-4); margin-top: 8px; }
         </style>
       </head>
       <body>
@@ -561,6 +582,20 @@ export function windowHtml(): string {
                       </div>
                       <input class="path-input" id="localPath" placeholder="本地路径（点「选择文件夹」）" readonly />
                     </div>
+                  </div>
+                </section>
+
+                <section class="card">
+                  <div class="card-head">
+                    <h2 class="card-title"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M5 6l1 13a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-13"/></svg></span>项目 worktree 清理</h2>
+                    <div class="wt-toolbar">
+                      <span id="wtInfo" class="wt-info">每 1 小时自动检查 · 上次 —</span>
+                      <button id="wtRefresh" class="btn btn-sm" type="button">立即检查</button>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <div id="worktrees"><span class="empty">加载中…</span></div>
+                    <div class="wt-hint">「可清理」勾选后批量删除（含 git worktree remove + Node 强删兜底）；「不可清理」为在跑任务 / 进行中对话 / 用户开发用工作树。</div>
                   </div>
                 </section>
               </section>
@@ -1524,14 +1559,168 @@ export function windowHtml(): string {
             }
           });
 
+          // —— 项目 worktree 清理（1h 周期 + 立即检查）——
+          // 后端按「可清理 / 不可清理」打好标，UI 按组渲染：可清理项可勾选 + 批量删除；不可清理只读。
+          var wtItems = [];
+          var wtSelected = new Set();
+          var wtBusy = false;
+          var wtLastAt = null;
+          var WT_KIND_LABEL = { task: "任务树", conversation: "对话树", other: "开发用" };
+          function fmtClock(d) {
+            if (!d) return "—";
+            var p = function(n) { return String(n).padStart(2, "0"); };
+            return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+          }
+          function updateWtInfo() {
+            $("wtInfo").textContent = "每 1 小时自动检查 · 上次 " + fmtClock(wtLastAt);
+          }
+          function wtItemHtml(it, cleanable) {
+            var checked = cleanable && wtSelected.has(it.wtPath) ? " checked" : "";
+            var box = cleanable
+              ? '<input type="checkbox" data-wt-select="' + esc(it.wtPath) + '"' + checked + ' />'
+              : '<span></span>';
+            var sub = esc(it.projectName) + " · " + esc(it.reason) +
+              (it.branch ? " · " + esc(it.branch) : "") +
+              (it.commit ? " · " + esc(it.commit) : "");
+            return '<div class="wt-item' + (cleanable ? "" : " locked") + '">' +
+              box +
+              '<span class="wt-main">' +
+                '<span class="wt-name" title="' + esc(it.wtPath) + '">' + esc(it.name) + '</span>' +
+                '<span class="wt-sub">' + sub + '</span>' +
+              '</span>' +
+              '<span class="wt-kind">' + esc(WT_KIND_LABEL[it.kind] || it.kind) + '</span>' +
+              '<span class="wt-meta">' +
+                (cleanable
+                  ? '<button class="btn btn-sm danger" data-wt-remove="' + esc(it.wtPath) + '">删除</button>'
+                  : "受保护") +
+              '</span>' +
+            '</div>';
+          }
+          function renderWorktrees() {
+            updateWtInfo();
+            var box = $("worktrees");
+            if (!wtItems.length) {
+              box.innerHTML = '<div class="wt-empty">未发现任何项目 worktree（关联项目下的 .claude/worktrees/ 为空）</div>';
+              return;
+            }
+            // 同步 wtSelected：移除已不存在 / 已变为不可清理的项。
+            var pathsNow = new Set(wtItems.filter(function(i) { return i.cleanable; }).map(function(i) { return i.wtPath; }));
+            wtSelected.forEach(function(p) { if (!pathsNow.has(p)) wtSelected.delete(p); });
+
+            var cleanable = wtItems.filter(function(i) { return i.cleanable; });
+            var locked = wtItems.filter(function(i) { return !i.cleanable; });
+            var html = "";
+            // 可清理
+            var allChecked = cleanable.length > 0 && cleanable.every(function(i) { return wtSelected.has(i.wtPath); });
+            html += '<div class="wt-group"><div class="wt-group-head">' +
+              '<span class="wt-group-title"><span class="badge" data-tone="success"><span class="glyph">●</span>可清理</span>' +
+              '<span class="wt-group-count">共 ' + cleanable.length + ' 项</span></span>' +
+              '<span class="wt-group-act">' +
+                (cleanable.length
+                  ? '<label style="font-size:11.5px;color:var(--text-3);display:inline-flex;align-items:center;gap:4px;cursor:pointer;">' +
+                      '<input type="checkbox" id="wtAll"' + (allChecked ? " checked" : "") + ' />全选</label>' +
+                    '<button id="wtRemoveSelected" class="btn btn-sm danger" ' + (wtSelected.size ? "" : "disabled") + ' type="button">删除已选 (' + wtSelected.size + ')</button>'
+                  : "") +
+              '</span></div>';
+            if (!cleanable.length) {
+              html += '<div class="wt-empty">没有需要清理的 worktree</div>';
+            } else {
+              html += cleanable.map(function(it) { return wtItemHtml(it, true); }).join("");
+            }
+            html += "</div>";
+            // 不可清理
+            html += '<div class="wt-group"><div class="wt-group-head">' +
+              '<span class="wt-group-title"><span class="badge" data-tone="running"><span class="glyph">●</span>不可清理</span>' +
+              '<span class="wt-group-count">共 ' + locked.length + ' 项</span></span>' +
+              '</div>';
+            if (!locked.length) {
+              html += '<div class="wt-empty">无</div>';
+            } else {
+              html += locked.map(function(it) { return wtItemHtml(it, false); }).join("");
+            }
+            html += "</div>";
+            box.innerHTML = html;
+          }
+          async function reloadWorktrees() {
+            if (wtBusy) return;
+            wtBusy = true;
+            try {
+              var list = [];
+              try { list = await window.workerApi.listProjectWorktrees(); }
+              catch (e) { $("worktrees").innerHTML = '<div class="wt-empty">加载失败：' + esc(e && e.message ? e.message : e) + '</div>'; return; }
+              wtItems = list || [];
+              wtLastAt = new Date();
+              renderWorktrees();
+            } finally {
+              wtBusy = false;
+            }
+          }
+          async function removeWorktreesByPaths(paths) {
+            if (!paths.length) return;
+            var byPath = new Map();
+            wtItems.forEach(function(it) { byPath.set(it.wtPath, it); });
+            var items = paths.map(function(p) {
+              var it = byPath.get(p);
+              return it ? { localPath: it.localPath, wtPath: it.wtPath } : null;
+            }).filter(Boolean);
+            if (!items.length) return;
+            var r = { removed: 0, failed: [] };
+            try { r = await window.workerApi.removeProjectWorktrees(items); }
+            catch (e) { alert("删除失败：" + (e && e.message ? e.message : e)); return; }
+            if (r.failed && r.failed.length) {
+              alert("成功清理 " + r.removed + " 项；失败 " + r.failed.length + " 项：\\n" +
+                r.failed.map(function(f) { return f.wtPath + " — " + f.error; }).join("\\n"));
+            }
+            paths.forEach(function(p) { wtSelected.delete(p); });
+            await reloadWorktrees();
+          }
+          $("wtRefresh").addEventListener("click", reloadWorktrees);
+          document.addEventListener("change", function(e) {
+            var cb = e.target;
+            if (!cb) return;
+            if (cb.id === "wtAll") {
+              wtItems.forEach(function(it) {
+                if (it.cleanable) {
+                  if (cb.checked) wtSelected.add(it.wtPath); else wtSelected.delete(it.wtPath);
+                }
+              });
+              renderWorktrees();
+              return;
+            }
+            var path = cb.getAttribute && cb.getAttribute("data-wt-select");
+            if (path) {
+              if (cb.checked) wtSelected.add(path); else wtSelected.delete(path);
+              renderWorktrees();
+            }
+          });
+          document.addEventListener("click", async function(e) {
+            var btn = e.target.closest && e.target.closest("[data-wt-remove]");
+            if (btn) {
+              var p = btn.getAttribute("data-wt-remove");
+              if (!confirm("确定删除该 worktree？\\n" + p)) return;
+              btn.disabled = true;
+              await removeWorktreesByPaths([p]);
+              return;
+            }
+            if (e.target && e.target.id === "wtRemoveSelected") {
+              if (!wtSelected.size) return;
+              if (!confirm("确定删除已选 " + wtSelected.size + " 个 worktree？")) return;
+              e.target.disabled = true;
+              await removeWorktreesByPaths(Array.from(wtSelected));
+              return;
+            }
+          });
+
           showPage("overview");
-          refresh(); loadProjects(); reloadTasks(); reloadConversations(); loadTerminals(); loadRelay(); loadDb(); loadDingtalk();
+          refresh(); loadProjects(); reloadTasks(); reloadConversations(); loadTerminals(); loadRelay(); loadDb(); loadDingtalk(); reloadWorktrees();
           // 冷启动预热：主进程现在窗口先于 worker.start() 渲染（DB 不可达也能出窗口），但能力自检/OS/用量要等
           // start() 完成后才有值；只靠 15s 常规轮询会让能力区空窗最长 15s。开局再快轮询几次，start() 一就绪
           //（通常 1-3s）能力即显示，之后回落到 15s 常规节奏。
           [1200, 2500, 5000, 9000].forEach(function(ms) { setTimeout(refresh, ms); });
           setInterval(refresh, 15000);
           setInterval(loadProjects, 15000);
+          // 项目 worktree 每 1 小时定时检查一次（任务要求）。
+          setInterval(reloadWorktrees, 60 * 60 * 1000);
           setInterval(() => { if (!isEditingTask()) reloadTasks(); }, 4000);
           setInterval(reloadConversations, 3000);
           // 详情高频刷新只在「生成中」对话上跑：静态对话内容不变，无需每 400ms 经 IPC 重取整段 jsonl（卡顿源）；

@@ -354,6 +354,90 @@ export async function assertSubRepoPathIgnoredInMain(
   );
 }
 
+// 桌面端「项目 worktree 检查」用：worktree 一项的归类（任务托管 / 会话托管 / 其他人类命名）。
+//   - task: 名为 worktree-<UUID>，本 worker 任务执行树（GC 也只动这种）。
+//   - conversation: 名为 worktree-conv-<convId>，对话车道用的只读树（执行结束不自动清理，会沉淀）。
+//   - other: 其它命名（多为 Claude Code dev 用户自建的 slug 树），桌面端不应建议清理。
+export type WorktreeKind = "task" | "conversation" | "other";
+
+export type ProjectWorktreeItem = {
+  // 工作树绝对路径（git worktree list --porcelain 出来的）。
+  wtPath: string;
+  // basename，桌面端展示用。
+  name: string;
+  kind: WorktreeKind;
+  // task UUID / conversation id（kind=other 时为 null）。
+  refId: string | null;
+  // 检出分支（detached HEAD 时为 null）。
+  branch: string | null;
+  // 当前 HEAD commit（短哈希，展示用）；解析失败为 null。
+  commit: string | null;
+};
+
+// 列出该项目主仓注册的所有 worktree（仅 .claude/worktrees/ 下的；主仓自身、其它目录的工作树跳过）。
+// 桌面端「项目 worktree 清理」展示用。kind=other 不参与桌面端勾选（视作 dev 用户自管）。
+// 容错：git 命令失败返回空数组，让 UI 显示空列表而非整页报错。
+export async function listProjectWorktrees(localPath: string): Promise<ProjectWorktreeItem[]> {
+  const root = worktreesRoot(localPath);
+  let listed: string;
+  try {
+    const result = await runCommand("git", ["-C", localPath, "worktree", "list", "--porcelain"], {
+      timeoutMs: 60_000
+    });
+    listed = result.stdout;
+  } catch {
+    return [];
+  }
+
+  const items: ProjectWorktreeItem[] = [];
+  let cur: { wtPath?: string; branch?: string | null; commit?: string | null } = {};
+  const flush = () => {
+    if (!cur.wtPath) {
+      cur = {};
+      return;
+    }
+    const wtPath = cur.wtPath;
+    if (path.relative(root, wtPath).startsWith("..")) {
+      cur = {};
+      return; // 主仓自身 / 其它目录工作树不报。
+    }
+    const name = path.basename(wtPath);
+    let kind: WorktreeKind = "other";
+    let refId: string | null = null;
+    if (TASK_WT_RE.test(name)) {
+      kind = "task";
+      refId = name.slice(TASK_WT_PREFIX.length);
+    } else if (name.startsWith(CONV_WT_PREFIX)) {
+      kind = "conversation";
+      refId = name.slice(CONV_WT_PREFIX.length);
+    }
+    items.push({
+      wtPath,
+      name,
+      kind,
+      refId,
+      branch: cur.branch ?? null,
+      commit: cur.commit ?? null
+    });
+    cur = {};
+  };
+
+  for (const line of listed.split(/\r?\n/)) {
+    if (line.startsWith("worktree ")) {
+      flush();
+      cur.wtPath = line.slice("worktree ".length).trim();
+    } else if (line.startsWith("HEAD ")) {
+      cur.commit = line.slice("HEAD ".length).trim().slice(0, 12);
+    } else if (line.startsWith("branch ")) {
+      cur.branch = line.slice("branch ".length).trim().replace(/^refs\/heads\//, "");
+    } else if (line === "detached") {
+      cur.branch = null;
+    }
+  }
+  flush();
+  return items;
+}
+
 // GC：清理该项目主仓 .claude/worktrees/ 下、本 worker 管理的任务工作树（worktree-<UUID>）中已进终态
 // （不在 keepTaskIds）的残留树。跨生命周期兜底:listActiveTaskIdsForWorker 的 keep 集合包含
 // claimed/running/waiting/success/merged/failed/cancelled,仅清崩溃/异常退出留下的真孤儿。严格只碰
