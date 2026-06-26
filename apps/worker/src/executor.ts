@@ -1447,18 +1447,20 @@ export async function executeDirectCommand(config: WorkerConfig, command: Direct
 }
 
 // 从 session .jsonl 取末条 assistant 的文本（detached/重连下 claude 的 stdout 已不可得，终态结果只能从这里重建）。
+// 跳过 type=assistant 但 isMeta=true 的内部注入（与 transcript.tsx 的 isMetaUserEntry 同语义对齐）。
 function extractFinalAssistantText(jsonl: string): string {
   let text = "";
   for (const line of jsonl.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let obj: { type?: string; message?: { content?: unknown } };
+    let obj: { type?: string; isMeta?: unknown; message?: { content?: unknown } };
     try {
-      obj = JSON.parse(trimmed) as { type?: string; message?: { content?: unknown } };
+      obj = JSON.parse(trimmed) as { type?: string; isMeta?: unknown; message?: { content?: unknown } };
     } catch {
       continue;
     }
     if (obj.type !== "assistant" || !obj.message) continue;
+    if (obj.isMeta === true) continue;
     const content = obj.message.content;
     let cur = "";
     if (typeof content === "string") {
@@ -1477,11 +1479,14 @@ function extractFinalAssistantText(jsonl: string): string {
 // 从 session .jsonl 收尾对话轮：result=末条 assistant 文本、sessionId=文件名。jsonl 缺失或无完整 assistant
 // 回答（claude 中途崩）→ 返回 false（调用方据此 fail）；成功落 done 返回 true。finalizeConversationTurn 自带
 // 终态守卫，不会覆盖已 cancelled 的轮。供正常收尾与「重启重连后进程已退」两条路径共用。
+//
+// sinceMs/resumeSessionId：见 session.ts::findSessionFile——把本次 claude 产生的 session 与同目录里其它
+// 终端会话区分开，否则可能把别的对话历史回写到本对话（用户原报：定时消息发后回显另一个终端窗口的历史）。
 export async function finalizeConversationFromSession(
   pool: ReturnType<typeof getPool>,
-  input: { conversationId: string; messageId: string; cwd: string }
+  input: { conversationId: string; messageId: string; cwd: string; sinceMs?: number | null; resumeSessionId?: string | null }
 ): Promise<boolean> {
-  const info = await findSessionInfo(input.cwd);
+  const info = await findSessionInfo(input.cwd, { sinceMs: input.sinceMs ?? null, preferSessionId: input.resumeSessionId ?? null });
   if (!info) return false;
   const result = extractFinalAssistantText(info.jsonl);
   if (!result.trim()) return false;
@@ -1544,14 +1549,19 @@ export async function executeConversationTurn(
     const prompt = promptParts.join("\n");
 
     // 执行期间周期 + 终态把 session .jsonl 同步到 conversation_sessions；进程退出后强制最终同步一次保证完整。
-    const stopSync = startConversationSessionSync(conv.id, wtPath);
+    // 本次 claude 启动时刻（毫秒，留 5s 时钟偏移余量）作为 sinceMs：把本进程产生的 .jsonl 与同目录里其它
+    // claude 终端会话留下的旧 .jsonl 区分开——后者 mtime/birthtime 都在 spawnStartMs 之前，会被时间窗滤掉。
+    // resumeSessionId 命中 <id>.jsonl 时走快路径锁定，--resume 续写同一文件即认它。
+    const spawnStartMs = Date.now() - 5_000;
+    const resumeSessionId = conv.claude_session_id ?? null;
+    const stopSync = startConversationSessionSync(conv.id, wtPath, { sinceMs: spawnStartMs, resumeSessionId });
     let exitOk = false;
     try {
       // detached 启动：worker 关机后 claude 继续跑完、写 .jsonl。spawn 后立即把 pid+cwd 落到本轮，供重启重连判活。
       await spawnClaude(config, {
         prompt,
         cwd: wtPath,
-        resumeSessionId: conv.claude_session_id ?? undefined,
+        resumeSessionId: resumeSessionId ?? undefined,
         model: conv.model,
         full: true,
         detached: true,
@@ -1574,7 +1584,13 @@ export async function executeConversationTurn(
       await stopSync(); // 终态强制最终同步，保证 .jsonl 完整入库
     }
 
-    const finalized = exitOk && (await finalizeConversationFromSession(pool, { conversationId: conv.id, messageId: turn.id, cwd: wtPath }));
+    const finalized = exitOk && (await finalizeConversationFromSession(pool, {
+      conversationId: conv.id,
+      messageId: turn.id,
+      cwd: wtPath,
+      sinceMs: spawnStartMs,
+      resumeSessionId
+    }));
     if (!finalized) {
       await failConversationTurn(pool, { messageId: turn.id, errorMessage: "claude 未正常完成本轮（进程异常退出或无完整结果）" });
     }

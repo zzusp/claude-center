@@ -7,8 +7,9 @@
 // 自带 message.usage = {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}）。
 
 import type { TaskModel, Worker } from "@claude-center/db";
-import { Activity, Cpu, Database, Layers, Radio, RotateCw, WifiOff } from "lucide-react";
+import { Activity, Cpu, Database, Layers, Radio, RotateCw, Terminal, WifiOff } from "lucide-react";
 import { useRelayStatus, type RelayStatus } from "../lib/use-relay";
+import { extractBackgroundJobs, pendingBackgroundJobs } from "./transcript";
 import { isPlanSubscription, subscriptionLabel } from "./worker-shared";
 
 const MODEL_LABEL: Record<TaskModel, string> = {
@@ -191,10 +192,26 @@ export function SessionMetaBar({ planModel, worker, jsonl, open }: SessionMetaPr
   const usage = extractSessionUsage(jsonl);
   const planUsage = worker?.usage;
   const isPlan = worker ? isPlanSubscription(worker.subscription_type) : false;
+  // 「后台进程」chip：Bash run_in_background:true 派发但尚未收到 task-notification 完成回执的后台命令。
+  // 主对话本轮 assistant 消息已落完时仍可能有后台任务挂着——它们完成后会通过 attachment.queued_command
+  // 唤醒下一轮，本对话并未真正结束。chip 让用户一眼看到「还在等后台」。
+  const bgJobs = jsonl ? extractBackgroundJobs(jsonl) : [];
+  const bgPending = pendingBackgroundJobs(bgJobs);
+  const bgTitle = bgPending.length
+    ? `当前还有 ${bgPending.length} 个后台命令在跑（Claude 会在它们完成后再被唤醒；这意味着本对话/任务尚未真正结束）：\n` +
+      bgPending.map((j) => `- ${j.description}`).slice(0, 8).join("\n") +
+      (bgPending.length > 8 ? `\n...（共 ${bgPending.length} 个）` : "")
+    : "";
 
   return (
     <div className="session-meta-bar" data-open={open === false ? "0" : "1"}>
       <RelayChannelBadge />
+      {bgPending.length > 0 ? (
+        <span className="sm-chip" data-tone="pending" title={bgTitle}>
+          <Terminal size={12} className="sm-ico" />
+          后台 {bgPending.length}
+        </span>
+      ) : null}
 
       <span className="sm-chip" title="本会话计划模型；下面尖括号内为 jsonl 解析的实际模型 ID">
         <Cpu size={12} className="sm-ico" />

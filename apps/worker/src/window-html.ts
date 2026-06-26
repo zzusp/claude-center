@@ -1036,6 +1036,24 @@ export function windowHtml(): string {
             }
             return '';
           }
+          // 与 web 端 transcript.tsx::isMetaUserEntry 同语义：skill / slash 命令 / system reminder 等内部注入
+          // 用 type=user 写入 jsonl，标 isMeta=true 或以 <local-command-*> / <command-*> / <system-reminder> 起首；
+          // 当作普通用户气泡显示是错的（如 skill 加载会把整段 skill 文档当用户消息）。
+          function txIsMetaEntry(obj) {
+            if (obj.type !== 'user' && obj.type !== 'assistant') return false;
+            if (obj.isMeta === true) return true;
+            if (obj.type !== 'user') return false;
+            var content = obj.message && obj.message.content;
+            var head = '';
+            if (typeof content === 'string') head = content.replace(/^\\s+/, '').slice(0, 80);
+            else if (Array.isArray(content)) {
+              for (var i = 0; i < content.length; i++) {
+                var b = content[i];
+                if (b && b.type === 'text' && typeof b.text === 'string') { head = b.text.replace(/^\\s+/, '').slice(0, 80); break; }
+              }
+            }
+            return /^<(local-command-caveat|local-command-stdout|command-name|command-message|command-args|system-reminder)\\b/.test(head);
+          }
           function parseTranscript(jsonl) {
             var items = [], lines = jsonl.split(/\\r?\\n/);
             for (var i = 0; i < lines.length; i++) {
@@ -1043,6 +1061,7 @@ export function windowHtml(): string {
               if (!line) continue;
               var obj; try { obj = JSON.parse(line); } catch (e) { continue; }
               if ((obj.type !== 'user' && obj.type !== 'assistant') || !obj.message) continue;
+              if (txIsMetaEntry(obj)) continue;
               var content = obj.message.content;
               var raw = typeof content === 'string' ? [{type:'text',text:content}] : Array.isArray(content) ? content : [];
               var blocks = [];
@@ -1057,6 +1076,51 @@ export function windowHtml(): string {
               if (blocks.length) items.push({role:obj.type, blocks:blocks});
             }
             return items;
+          }
+          // 扫 jsonl 算「未完成的后台命令」数量：tool_use Bash run_in_background=true 派发的命令，
+          // 通过 attachment.queued_command 的 <task-notification status=completed/failed/killed> 收尾。
+          // 主对话本轮 assistant 已落完时仍可能有后台命令挂着——它们完成后会唤醒下一轮，本对话并未真正结束。
+          // 与 web 端 transcript.tsx::extractBackgroundJobs 同语义。
+          function txCountPendingBackgroundJobs(jsonl) {
+            if (!jsonl) return 0;
+            var byId = Object.create(null);
+            var BG_TASKID_RE = /<task-id>([^<]*)<\\/task-id>/;
+            var BG_STATUS_RE = /<status>([^<]*)<\\/status>/;
+            var lines = jsonl.split(/\\r?\\n/);
+            for (var i = 0; i < lines.length; i++) {
+              var line = lines[i].trim();
+              if (!line) continue;
+              var obj; try { obj = JSON.parse(line); } catch (e) { continue; }
+              if (obj.type === 'user') {
+                var msg = obj.message; var content = msg && msg.content;
+                if (Array.isArray(content)) {
+                  for (var j = 0; j < content.length; j++) {
+                    var b = content[j];
+                    if (b && b.type === 'tool_result') {
+                      var tur = obj.toolUseResult;
+                      var bgId = tur && typeof tur.backgroundTaskId === 'string' ? tur.backgroundTaskId : null;
+                      if (bgId && !(bgId in byId)) byId[bgId] = 'running';
+                    }
+                  }
+                }
+                continue;
+              }
+              if (obj.type === 'attachment') {
+                var att = obj.attachment;
+                if (!att || att.type !== 'queued_command') continue;
+                var prompt = typeof att.prompt === 'string' ? att.prompt : '';
+                if (prompt.indexOf('<task-notification>') === -1) continue;
+                var idm = BG_TASKID_RE.exec(prompt);
+                var stm = BG_STATUS_RE.exec(prompt);
+                if (!idm) continue;
+                var raw = (stm && stm[1] || '').trim().toLowerCase();
+                var status = raw === 'completed' ? 'completed' : raw === 'failed' ? 'failed' : raw === 'killed' ? 'killed' : 'running';
+                byId[idm[1].trim()] = status;
+              }
+            }
+            var n = 0;
+            for (var k in byId) { if (byId[k] === 'running') n++; }
+            return n;
           }
           var TX_RENDER_CAP = 120;
           function renderTranscriptHtml(items) {
@@ -1195,7 +1259,12 @@ export function windowHtml(): string {
               convDetailFpId = convId;
               var html = "";
               if (jsonl) {
-                html = renderTranscriptHtml(parseTranscript(jsonl));
+                // 未完成的后台命令数（>0 表示「主对话已落完最后一段文字、但还有后台进程未结束」——见 conv-live 解释）。
+                var bgPending = txCountPendingBackgroundJobs(jsonl);
+                if (bgPending > 0) {
+                  html += '<div class="tx-truncated" title="还有后台命令在跑，对话/任务尚未真正结束；它们完成后会唤醒下一轮">⌛ 待处理后台命令 ' + bgPending + ' 个</div>';
+                }
+                html += renderTranscriptHtml(parseTranscript(jsonl));
                 // 本轮已发出但 jsonl 尚未收录的 user 消息（多轮续接的新问题在「思考中」阶段也立即可见）。
                 var pendingHtml = pendingTurnUserBubbles(msgs, jsonl);
                 if (pendingHtml) html += '<div class="tx">' + pendingHtml + '</div>';

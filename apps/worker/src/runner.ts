@@ -960,7 +960,7 @@ export class ClaudeCenterWorker {
       if (alive && !reattached) {
         reattached = true;
         this.log("info", `boot: 重连在途对话轮 ${turn.id}（claude pid=${turn.claude_pid} 仍在跑）`);
-        this.reattachConversationTurn(turn);
+        await this.reattachConversationTurn(turn);
         continue;
       }
       if (alive) {
@@ -974,11 +974,20 @@ export class ClaudeCenterWorker {
   }
 
   // 进程已退的在途轮：cwd 有 .jsonl 且含完整 assistant 回答 → finalize done；否则 fail。然后推会话头刷新 Console。
-  private async finalizeOrFailReconnect(turn: { id: string; conversation_id: string; claude_cwd: string | null }): Promise<void> {
+  // 进程启动时间作 sinceMs、conversation.claude_session_id 作 resumeSessionId：把同 cwd 里别的终端会话挡掉，
+  // 避免重启重连时把别的对话历史回写到本对话（与 executor.executeConversationTurn 同语义）。
+  private async finalizeOrFailReconnect(turn: { id: string; conversation_id: string; claude_cwd: string | null; claude_started_at: number | null }): Promise<void> {
     const pool = getPool();
     try {
+      const conv = await getConversation(pool, turn.conversation_id);
       const done = turn.claude_cwd
-        ? await finalizeConversationFromSession(pool, { conversationId: turn.conversation_id, messageId: turn.id, cwd: turn.claude_cwd })
+        ? await finalizeConversationFromSession(pool, {
+            conversationId: turn.conversation_id,
+            messageId: turn.id,
+            cwd: turn.claude_cwd,
+            sinceMs: turn.claude_started_at ?? null,
+            resumeSessionId: conv?.claude_session_id ?? null
+          })
         : false;
       if (!done) {
         await failConversationTurn(pool, { messageId: turn.id, errorMessage: "worker 重启时该轮 claude 进程已退出且无完整结果" });
@@ -992,18 +1001,30 @@ export class ClaudeCenterWorker {
   }
 
   // 重连一条仍存活的在途轮：占住对话车道、恢复 .jsonl 同步、轮询 pid；进程退出即从 session 收尾（除非已被取消）。
-  private reattachConversationTurn(turn: { id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null; claude_started_at: number | null }): void {
+  private async reattachConversationTurn(turn: { id: string; conversation_id: string; claude_pid: number | null; claude_cwd: string | null; claude_started_at: number | null }): Promise<void> {
     const pid = turn.claude_pid;
     const cwd = turn.claude_cwd;
     const startedAt = turn.claude_started_at;
     if (pid == null || !cwd) {
       return;
     }
+    // 重连时同样用 sinceMs（进程启动时间）+ resumeSessionId（DB 留存的 conversations.claude_session_id）锁定本对话的
+    // 那个 .jsonl，别被同 cwd 其它终端 claude 留下的会话文件抢走（与 executor.executeConversationTurn 同语义）。
+    let resumeSessionId: string | null = null;
+    try {
+      const conv = await getConversation(getPool(), turn.conversation_id);
+      resumeSessionId = conv?.claude_session_id ?? null;
+    } catch {
+      /* 取不到走时间窗兜底，不阻塞重连 */
+    }
     this.conversationBusy = true;
     const active = { messageId: turn.id, conversationId: turn.conversation_id, child: null as ChildProcess | null, pid, startedAt, cancelled: false };
     this.conversationActive = active;
     // 恢复 .jsonl → conversation_sessions 周期同步，让 Console 继续看到流式增量。
-    const stopSync = startConversationSessionSync(turn.conversation_id, cwd);
+    const stopSync = startConversationSessionSync(turn.conversation_id, cwd, {
+      sinceMs: startedAt ?? null,
+      resumeSessionId
+    });
     // 推一次会话头，让重连后 Console 立即恢复生成态（turn 仍 streaming → generating 派生为 true）。
     void this.publishConversationFinal(turn.conversation_id);
     const done = async (): Promise<void> => {
@@ -1014,7 +1035,13 @@ export class ClaudeCenterWorker {
       await stopSync().catch(() => {});
       try {
         if (!active.cancelled) {
-          const ok = await finalizeConversationFromSession(getPool(), { conversationId: turn.conversation_id, messageId: turn.id, cwd });
+          const ok = await finalizeConversationFromSession(getPool(), {
+            conversationId: turn.conversation_id,
+            messageId: turn.id,
+            cwd,
+            sinceMs: startedAt ?? null,
+            resumeSessionId
+          });
           if (!ok) {
             await failConversationTurn(getPool(), { messageId: turn.id, errorMessage: "重连的 claude 进程已退出但无完整结果" });
           }
