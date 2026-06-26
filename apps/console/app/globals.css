@@ -4468,8 +4468,10 @@ a.dep-item:hover {
   color: var(--text-4);
   user-select: none;
 }
-/* 发送按钮：近黑圆底 + 加粗上箭头（ChatGPT 风格）。回复中时见 .chat-send-stop。 */
-.chat-send {
+/* 发送按钮：近黑圆底 + 加粗上箭头（ChatGPT 风格）。回复中时见 .chat-send-stop。
+   实时对话输入框右下角三个按钮（定时 / 附件 / 发送）共用 .chat-composer-btn 一套样式。 */
+.chat-send,
+.chat-composer-btn {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -4483,16 +4485,27 @@ a.dep-item:hover {
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, transform 120ms ease;
 }
-.chat-send:hover:not(:disabled) {
+.chat-send:hover:not(:disabled),
+.chat-composer-btn:hover:not(:disabled) {
   background: #000;
 }
-.chat-send:active:not(:disabled) {
+.chat-send:active:not(:disabled),
+.chat-composer-btn:active:not(:disabled) {
   transform: scale(0.94);
 }
-.chat-send:disabled {
+.chat-send:disabled,
+.chat-composer-btn:disabled {
   background: var(--surface-2);
   color: var(--text-4);
   cursor: not-allowed;
+}
+/* 定时按钮已选时：蓝色（var(--running)）填充表明「已设置定时」。 */
+.chat-composer-btn.is-active {
+  background: var(--running);
+  color: #fff;
+}
+.chat-composer-btn.is-active:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--running) 88%, #000);
 }
 /* 回复中：发送按钮原地变终止按钮（深色圆底 + 白色方块），点击 = cancelTurn。 */
 .chat-send-stop {
@@ -4709,23 +4722,67 @@ a.dep-item:hover {
   color: var(--failed);
 }
 
-/* 输入框底栏左侧工具组：定时发送选择器 + 提示文案。 */
-.chat-composer-tools {
-  display: flex;
+/* 输入框底栏右下角按钮组：定时 / 附件 / 发送 三颗圆形按钮依次排开。 */
+.chat-composer-actions {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.chat-schedule-picker {
-  width: 188px;
+  gap: 8px;
   flex-shrink: 0;
 }
-.chat-schedule-picker .dt-trigger {
-  padding: 6px 9px;
-  font-size: 12px;
+/* 紧凑模式下 DateTimePicker 仍需 position:relative 让面板锚定到按钮上方。 */
+.dt-picker.compact {
+  position: relative;
+  width: auto;
 }
-/* 提示文案可收缩 / 省略，避免定时控件挤占后在窄屏溢出。 */
-.chat-composer-tools .chat-composer-hint {
+.dt-picker.compact .dt-panel {
+  right: 0;
+  left: auto;
+  min-width: 280px;
+}
+/* 草稿带：定时 chip + 附件 chips；空时 :empty 折叠不占位。 */
+.chat-composer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.chat-composer-chips:empty {
+  display: none;
+}
+.chat-schedule-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.chat-schedule-chip-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--text-4);
+  cursor: pointer;
+}
+.chat-schedule-chip-clear:hover:not(:disabled) {
+  background: var(--surface-1);
+  color: var(--text-1);
+}
+.chat-schedule-chip-clear:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* hint 可省略，避免按钮组挤占后窄屏溢出。 */
+.chat-composer-bar .chat-composer-hint {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

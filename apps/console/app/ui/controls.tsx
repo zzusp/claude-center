@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  Activity, ArrowDown, ArrowUp, Boxes, Bot, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert,
+  Activity, ArrowDown, ArrowUp, Boxes, Bot, CalendarClock, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert,
   Clock, Cpu, Database, ExternalLink, FolderGit2, GitBranch, Inbox, LayoutGrid, ListTodo, LogOut,
   MessageSquare, Network, Pencil, Plus, Power, RadioTower, RotateCcw, Save, Search, Send, Server,
   ShieldCheck, Tag, Trash2, UserRound, Users, X
@@ -377,7 +377,8 @@ function DateTimePicker({
   placeholder = "选择日期与时间",
   ariaLabel,
   required,
-  direction = "down"
+  direction = "down",
+  compact = false
 }: {
   name?: string;
   value?: string;
@@ -390,6 +391,8 @@ function DateTimePicker({
   required?: boolean;
   // 面板展开方向：默认向下；贴近视口底部的场景（如对话输入框）用 "up" 向上展开避免被裁切。
   direction?: "down" | "up";
+  // 紧凑模式：trigger 渲染为圆形按钮（同 .chat-send 样式），有值时显示激活态。
+  compact?: boolean;
 }) {
   const isControlled = value !== undefined;
   const [internal, setInternal] = useState(defaultValue);
@@ -547,35 +550,50 @@ function DateTimePicker({
   }, [minDate, parsed]);
 
   return (
-    <div className={`dt-picker${open ? " open" : ""}${disabled ? " disabled" : ""}${direction === "up" ? " up" : ""}`} ref={rootRef}>
+    <div className={`dt-picker${open ? " open" : ""}${disabled ? " disabled" : ""}${direction === "up" ? " up" : ""}${compact ? " compact" : ""}`} ref={rootRef}>
       {name ? <input type="hidden" name={name} value={current} required={required} /> : null}
-      <button
-        type="button"
-        className="dt-trigger"
-        onClick={() => (disabled ? undefined : setOpen((prev) => !prev))}
-        disabled={disabled}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label={ariaLabel}
-      >
-        <CalendarDays size={15} className="dt-trigger-ico" aria-hidden />
-        <span className={`dt-trigger-label${current ? "" : " placeholder"}`}>
-          {current ? displayLabel : placeholder}
-        </span>
-        {current ? (
-          <span
-            className="dt-trigger-clear"
-            role="button"
-            aria-label="清除"
-            onClick={(event) => {
-              event.stopPropagation();
-              clear();
-            }}
-          >
-            <X size={13} />
+      {compact ? (
+        <button
+          type="button"
+          className={`chat-composer-btn${current ? " is-active" : ""}`}
+          onClick={() => (disabled ? undefined : setOpen((prev) => !prev))}
+          disabled={disabled}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-label={ariaLabel ?? placeholder}
+          title={current ? `定时发送：${displayLabel}` : placeholder}
+        >
+          <CalendarClock size={16} />
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="dt-trigger"
+          onClick={() => (disabled ? undefined : setOpen((prev) => !prev))}
+          disabled={disabled}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-label={ariaLabel}
+        >
+          <CalendarDays size={15} className="dt-trigger-ico" aria-hidden />
+          <span className={`dt-trigger-label${current ? "" : " placeholder"}`}>
+            {current ? displayLabel : placeholder}
           </span>
-        ) : null}
-      </button>
+          {current ? (
+            <span
+              className="dt-trigger-clear"
+              role="button"
+              aria-label="清除"
+              onClick={(event) => {
+                event.stopPropagation();
+                clear();
+              }}
+            >
+              <X size={13} />
+            </span>
+          ) : null}
+        </button>
+      )}
       {open ? (
         <div className="dt-panel" role="dialog" aria-label="选择日期与时间">
           <div className="dt-panel-head">
