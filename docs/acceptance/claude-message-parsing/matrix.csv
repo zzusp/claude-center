@@ -1,0 +1,14 @@
+case_id,case,round-1
+P1,parseTranscript 过滤 isMeta:true（真实 fixture 至少 1 条 user 气泡被丢弃）,PASS
+P2,parseTranscript 过滤 <command-name>/<local-command-caveat>/<system-reminder> 起首的伪 user,PASS
+P3,extractBackgroundJobs 把 backgroundTaskId 派发 + queued_command 完成 对账（合成 fixture pending 数正确）,PASS
+P4,findSessionFile sinceMs 跳过旧 jsonl（5 case：legacy / window / prefer hit / prefer miss→window / future sinceMs）,PASS
+P5,findSessionFile preferSessionId 命中 <id>.jsonl（即便另一文件更新）,PASS
+S1,addConversationMessage scheduledAt 入 status=scheduled / seq=NULL,PASS
+S2,promoteDueScheduledConversationMessages 到点翻 done + 赋连续 seq + bump conversations.updated_at,PASS
+S3,claimNextConversationTurn 不会因 scheduled（seq=NULL）漏掉到点消息,PASS
+U1,Console /chat?c=<id>：assistant 正文气泡可见,PASS
+U2,Console /chat?c=<id>：skill 全文 / <local-command-caveat> 不被渲染为 user 气泡,PASS
+U3,Console /chat?c=<id>：SessionMetaBar 出现「后台 N」chip 且 N=pending 个数,PASS
+B1,build + typecheck 五包绿,PASS
+B2,ephemeral DB 全量迁移绿 + verify:console 401→200 + scheduler.ok:true,PASS

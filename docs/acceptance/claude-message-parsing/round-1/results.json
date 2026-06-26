@@ -1,0 +1,72 @@
+{
+  "passed": 13,
+  "failed": 0,
+  "total": 13,
+  "cases": [
+    {
+      "id": "P1",
+      "status": "PASS",
+      "note": "skill 文档不应出现在 user 气泡"
+    },
+    {
+      "id": "P2",
+      "status": "PASS",
+      "note": "<command-name>/<local-command-caveat> 不应出现在 user 气泡"
+    },
+    {
+      "id": "P3",
+      "status": "PASS",
+      "note": "bgJobs=2 pending=1(bgB)"
+    },
+    {
+      "id": "P4",
+      "status": "PASS",
+      "note": "5 case 全过（见 verify-session-targeting.mjs）"
+    },
+    {
+      "id": "P5",
+      "status": "PASS",
+      "note": "preferSessionId 命中（同上）"
+    },
+    {
+      "id": "S1",
+      "status": "PASS",
+      "note": "status=scheduled, seq=null"
+    },
+    {
+      "id": "S2",
+      "status": "PASS",
+      "note": "promoted=1, status=done, seq=2"
+    },
+    {
+      "id": "S3",
+      "status": "PASS",
+      "note": "claimed assistant turn d8540bcb-3e7e-47fb-86f9-ae5a445171ff"
+    },
+    {
+      "id": "U1",
+      "status": "PASS",
+      "note": "共 2 条 assistant 气泡，末条节选: A 已完成；B 仍在跑（长跑），完成时会再唤醒本对话。"
+    },
+    {
+      "id": "U2",
+      "status": "PASS",
+      "note": "共 1 条 user 气泡"
+    },
+    {
+      "id": "U3",
+      "status": "PASS",
+      "note": "chip 文本=\"后台 1\""
+    },
+    {
+      "id": "B1",
+      "status": "PASS",
+      "note": "本会话此前 npm run typecheck + npm run build 五包绿"
+    },
+    {
+      "id": "B2",
+      "status": "PASS",
+      "note": "本脚本基于 ephemeral DB；scripts/ephemeral-db.mjs --verify 此前已 OK"
+    }
+  ]
+}
