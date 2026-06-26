@@ -4468,8 +4468,11 @@ a.dep-item:hover {
   color: var(--text-4);
   user-select: none;
 }
-/* 发送按钮：近黑圆底 + 加粗上箭头（ChatGPT 风格）。回复中时见 .chat-send-stop。 */
-.chat-send {
+/* 实时对话输入框右下角三个按钮（定时 / 附件 / 发送）：尺寸/形状一致；
+   发送按钮 .chat-send 用近黑实心（主操作、最高优先级）；
+   定时 / 附件 .chat-composer-btn 用透明底 + 灰图标 + hover 浅灰底（次操作、不抢视觉）。 */
+.chat-send,
+.chat-composer-btn {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -4478,21 +4481,48 @@ a.dep-item:hover {
   height: 34px;
   border-radius: 999px;
   border: none;
-  background: var(--text-1);
-  color: #fff;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, transform 120ms ease;
 }
+.chat-send:active:not(:disabled),
+.chat-composer-btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+/* 主操作 — 发送按钮：近黑圆底 + 加粗上箭头（ChatGPT 风格）。 */
+.chat-send {
+  background: var(--text-1);
+  color: #fff;
+}
 .chat-send:hover:not(:disabled) {
   background: #000;
-}
-.chat-send:active:not(:disabled) {
-  transform: scale(0.94);
 }
 .chat-send:disabled {
   background: var(--surface-2);
   color: var(--text-4);
   cursor: not-allowed;
+}
+/* 次操作 — 定时 / 附件：透明底 + 灰图标；hover 浅灰底 + 深图标，弱化避免抢视觉。 */
+.chat-composer-btn {
+  background: transparent;
+  color: var(--text-3);
+}
+.chat-composer-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+.chat-composer-btn:disabled {
+  color: var(--text-4);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+/* 定时按钮已选时：蓝色实心，强化「已设定时」状态指示（仍弱于发送按钮的「立刻发」近黑）。 */
+.chat-composer-btn.is-active {
+  background: color-mix(in srgb, var(--running) 14%, transparent);
+  color: var(--running);
+}
+.chat-composer-btn.is-active:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--running) 22%, transparent);
+  color: var(--running);
 }
 /* 回复中：发送按钮原地变终止按钮（深色圆底 + 白色方块），点击 = cancelTurn。 */
 .chat-send-stop {
@@ -4709,23 +4739,69 @@ a.dep-item:hover {
   color: var(--failed);
 }
 
-/* 输入框底栏左侧工具组：定时发送选择器 + 提示文案。 */
-.chat-composer-tools {
-  display: flex;
+/* 输入框底栏右下角按钮组：定时 / 附件 / 发送 三颗圆形按钮依次排开。 */
+.chat-composer-actions {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.chat-schedule-picker {
-  width: 188px;
+  gap: 8px;
   flex-shrink: 0;
 }
-.chat-schedule-picker .dt-trigger {
-  padding: 6px 9px;
-  font-size: 12px;
+/* 紧凑模式下 DateTimePicker 仍需 position:relative 让面板锚定到按钮上方。 */
+.dt-picker.compact {
+  position: relative;
+  width: auto;
 }
-/* 提示文案可收缩 / 省略，避免定时控件挤占后在窄屏溢出。 */
-.chat-composer-tools .chat-composer-hint {
+.dt-picker.compact .dt-panel {
+  right: 0;
+  left: auto;
+  min-width: 280px;
+  /* 桌面窄端兜底：避免 280px 面板右锚后向左溢出超过视口 24px 边距。 */
+  max-width: calc(100vw - 24px);
+}
+/* 草稿带：定时 chip + 附件 chips；空时 :empty 折叠不占位。 */
+.chat-composer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.chat-composer-chips:empty {
+  display: none;
+}
+.chat-schedule-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.chat-schedule-chip-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--text-4);
+  cursor: pointer;
+}
+.chat-schedule-chip-clear:hover:not(:disabled) {
+  background: var(--surface-1);
+  color: var(--text-1);
+}
+.chat-schedule-chip-clear:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* hint 可省略，避免按钮组挤占后窄屏溢出。 */
+.chat-composer-bar .chat-composer-hint {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5747,6 +5823,22 @@ a.ds-v:hover {
   /* 输入框收紧外边距，给消息区更多纵向空间。 */
   .chat-composer {
     margin: 8px 10px 10px;
+  }
+  /* 移动端：紧凑日期面板贴底显示（fixed bottom-sheet），避免按钮右锚下面板左边被视口裁切。
+     不再依赖 .compact.up 的 absolute 上展开。 */
+  .dt-picker.compact .dt-panel {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    top: auto;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+  .dt-picker.compact.up .dt-panel {
+    bottom: 12px;
+    top: auto;
   }
 }
 

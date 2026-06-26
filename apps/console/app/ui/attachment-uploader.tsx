@@ -7,16 +7,21 @@ import { ChangeEvent, ClipboardEvent, DragEvent, useRef, useState } from "react"
 // 上传器：受控组件。父组件持有 attachments 数组（已上传 attachments 元数据），通过 onChange 接收更新。
 // 提交任务/评论时把 attachments.map(a => a.id) 作为 attachmentIds 一并 POST。
 // 支持：点击选择 / 拖拽 / 粘贴（onPaste 抓 clipboardData.files）。
+// compact=true：仅渲染圆形按钮（与发送按钮同款样式），附件 chips 由父组件渲染（实时对话输入框场景）。
 export function AttachmentUploader({
   attachments,
   onChange,
   max = 10,
-  disabled = false
+  disabled = false,
+  compact = false,
+  onError
 }: {
   attachments: AttachmentMeta[];
   onChange: (next: AttachmentMeta[]) => void;
   max?: number;
   disabled?: boolean;
+  compact?: boolean;
+  onError?: (msg: string) => void;
 }) {
   const [uploading, setUploading] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -35,12 +40,16 @@ export function AttachmentUploader({
     }
     const remaining = max - localRef.current.length - uploading;
     if (remaining <= 0) {
-      setError(`最多 ${max} 个附件`);
+      const msg = `最多 ${max} 个附件`;
+      setError(msg);
+      onError?.(msg);
       return;
     }
     const queue = list.slice(0, remaining);
     if (queue.length < list.length) {
-      setError(`最多 ${max} 个附件，多余的已忽略`);
+      const msg = `最多 ${max} 个附件，多余的已忽略`;
+      setError(msg);
+      onError?.(msg);
     } else {
       setError(null);
     }
@@ -60,7 +69,9 @@ export function AttachmentUploader({
         localRef.current = next;
         onChange(next);
       } catch (e) {
-        setError(e instanceof Error ? e.message : "上传失败");
+        const msg = e instanceof Error ? e.message : "上传失败";
+        setError(msg);
+        onError?.(msg);
       } finally {
         setUploading((n) => n - 1);
       }
@@ -106,6 +117,38 @@ export function AttachmentUploader({
   const placeholder = disabled
     ? "禁用"
     : `点击 / 拖拽 / 粘贴附件 · 还可加 ${Math.max(0, remaining)} 个 · 单张图 ≤ 10MB / 文件 ≤ 50MB`;
+
+  // 紧凑模式：仅渲染一颗圆形按钮（同 .chat-send 样式），附件 chips 由父组件管理 / 渲染。
+  // 拖拽 / 粘贴在此模式下由外层 composer 接管（textarea + composer wrapper）。
+  if (compact) {
+    const tip = disabled
+      ? "禁用"
+      : remaining <= 0
+        ? `最多 ${max} 个附件`
+        : `添加附件 · 还可加 ${Math.max(0, remaining)} 个 · 单张图 ≤ 10MB / 文件 ≤ 50MB`;
+    return (
+      <>
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          hidden
+          onChange={onPick}
+          disabled={disabled || remaining <= 0}
+        />
+        <button
+          type="button"
+          className="chat-composer-btn"
+          onClick={() => inputRef.current?.click()}
+          disabled={disabled || remaining <= 0}
+          title={tip}
+          aria-label="添加附件"
+        >
+          {uploading > 0 ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}
+        </button>
+      </>
+    );
+  }
 
   return (
     <div
@@ -176,7 +219,7 @@ export function AttachmentUploader({
 }
 
 // 上传期 chip：图片缩略 + 文件名 + 删除按钮。详情页只读展示走另一个 attachment-list 组件。
-function AttachmentChip({
+export function AttachmentChip({
   meta,
   onRemove
 }: {

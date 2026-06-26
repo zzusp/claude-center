@@ -1,0 +1,13 @@
+case,round-1,round-2
+typecheck 五包通过,PASS,PASS
+build 五包通过(含 next build),PASS,PASS
+ephemeral-db verify:console（401→200 + scheduler.ok:true）,PASS,PASS
+桌面端 chat-thread 三按钮右下角依次排开（定时/附件/发送）,PASS,PASS
+桌面端 输入文本 - composer focus 蓝边 + 三按钮启用态,PASS,PASS
+桌面端 定时按钮点开 - 日期面板上方展开右对齐,PASS,PASS
+桌面端 选定时间 - 草稿带显示时间 chip + 定时按钮 is-active,PASS,PASS
+桌面端 发送按钮视觉优先（实心黑）/ 定时附件透明弱化,—,PASS
+手机端 chat-thread 三按钮同款形状,PASS,PASS
+手机端 定时面板完整显示（不溢出视口左侧）,FAIL,PASS
+手机端 选定时间 - 草稿带 + is-active,PASS,PASS
+手机端 定时附件按钮去掉背景 hover 浅灰,—,PASS

@@ -4,7 +4,7 @@ import type { AttachmentMeta, Conversation, ConversationMessage, Project, Worker
 import { ArrowUp, Bot, CalendarClock, Check, ChevronLeft, Clock, GitBranch, Info, MessageSquare, MoreHorizontal, Pencil, Server, Settings2, Sparkles, Square, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Empty, fmtDateTime, postJson } from "./shared";
-import { AttachmentList, AttachmentUploader } from "./attachment-uploader";
+import { AttachmentChip, AttachmentList, AttachmentUploader } from "./attachment-uploader";
 import { DateTimePicker, Select } from "./controls";
 import { SessionMetaBar } from "./session-meta";
 import { TranscriptView, parseTranscript } from "./transcript";
@@ -226,6 +226,17 @@ export function ChatThread({
     } finally {
       setSending(false);
     }
+  }
+
+  // 从草稿附件中移除一项：先 best-effort 调 DELETE 接口（已绑定的会被 unbound 校验挡住，
+  // 这里只在「未提交前」用，全部 unbound），再从本地草稿移除避免界面卡住等待响应。
+  async function removeDraftAttachment(attId: string): Promise<void> {
+    try {
+      await fetch(`/api/attachments/${attId}`, { method: "DELETE" });
+    } catch {
+      /* best-effort：失败时仍从草稿移除，孤儿由 cron 清 */
+    }
+    setDraftAtts((prev) => prev.filter((a) => a.id !== attId));
   }
 
   // 取消一条尚未到点的定时消息。
@@ -463,7 +474,34 @@ export function ChatThread({
         <div className="chat-closed">该 worker 当前离线，无法继续对话（恢复在线后可继续）</div>
       ) : canCommand ? (
         <div className="chat-composer">
-          <AttachmentUploader attachments={draftAtts} onChange={setDraftAtts} disabled={sending} />
+          {/* 草稿展示带：定时 chip + 已上传附件 chips。空集合时整带隐藏（CSS :empty）。 */}
+          <div className="chat-composer-chips">
+            {scheduleAt ? (
+              <span
+                className="chat-schedule-chip"
+                title={`将于 ${scheduleAt.replace("T", " ")} 定时发送`}
+              >
+                <CalendarClock size={12} aria-hidden />
+                <span>{scheduleAt.replace("T", " ")}</span>
+                <button
+                  type="button"
+                  className="chat-schedule-chip-clear"
+                  aria-label="取消定时"
+                  onClick={() => setScheduleAt("")}
+                  disabled={sending}
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ) : null}
+            {draftAtts.map((a) => (
+              <AttachmentChip
+                key={a.id}
+                meta={a}
+                onRemove={sending ? undefined : () => void removeDraftAttachment(a.id)}
+              />
+            ))}
+          </div>
           <textarea
             className="chat-composer-input"
             value={input}
@@ -478,49 +516,56 @@ export function ChatThread({
             rows={1}
           />
           <div className="chat-composer-bar">
-            <div className="chat-composer-tools">
-              {/* 定时发送：选了时间则点发送 / Enter 排定到该时刻发送；direction=up 避免输入框贴底被裁切。 */}
-              <div className="chat-schedule-picker">
-                <DateTimePicker
-                  value={scheduleAt}
-                  onChange={setScheduleAt}
-                  minNow
-                  direction="up"
-                  disabled={sending || busy}
-                  placeholder="定时发送…"
-                  ariaLabel="定时发送时间"
-                />
-              </div>
-              <span className="chat-composer-hint">
-                {scheduleAt ? "将定时发送" : "Enter 发送 · Shift+Enter 换行"}
-              </span>
+            <span className="chat-composer-hint">
+              {scheduleAt ? "将定时发送" : "Enter 发送 · Shift+Enter 换行"}
+            </span>
+            <div className="chat-composer-actions">
+              {/* 定时按钮：紧凑圆形 trigger；direction=up 避免日历面板贴底被裁切。 */}
+              <DateTimePicker
+                value={scheduleAt}
+                onChange={setScheduleAt}
+                minNow
+                direction="up"
+                compact
+                disabled={sending || busy}
+                placeholder="定时发送…"
+                ariaLabel="定时发送"
+              />
+              {/* 附件按钮：紧凑圆形按钮，附件 chips 在上方草稿带展示。 */}
+              <AttachmentUploader
+                attachments={draftAtts}
+                onChange={setDraftAtts}
+                disabled={sending}
+                compact
+                onError={setErr}
+              />
+              {busy ? (
+                <button
+                  className="chat-send chat-send-stop"
+                  type="button"
+                  onClick={() => void cancelTurn()}
+                  title="终止本轮回答"
+                  aria-label="终止本轮回答"
+                >
+                  <Square size={13} fill="currentColor" />
+                </button>
+              ) : (
+                <button
+                  className="chat-send"
+                  type="button"
+                  disabled={sending || (!input.trim() && draftAtts.length === 0)}
+                  onClick={send}
+                  title={scheduleAt ? "定时发送" : "发送消息（Enter）"}
+                  aria-label={scheduleAt ? "定时发送" : "发送消息"}
+                >
+                  {scheduleAt ? (
+                    <CalendarClock size={16} strokeWidth={2.5} />
+                  ) : (
+                    <ArrowUp size={18} strokeWidth={2.5} />
+                  )}
+                </button>
+              )}
             </div>
-            {busy ? (
-              <button
-                className="chat-send chat-send-stop"
-                type="button"
-                onClick={() => void cancelTurn()}
-                title="终止本轮回答"
-                aria-label="终止本轮回答"
-              >
-                <Square size={13} fill="currentColor" />
-              </button>
-            ) : (
-              <button
-                className="chat-send"
-                type="button"
-                disabled={sending || (!input.trim() && draftAtts.length === 0)}
-                onClick={send}
-                title={scheduleAt ? "定时发送" : "发送消息（Enter）"}
-                aria-label={scheduleAt ? "定时发送" : "发送消息"}
-              >
-                {scheduleAt ? (
-                  <CalendarClock size={16} strokeWidth={2.5} />
-                ) : (
-                  <ArrowUp size={18} strokeWidth={2.5} />
-                )}
-              </button>
-            )}
           </div>
         </div>
       ) : (
