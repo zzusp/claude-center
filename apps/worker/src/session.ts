@@ -24,8 +24,30 @@ function encodeProjectDir(cwd: string): string {
 // + 其 mtimeMs（供周期同步按 mtime 跳过未变的整文件读盘）。全异步 IO（fs.promises），不阻塞主进程事件循环——
 // 同步 readdirSync/statSync/readFileSync 会卡住 Electron 主进程、连带拖慢并发的 IPC 响应。
 // 目录尚未建（claude 刚启动）/ 无 jsonl 时返回 null。
-async function findSessionFile(cwd: string): Promise<{ file: string; mtime: number } | null> {
+//
+// opts.sinceMs：仅考虑 mtime 或 birthtime ≥ sinceMs 的文件。用于排除「用户在同一 cwd（如非 git 项目里的
+// localPath、或同一 worktree）单独开终端跑过 claude」留下的旧 session 文件——否则 findSessionFile 取最新
+// 那条会把我们的 conversation/task 误连到别的会话历史上（用户原报：定时消息发出后回显另一个终端窗口的历史）。
+// opts.preferSessionId：当 <sessionId>.jsonl 存在时直接命中（--resume 同一会话写回原文件名场景的快路径）。
+async function findSessionFile(
+  cwd: string,
+  opts?: { sinceMs?: number | null; preferSessionId?: string | null }
+): Promise<{ file: string; mtime: number } | null> {
   const dir = path.join(claudeProjectsDir(), encodeProjectDir(cwd));
+  const sinceMs = opts?.sinceMs ?? null;
+  const preferSessionId = opts?.preferSessionId ?? null;
+
+  // 快路径：明确知道 --resume 的 sessionId 且 <id>.jsonl 存在 → 直接锁定，不与同目录其它会话比较。
+  if (preferSessionId) {
+    const target = path.join(dir, `${preferSessionId}.jsonl`);
+    try {
+      const st = await fsp.stat(target);
+      return { file: target, mtime: st.mtimeMs };
+    } catch {
+      // 不存在 / 不可读 → 落到下面的扫描（可能 claude 当轮 fork 出新 sessionId）
+    }
+  }
+
   let entries: string[];
   try {
     entries = await fsp.readdir(dir);
@@ -37,9 +59,15 @@ async function findSessionFile(cwd: string): Promise<{ file: string; mtime: numb
     if (!entry.endsWith(".jsonl")) continue;
     const full = path.join(dir, entry);
     try {
-      const mtime = (await fsp.stat(full)).mtimeMs;
-      if (!newest || mtime > newest.mtime) {
-        newest = { file: full, mtime };
+      const stat = await fsp.stat(full);
+      // 时间窗过滤：只在 mtime 或 birthtime ≥ sinceMs 时才视作本次执行产生的文件。
+      // birthtime 是文件创建时刻——首次写就被认领；mtime 是最后写入——用于已存在文件被本次 claude --resume 续写的场景。
+      if (sinceMs !== null) {
+        const birth = Number.isFinite(stat.birthtimeMs) ? stat.birthtimeMs : 0;
+        if (stat.mtimeMs < sinceMs && birth < sinceMs) continue;
+      }
+      if (!newest || stat.mtimeMs > newest.mtime) {
+        newest = { file: full, mtime: stat.mtimeMs };
       }
     } catch {
       // 文件可能在枚举与 stat 之间被删/轮转，跳过。
@@ -61,8 +89,14 @@ export async function readSessionJsonl(cwd: string): Promise<string | null> {
 
 // 读取某 cwd 对应会话 transcript 全文 + sessionId（= .jsonl 文件名）。供对话轮「从 session 收尾」用：
 // detached/重连场景下 claude 的 stdout 已不可得，终态的 result/sessionId 都从这里取。无则 null。
-export async function findSessionInfo(cwd: string): Promise<{ jsonl: string; sessionId: string } | null> {
-  const found = await findSessionFile(cwd);
+//
+// opts.sinceMs/preferSessionId：见 findSessionFile 文档——用于把本次 claude 进程产生的 session 文件与
+// 同目录其它（用户另开终端 / 别次执行）会话区分开，防止误把别的对话历史写回本对话。
+export async function findSessionInfo(
+  cwd: string,
+  opts?: { sinceMs?: number | null; preferSessionId?: string | null }
+): Promise<{ jsonl: string; sessionId: string } | null> {
+  const found = await findSessionFile(cwd, opts);
   if (!found) return null;
   try {
     const jsonl = await fsp.readFile(found.file, "utf8");
@@ -79,13 +113,18 @@ export async function findSessionInfo(cwd: string): Promise<{ jsonl: string; ses
 //   ② 再按长度跳过 no-op 写。
 // 仅在「已持久化 / 确认无需持久化」后才推进 lastSyncedMtime——persist 失败则 mtime 不推进，下一轮
 // (found.mtime !== lastSyncedMtime) 自然重试，不会被 mtime 跳过吞掉失败。最终同步 force 忽略两道跳过。
-function startSync(cwd: string, persist: (jsonl: string) => Promise<void>, intervalMs: number): () => Promise<void> {
+function startSync(
+  cwd: string,
+  persist: (jsonl: string) => Promise<void>,
+  intervalMs: number,
+  opts?: { sinceMs?: number | null; preferSessionId?: string | null }
+): () => Promise<void> {
   let lastLen = -1;
   let lastSyncedMtime = -1;
   let stopped = false;
 
   const syncOnce = async (force: boolean): Promise<void> => {
-    const found = await findSessionFile(cwd);
+    const found = await findSessionFile(cwd, opts);
     if (found == null) return;
     if (!force && found.mtime === lastSyncedMtime) return;
     let content: string;
@@ -123,11 +162,29 @@ function startSync(cwd: string, persist: (jsonl: string) => Promise<void>, inter
 }
 
 // 任务执行期间周期 + 终态同步 transcript 到 task_sessions。
-export function startTaskSessionSync(taskId: string, cwd: string): () => Promise<void> {
-  return startSync(cwd, (jsonl) => upsertTaskSession(getPool(), taskId, jsonl), TASK_SYNC_INTERVAL_MS);
+// sinceMs：本次 claude 进程启动时刻（毫秒）—— 用于排除同目录里的旧 session 文件。
+export function startTaskSessionSync(taskId: string, cwd: string, sinceMs?: number | null): () => Promise<void> {
+  return startSync(
+    cwd,
+    (jsonl) => upsertTaskSession(getPool(), taskId, jsonl),
+    TASK_SYNC_INTERVAL_MS,
+    { sinceMs: sinceMs ?? null }
+  );
 }
 
 // 对话执行期间周期 + 终态同步 transcript 到 conversation_sessions（一个对话多轮 --resume 续接对应同一 session 文件）。
-export function startConversationSessionSync(conversationId: string, cwd: string): () => Promise<void> {
-  return startSync(cwd, (jsonl) => upsertConversationSession(getPool(), conversationId, jsonl), CONVERSATION_SYNC_INTERVAL_MS);
+// resumeSessionId：已知本对话的会话 id（之前轮存进 conversations.claude_session_id）。<id>.jsonl 命中则直接锁定，
+// 不会被同目录里其它 claude 终端会话「最新写入」抢走（用户原报：定时消息触发后回显另一个终端窗口的历史）。
+// sinceMs：本次 claude 进程启动时刻，用作 resumeSessionId 命中失败时的兜底过滤。
+export function startConversationSessionSync(
+  conversationId: string,
+  cwd: string,
+  opts?: { sinceMs?: number | null; resumeSessionId?: string | null }
+): () => Promise<void> {
+  return startSync(
+    cwd,
+    (jsonl) => upsertConversationSession(getPool(), conversationId, jsonl),
+    CONVERSATION_SYNC_INTERVAL_MS,
+    { sinceMs: opts?.sinceMs ?? null, preferSessionId: opts?.resumeSessionId ?? null }
+  );
 }

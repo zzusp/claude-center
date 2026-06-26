@@ -4,17 +4,17 @@ import { ChevronRight, Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { extractBackgroundJobs, isMetaUserEntry, parseTranscript, pendingBackgroundJobs } from "./transcript-parse";
+import type { BackgroundJob, TBlock, TItem } from "./transcript-parse";
 
 // Claude Code session .jsonl 富展示：解析 NDJSON → 消息块，渲染为带工具折叠 / diff / markdown / thinking 的
 // 会话回放。任务详情与对话页共用（移植自 claude-code-session 的 MessageBubble / ToolBlock / MarkdownContent）。
+// 纯解析逻辑（parseTranscript / extractBackgroundJobs / isMetaUserEntry）在 transcript-parse.ts，
+// 无 React 依赖、可被 e2e / 服务端 import；这里只放渲染组件 + re-export 兼容已有 import 路径。
 
-export type TBlock =
-  | { kind: "text"; text: string }
-  | { kind: "thinking"; text: string }
-  | { kind: "tool_use"; id: string; name: string; input: unknown }
-  | { kind: "tool_result"; toolUseId: string | null; text: string; isError: boolean };
+export { extractBackgroundJobs, isMetaUserEntry, parseTranscript, pendingBackgroundJobs };
+export type { BackgroundJob, TBlock, TItem };
 
-export type TItem = { role: "user" | "assistant"; blocks: TBlock[] };
 type ToolResult = { text: string; isError: boolean };
 
 const TRUNCATE = 4000;
@@ -42,20 +42,6 @@ function stringifyInput(input: unknown): string {
   }
 }
 
-// tool_result.content 可能是字符串或 [{type:'text',text}] 块数组。
-function toolResultText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((b) =>
-        b && typeof b === "object" && typeof (b as { text?: unknown }).text === "string" ? (b as { text: string }).text : ""
-      )
-      .filter(Boolean)
-      .join("\n");
-  }
-  return content == null ? "" : stringifyInput(content);
-}
-
 function tailPath(p: string): string {
   if (!p) return "";
   const parts = p.split(/[/\\]/).filter(Boolean);
@@ -73,45 +59,6 @@ function toolSummary(name: string, input: unknown): string {
   if (name === "Task") return str(o.description);
   if (name === "WebFetch") return str(o.url);
   return "";
-}
-
-// 解析 Claude Code session .jsonl（NDJSON）：取 user/assistant 且带 message 的行，content 归一化为块。
-// tool_use 保留原始 input（按工具特化渲染），tool_result 带 tool_use_id（配对到对应调用下）。
-export function parseTranscript(jsonl: string): TItem[] {
-  const items: TItem[] = [];
-  for (const line of jsonl.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let obj: { type?: string; message?: { content?: unknown } };
-    try {
-      obj = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-    if ((obj.type !== "user" && obj.type !== "assistant") || !obj.message) continue;
-    const content = obj.message.content;
-    const raw = typeof content === "string" ? [{ type: "text", text: content }] : Array.isArray(content) ? content : [];
-    const blocks: TBlock[] = [];
-    for (const b of raw as Array<Record<string, unknown>>) {
-      if (!b || typeof b !== "object") continue;
-      if (b.type === "text" && typeof b.text === "string" && b.text.trim()) {
-        blocks.push({ kind: "text", text: b.text });
-      } else if (b.type === "thinking" && typeof b.thinking === "string" && b.thinking.trim()) {
-        blocks.push({ kind: "thinking", text: b.thinking });
-      } else if (b.type === "tool_use") {
-        blocks.push({ kind: "tool_use", id: str(b.id), name: str(b.name) || "tool", input: b.input });
-      } else if (b.type === "tool_result") {
-        blocks.push({
-          kind: "tool_result",
-          toolUseId: typeof b.tool_use_id === "string" ? b.tool_use_id : null,
-          text: toolResultText(b.content),
-          isError: Boolean(b.is_error)
-        });
-      }
-    }
-    if (blocks.length) items.push({ role: obj.type, blocks });
-  }
-  return items;
 }
 
 // 首屏只挂载末尾 FIRST_BATCH 条消息（视口 + 一屏缓冲），剩下在浏览器 idle 时一次性挂上：
