@@ -37,7 +37,7 @@ import {
 } from "@claude-center/db";
 import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { WorkerConfig } from "./config.js";
 import { getProcessStartTime, runCommand, type CommandResult } from "./shell.js";
@@ -165,6 +165,11 @@ type ClaudeCallOpts = {
   full: boolean;
   // true=detached 启动（stdio:ignore + unref）：worker 退出后 claude 不被杀、继续写 .jsonl。对话轮用，使「关机存活」成立。
   detached?: boolean;
+  // detached 场景下 claude 的 stdout/stderr 落盘路径：合并写一个文件，仅在 detached 时生效。
+  // 用于对话轮：claude 在「`-p ... --output-format json` 异常早退 / 鉴权/网络失败但退 0」类场景下，
+  // 真正的错误说明本来在 stdout/stderr 里，但 detached 默认 stdio:'ignore' 把这些丢了；落到文件就能拿
+  // 来回填 error_message，让用户看到实际失败原因（不再只显示模糊的"无完整结果"）。
+  stdoutLogFile?: string;
 };
 
 // 「动态工作流」按任务开关映射到 claude 进程 env。ground truth（claude 2.1.x 二进制）：
@@ -214,6 +219,7 @@ function spawnClaude(config: WorkerConfig, opts: ClaudeCallOpts): Promise<Comman
       timeoutMs: CLAUDE_TIMEOUT_MS,
       onSpawn: opts.onSpawn,
       detached: opts.detached,
+      stdoutLogFile: opts.stdoutLogFile,
       // POSIX：让 claude 成新进程组组长，取消/超时时可整组杀掉它派生的 git/gh/npm/MCP/子代理
       //（Windows 走 taskkill /T 杀树，不需要）。detached 的对话轮已自带新组，置此无副作用。
       newProcessGroup: process.platform !== "win32",
@@ -257,7 +263,8 @@ function spawnClaude(config: WorkerConfig, opts: ClaudeCallOpts): Promise<Comman
     // POSIX：终端形态下让终端进程（bash/zsh…）成新进程组组长，取消时整组杀掉终端 + 其内的 claude 及派生进程。
     // 否则终端形态取消是「完全 no-op」（-pid ESRCH 回退只杀终端壳、claude 仍活）。
     newProcessGroup: process.platform !== "win32",
-    detached: opts.detached
+    detached: opts.detached,
+    stdoutLogFile: opts.stdoutLogFile
   });
 }
 
@@ -875,6 +882,30 @@ async function findExistingPrUrl(
   }
 }
 
+// 查 PR 状态（OPEN / CLOSED / MERGED）。用于复用 task_repos.pr_url 之前先看那条 PR 是否还可改：
+// 上一轮的 PR 被 merge 之后，pr_url 仍然指向那条 merged PR，原代码直接 `gh pr edit --body` 会把
+// 新一轮的产出贴到已合并的旧 PR（"还在用旧 PR"的根因），而不是新开一条。
+// 返回 null = 查不到 / gh 报错 → 保守按"PR 还可用"走老路径，避免误把还活着的 PR 当死。
+async function getPrState(
+  config: WorkerConfig,
+  subWt: string,
+  prUrl: string
+): Promise<"OPEN" | "CLOSED" | "MERGED" | null> {
+  try {
+    const res = await runCommand(
+      config.ghCommand,
+      ["pr", "view", prUrl, "--json", "state"],
+      { cwd: subWt, timeoutMs: 60_000 }
+    );
+    const parsed = JSON.parse(res.stdout.trim() || "{}") as { state?: string };
+    const s = (parsed.state ?? "").toUpperCase();
+    if (s === "OPEN" || s === "CLOSED" || s === "MERGED") return s;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // 任务进终态前对所有参与仓 worktree detach HEAD 释放 work_branch 占用。
 // 背景：子仓 work_branch 常是用户输入的人类命名（如 `feature/foo`），任务终态后 worktree 永久保留供人工
 // 验收/复用（listActiveTaskIdsForWorker 把 success/merged/failed/cancelled 都进 GC keep 名单），但 git 注册
@@ -994,18 +1025,37 @@ export async function finalizeTaskMultiRepo(
       // 打回重跑时该仓的 PR 已存在：push 已自动更新；跳过 gh pr create（与原 finalize 同理）。
       // 但 PR 正文原仅在 create 时写一次，重跑不刷新 → 正文会停在首轮内容（旧 worker 建的还是代码块格式）。
       // 这里 best-effort 重写正文，让它反映本轮最新的结构化产出。
+      //
+      // 例外：task_repos.pr_url 指向的 PR 可能已被合并/关闭（上一轮 PR 已 merge 后用户对同一任务再续接
+      // 一轮）。此时直接 `gh pr edit --body` 会把新一轮产出贴到那条 merged PR 上（"还在用旧 PR"的根因），
+      // 而不是新开一条。先查 PR state，MERGED/CLOSED 当成不存在 → 清掉 task_repos.pr_url（防下一轮又
+      // 撞同一条死 PR）→ 落到下面 findExistingPrUrl/`gh pr create` 的新建路径。状态查不到（gh 报错等）
+      // 仍按可用走老路径，避免 gh 偶发失败把活 PR 当死、引出新故障。
       if (ctx.pr_url) {
-        await refreshPrBody(config, subWt, ctx.pr_url, prBody(task, claudeOutput));
-        await updateTaskRepoStatus(pool, ctx.id, "pr_created");
-        await addTaskEvent(pool, task.id, config.workerId, "pr_created", `${repoLabel} 复用已存在 PR（已刷新正文）`, {
-          repoRole: ctx.role,
-          relativePath: ctx.relative_path,
-          prUrl: ctx.pr_url,
-          reused: true,
-          bodyRefreshed: true
-        });
-        results.push({ ctx, sub: "pr_created", prUrl: ctx.pr_url, reused: true });
-        continue;
+        const prState = await getPrState(config, subWt, ctx.pr_url);
+        if (prState === "MERGED" || prState === "CLOSED") {
+          await addTaskEvent(pool, task.id, config.workerId, "pr_stale_skipped", `${repoLabel} 已存 PR 为 ${prState}，将新开 PR`, {
+            repoRole: ctx.role,
+            relativePath: ctx.relative_path,
+            prUrl: ctx.pr_url,
+            prState
+          });
+          await updateTaskRepoPrUrl(pool, ctx.id, null);
+          ctx.pr_url = null;
+          // 落到下方 findExistingPrUrl / gh pr create 路径，不 continue。
+        } else {
+          await refreshPrBody(config, subWt, ctx.pr_url, prBody(task, claudeOutput));
+          await updateTaskRepoStatus(pool, ctx.id, "pr_created");
+          await addTaskEvent(pool, task.id, config.workerId, "pr_created", `${repoLabel} 复用已存在 PR（已刷新正文）`, {
+            repoRole: ctx.role,
+            relativePath: ctx.relative_path,
+            prUrl: ctx.pr_url,
+            reused: true,
+            bodyRefreshed: true
+          });
+          results.push({ ctx, sub: "pr_created", prUrl: ctx.pr_url, reused: true });
+          continue;
+        }
       }
 
       // 幂等建 PR：首轮可能已 `gh pr create` 成功、却在落 pr_url 前失败（task_repos.pr_url 仍空）。
@@ -1567,6 +1617,12 @@ export async function executeConversationTurn(
     const spawnStartMs = Date.now() - 5_000;
     const resumeSessionId = conv.claude_session_id ?? null;
     const stopSync = startConversationSessionSync(conv.id, wtPath, { sinceMs: spawnStartMs, resumeSessionId });
+    // 本轮 claude 的 stdout+stderr 落盘文件：detached + stdio:'ignore' 把真实失败原因藏掉（鉴权失败 / 网络
+    // 不通 / args 解析错 etc.），只剩 jsonl 兜底 → "无完整结果" 模糊文案。把 stdout/stderr 写到 worktree 内
+    // 的临时文件，失败时读出来回填到 error_message。文件路径走 worktree 内 .claude/（已有目录、随 worktree 清理）。
+    const claudeLogDir = path.join(wtPath, ".claude");
+    try { mkdirSync(claudeLogDir, { recursive: true }); } catch { /* 已存在 / 无权限均不阻塞 */ }
+    const claudeLogFile = path.join(claudeLogDir, `claude-turn-${turn.id}.log`);
     let exitOk = false;
     let spawnError: string | null = null;
     try {
@@ -1578,6 +1634,7 @@ export async function executeConversationTurn(
         model: conv.model,
         full: true,
         detached: true,
+        stdoutLogFile: claudeLogFile,
         onSpawn: (child) => {
           hooks?.onClaudeSpawn?.(child);
           const pid = child.pid;
@@ -1608,16 +1665,100 @@ export async function executeConversationTurn(
       resumeSessionId
     }));
     if (!finalized) {
-      // 区分两类失败：① 进程异常退出/超时 → 给 stdout/stderr 截断信息；② 退出 0 但 jsonl 没完整 assistant
-      // 回答（claude 中途崩 / 仅 thinking/tool_use）→ 说明结果不完整。文案给到 Web/桌面 UI 直接展示。
-      const errorMessage = exitOk
-        ? "claude 退出了但本轮无完整结果（jsonl 中未找到本轮 assistant 文本，可能模型中断或被外部杀掉）"
-        : spawnError
-          ? `claude 进程异常退出：${spawnError}`
-          : "claude 未正常完成本轮（进程异常退出或无完整结果）";
-      await failConversationTurn(pool, { messageId: turn.id, errorMessage });
+      // jsonl 兜底失败：① 进程异常退出/超时；② 退出 0 但 jsonl 里没 assistant 文本（claude 早退 / 鉴权失败 /
+      // 仅 thinking/tool_use …）。先读 stdoutLogFile 拿到 claude 的真实输出，二级兜底：
+      //   a) `--output-format json` 模式下，claude 即便没写 jsonl 也会把 {session_id,result,is_error} 写 stdout
+      //      → 解析它，有 result 则按正常 done 收尾（实测发生过：远端 worker 上特定对话 7/7 都仅靠这条挽回）；
+      //   b) 否则把 stdout/stderr 截断后回填 error_message，让用户看到真实根因（jsonl 兜底前 stdio:'ignore' 把
+      //      这层全丢了，长期"无完整结果"模糊文案让人无从下手）。
+      const captured = await readClaudeLog(claudeLogFile);
+      const recovered = exitOk ? recoverFromClaudeJsonOutput(captured) : null;
+      if (recovered) {
+        await finalizeConversationTurn(pool, {
+          conversationId: conv.id,
+          messageId: turn.id,
+          body: recovered.body,
+          sessionId: recovered.sessionId
+        });
+      } else {
+        const tail = captured ? truncateForError(captured) : "";
+        let errorMessage: string;
+        if (exitOk) {
+          errorMessage = tail
+            ? `claude 退出了但本轮无完整结果（jsonl 中未找到本轮 assistant 文本）。claude 输出：\n${tail}`
+            : "claude 退出了但本轮无完整结果（jsonl 中未找到本轮 assistant 文本，可能模型中断或被外部杀掉）";
+        } else if (spawnError) {
+          errorMessage = tail
+            ? `claude 进程异常退出：${spawnError}\nclaude 输出：\n${tail}`
+            : `claude 进程异常退出：${spawnError}`;
+        } else {
+          errorMessage = tail
+            ? `claude 未正常完成本轮（进程异常退出或无完整结果）。claude 输出：\n${tail}`
+            : "claude 未正常完成本轮（进程异常退出或无完整结果）";
+        }
+        await failConversationTurn(pool, { messageId: turn.id, errorMessage });
+      }
     }
+    // 成功收尾或写入失败文案后，统一清掉本轮日志文件（不污染 worktree）。失败也吞掉，避免影响主流程。
+    await unlink(claudeLogFile).catch(() => {});
   } catch (error) {
     await failConversationTurn(pool, { messageId: turn.id, errorMessage: error instanceof Error ? error.message : String(error) });
   }
+}
+
+// claude `-p --output-format json` 退出时往 stdout 写一行 JSON：{ session_id, result, is_error, usage, ... }。
+// 我们把它落到 stdoutLogFile，jsonl 兜底失败时再读这里：能解析到带正文的 result 就用它直接收尾（即便 jsonl
+// 缺失也能把回复落库），让原本必失败的对话轮挽回成功；解析失败 / 标了 is_error / result 空 → 返回 null，
+// 走错误文案那条路。文件中混杂的 stderr 噪声靠 lastJsonObjectInText 兜底（按 NDJSON 从末尾找到一行解析）。
+function recoverFromClaudeJsonOutput(captured: string | null): { body: string; sessionId: string | null } | null {
+  if (!captured) return null;
+  const parsed = lastJsonObjectInText(captured);
+  if (!parsed || typeof parsed !== "object") return null;
+  const p = parsed as { result?: unknown; session_id?: unknown; is_error?: unknown };
+  if (p.is_error === true) return null;
+  const body = typeof p.result === "string" ? p.result.trim() : "";
+  if (!body) return null;
+  const sessionId = typeof p.session_id === "string" ? p.session_id : null;
+  return { body, sessionId };
+}
+
+// 从可能掺杂 stderr / 多行输出的文本里取最后一个能解析的 JSON 对象。先尝试整段解析（`-p --output-format
+// json` 通常就是单一对象一行），失败再按行从末尾扫，命中第一个解析得通且是对象的就返回。
+function lastJsonObjectInText(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    const o = JSON.parse(trimmed);
+    if (o && typeof o === "object") return o;
+  } catch { /* fall through to NDJSON */ }
+  const lines = trimmed.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim() ?? "";
+    if (!line) continue;
+    try {
+      const o = JSON.parse(line);
+      if (o && typeof o === "object") return o;
+    } catch { /* try next line */ }
+  }
+  return null;
+}
+
+// 读对话轮 claude 的 stdout+stderr 落盘文件（spawnClaude 写入），文件不存在 / 读失败返回 null。
+async function readClaudeLog(file: string): Promise<string | null> {
+  try {
+    const buf = await readFile(file);
+    return buf.toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+// 错误文案里的 claude 输出截断：保留首尾 ~1.6KB，中段过长用 "…" 折叠，避免 error_message 字段被巨型日志撑爆。
+function truncateForError(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  const head = 800;
+  const tail = 800;
+  if (trimmed.length <= head + tail + 16) return trimmed;
+  return `${trimmed.slice(0, head)}\n… [中间省略 ${trimmed.length - head - tail} 字符] …\n${trimmed.slice(-tail)}`;
 }

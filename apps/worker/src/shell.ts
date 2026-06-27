@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { closeSync, openSync } from "node:fs";
 
 export type CommandResult = {
   command: string;
@@ -138,9 +139,24 @@ export function runCommand(
     // 回退 child.kill 只杀直接子进程、孙进程泄漏（实测见 docs/acceptance/worker-mac-adaptation）。
     // 与 detached 区别：detached 还会 ignore stdio + unref（为关机存活），newProcessGroup 只要进程组、仍读 stdout。
     newProcessGroup?: boolean;
+    // detached 场景下的 stdout/stderr 文件落盘路径（合并写一份）：把子进程的 stdout+stderr 重定向到
+    // 该文件的 fd，而非默认 'ignore'。fd 由 OS 持有，父进程退出不影响子进程继续写——既保留「关机存活」，
+    // 又能让上层在 claude 异常退出时读取真实 stderr 以诊断（曾因 stdio:ignore 而长期看不到 claude
+    // 的真实失败原因，仅靠 .jsonl 兜底无法分辨「网络/鉴权失败致 claude 早退」vs「真的无文本回复」）。
+    // 不带此项时 detached 仍按 'ignore' 处理，行为不变。
+    stdoutLogFile?: string;
   } = {}
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
+    // 仅在 detached + 指定 log 文件时启用「fd→文件」的 stdio 模式；其它场景行为不变。
+    let logFd: number | null = null;
+    if (options.detached && options.stdoutLogFile) {
+      try {
+        logFd = openSync(options.stdoutLogFile, "a");
+      } catch {
+        logFd = null; // 开文件失败退化为 'ignore'，不阻断启动
+      }
+    }
     const child = spawn(command, args, {
       // 默认 shell:false（直接 CreateProcess，不经 cmd.exe）。Windows 下 shell:true 会把 args
       // 用空格拼成命令行交给 cmd.exe 且不给含空格的参数加引号，commit message / PR 标题等被按空格
@@ -152,11 +168,16 @@ export function runCommand(
       shell: options.shell ?? false,
       windowsHide: true,
       env: options.env ?? process.env,
-      // detached 下 stdio 必须 ignore：保留管道会让子进程在父退出后随断管而亡（也是实测结论）。
-      // detached 或 newProcessGroup 任一为真都让子进程成为新进程组组长；但仅 detached 时 ignore stdio。
+      // detached 下 stdio 必须脱离父进程管道：保留管道会让子进程在父退出后随断管而亡（实测结论）。
+      // detached 或 newProcessGroup 任一为真都让子进程成为新进程组组长；但仅 detached 时改写 stdio。
+      // 优先用 logFd（文件 fd，OS 持有、不依赖父进程）；无 fd 时仍用 'ignore'（默认行为）。
       detached: Boolean(options.detached || options.newProcessGroup),
-      stdio: options.detached ? "ignore" : undefined
+      stdio: options.detached ? (logFd != null ? ["ignore", logFd, logFd] : "ignore") : undefined
     });
+    // 父进程立即关掉本地复制的文件 fd——子进程已继承（OS 复制了一份给它），父这边持有反而占用资源。
+    if (logFd != null) {
+      try { closeSync(logFd); } catch { /* 已被 spawn 消费 / 已无效，无需关心 */ }
+    }
     // 仅 detached（关机存活）才从父事件循环 unref，使父（worker）可独立退出而不等子进程；
     // newProcessGroup 不 unref——它要继续被 await（读 stdout/退出码），只是为了可整组 kill。
     if (options.detached) {
