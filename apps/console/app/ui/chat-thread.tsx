@@ -1,7 +1,7 @@
 "use client";
 
 import type { AttachmentMeta, Conversation, ConversationMessage, Project, Worker } from "@claude-center/db";
-import { ArrowUp, Bot, CalendarClock, Check, ChevronLeft, Clock, GitBranch, Info, MessageSquare, MoreHorizontal, Pencil, Server, Settings2, Sparkles, Square, X } from "lucide-react";
+import { AlertTriangle, ArrowUp, Bot, CalendarClock, Check, ChevronLeft, Clock, GitBranch, Info, MessageSquare, MoreHorizontal, Pencil, Server, Settings2, Sparkles, Square, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Empty, fmtDateTime, postJson } from "./shared";
 import { AttachmentChip, AttachmentList, AttachmentUploader } from "./attachment-uploader";
@@ -49,6 +49,9 @@ export function ChatThread({
   const [menuOpen, setMenuOpen] = useState(false);
   // 待发送的定时消息（status='scheduled'）：在输入框上方展示 + 可取消。随 worker 轮询一并刷新。
   const [scheduled, setScheduled] = useState<ConversationMessage[]>([]);
+  // DB 里的全量消息：用于「jsonl 尚未收录 / claude 失败」时仍能显示用户气泡 + 失败状态。
+  // 切页面回来后 pending 已清，此列表持久（来自服务端轮询），保证消息不消失。
+  const [dbMessages, setDbMessages] = useState<ConversationMessage[]>([]);
   // 定时发送时间（composer 用，datetime-local 格式 "YYYY-MM-DDTHH:MM"）；空 = 立即发送。
   const [scheduleAt, setScheduleAt] = useState("");
   // 会话设置弹窗（自动回复 + 决策预案）开关。
@@ -74,12 +77,13 @@ export function ChatThread({
     setPending([]);
     setWorker(null);
     setScheduled([]);
+    setDbMessages([]);
     setScheduleAt("");
     doneRef.current = false;
   }, [id]);
 
-  // 拉对话详情：worker 快照（claude_version / subscription / usage）+ 待发送定时消息（status='scheduled'）。
-  // 抽成可复用函数，定时发送 / 取消后手动调一次即时刷新，无需等下个轮询周期。
+  // 拉对话详情：worker 快照（claude_version / subscription / usage）+ 全量消息（用于 jsonl 兜底渲染与定时清单）。
+  // 抽成可复用函数，定时发送 / 取消 / 发送成功后手动调一次即时刷新，无需等下个轮询周期。
   const refreshMeta = useCallback(
     async (isActive: () => boolean = () => true): Promise<void> => {
       try {
@@ -88,7 +92,9 @@ export function ChatThread({
         const d = (await r.json()) as { worker: Worker | null; messages?: ConversationMessage[] };
         if (!isActive()) return;
         setWorker(d.worker);
-        setScheduled((d.messages ?? []).filter((m) => m.status === "scheduled"));
+        const all = d.messages ?? [];
+        setDbMessages(all);
+        setScheduled(all.filter((m) => m.status === "scheduled"));
       } catch {
         /* 轮询失败静默 */
       }
@@ -96,9 +102,10 @@ export function ChatThread({
     [id]
   );
 
-  // 轮询对话详情。worker 本身不会换、变化是 5h/7d 套餐窗位移（分钟级漂移），消息流事件与 usage 无关：
-  // 不订阅 relay，节奏拉到 15s，避免每条消息事件都顺手刷一遍这个无关接口。定时消息变更不频繁，同节奏即可。
-  usePolling(refreshMeta, [id], 15_000, { relay: false });
+  // 轮询对话详情：消息流轻量、与 jsonl 同节奏 3s。
+  // 原 15s 节奏导致 jsonl 未收录新 user 消息时窗口被拉长（切回页面 / claude 失败时无气泡可显）；
+  // 同节奏避免「pending 清掉了、db 还没来」的空白窗。worker 套餐用量随之刷新，可接受的小代价。
+  usePolling(refreshMeta, [id], 3_000, { relay: false });
 
   // 轮询对话 session transcript（active 持续；closed 取一次即停）。Worker 周期 3s + 终态把 jsonl 同步到库。
   // 带 If-None-Match 条件请求：未变返 304，省下大 blob 反序列化 + setJsonl 触发的整棵 reconcile；
@@ -140,18 +147,21 @@ export function ChatThread({
     3000
   );
 
-  // 乐观消息：jsonl 收录该轮后清掉避免重复。文本消息按正文匹配；仅附件消息无正文，
-  // 按 worker 注入 prompt 的附件路径片段（sha256 前 8 位）匹配——命中即说明本轮已落库。
+  // 乐观消息清理：jsonl 或 DB 任一收录本轮即可清掉（避免重复显示）。
+  // 文本消息按正文匹配 jsonl；DB 已收到等正文的 user 消息即视为「服务端已知」、可由 db 渲染接管。
+  // 仅附件消息无正文，按 worker 注入 prompt 的附件路径片段（sha256 前 8 位）匹配 jsonl。
   useEffect(() => {
-    if (!jsonl) return;
     setPending((p) =>
       p.filter((m) => {
-        const textSeen = m.text.length > 0 && jsonl.includes(m.text);
-        const attSeen = m.attachments.some((a) => jsonl.includes(a.sha256.slice(0, 8)));
-        return !(textSeen || attSeen);
+        const textInJsonl = m.text.length > 0 && Boolean(jsonl?.includes(m.text));
+        const textInDb =
+          m.text.length > 0 &&
+          dbMessages.some((dm) => dm.role === "user" && dm.body === m.text && dm.status !== "scheduled");
+        const attSeen = m.attachments.some((a) => Boolean(jsonl?.includes(a.sha256.slice(0, 8))));
+        return !(textInJsonl || textInDb || attSeen);
       })
     );
-  }, [jsonl]);
+  }, [jsonl, dbMessages]);
 
   // 点菜单外区域关闭下拉。
   useEffect(() => {
@@ -168,9 +178,34 @@ export function ChatThread({
 
   const items = useMemo(() => (jsonl ? parseTranscript(jsonl) : []), [jsonl]);
 
+  // DB 兜底：把 user 消息 / 失败 assistant 消息按 seq 升序拼一份，逐条决定是否补显示——
+  // jsonl 已收录正文（user）或 TranscriptView 不会代显（失败 assistant 无正文 → 永远展示错误条）。
+  // 解决 jsonl 未就绪 / claude 失败 / 切页面回来 pending 已清三种「正文消失」的场景。
+  const dbExtras = useMemo(() => {
+    type Extra =
+      | { kind: "user"; id: string; body: string }
+      | { kind: "failed"; id: string; error: string };
+    const out: Extra[] = [];
+    const sorted = dbMessages
+      .filter((m) => m.seq != null)
+      .slice()
+      .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+    for (const m of sorted) {
+      if (m.role === "user") {
+        if (m.status === "scheduled") continue;
+        if (!m.body) continue;
+        if (jsonl && jsonl.includes(m.body)) continue;
+        out.push({ kind: "user", id: m.id, body: m.body });
+      } else if (m.role === "assistant" && m.status === "failed") {
+        out.push({ kind: "failed", id: m.id, error: m.error_message ?? "执行失败" });
+      }
+    }
+    return out;
+  }, [dbMessages, jsonl]);
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [items, pending]);
+  }, [items, pending, dbExtras]);
 
   // 回复中：有待 worker 落库的乐观消息，或列表派生的 generating（worker 正在跑本轮）。
   const busy = !closed && (pending.length > 0 || conversation.generating);
@@ -199,29 +234,38 @@ export function ChatThread({
 
   async function send(): Promise<void> {
     const text = input.trim();
-    if ((!text && draftAtts.length === 0) || sending) {
+    const atts = draftAtts;
+    if ((!text && atts.length === 0) || sending) {
       return;
     }
     // datetime-local（本地时区）→ ISO；空则立即发送。
     const scheduledAt = scheduleAt ? new Date(scheduleAt).toISOString() : undefined;
+    // 立即清空输入并落乐观气泡（在网络请求之前），点完即有响应；定时消息不进气泡。
+    // 失败时回滚（恢复输入、移除该乐观气泡）。修复点击后 1-2 秒才显示的卡顿。
+    const optimisticKey = scheduledAt ? null : { text, attachments: atts };
+    setInput("");
+    setDraftAtts([]);
+    if (scheduledAt) setScheduleAt("");
+    if (optimisticKey) setPending((p) => [...p, optimisticKey]);
     setSending(true);
     setErr("");
     try {
       await postJson(`/api/conversations/${id}/messages`, {
         body: text,
-        attachmentIds: draftAtts.map((a) => a.id),
+        attachmentIds: atts.map((a) => a.id),
         ...(scheduledAt ? { scheduledAt } : {})
       });
-      setInput("");
-      setDraftAtts([]);
-      if (scheduledAt) {
-        // 定时消息不进乐观气泡（它在到点前不会被应答）；清掉时间并刷新「待发送」清单即时展示。
-        setScheduleAt("");
-        await refreshMeta();
-      } else {
-        setPending((p) => [...p, { text, attachments: draftAtts }]);
-      }
+      // 服务端落库即触发一次本对话的元信息刷新：让 dbMessages 即刻拿到这条 user 消息，
+      // pending 与 dbExtras 任一渲染即可保证文本始终在视图上。
+      void refreshMeta();
     } catch (e) {
+      // 失败回滚：移除该乐观气泡 + 恢复输入草稿，避免「点了发送，结果什么都没留下」。
+      if (optimisticKey) {
+        setPending((p) => p.filter((m) => m !== optimisticKey));
+      }
+      setInput(text);
+      setDraftAtts(atts);
+      if (scheduledAt) setScheduleAt(scheduleAt);
       setErr(e instanceof Error ? e.message : "发送失败");
     } finally {
       setSending(false);
@@ -412,11 +456,30 @@ export function ChatThread({
       <SessionMetaBar planModel={conversation.model} worker={worker} jsonl={jsonl} open={metaOpen} />
 
       <div className="chat-msgs" ref={scrollRef}>
-        {loaded && items.length === 0 && pending.length === 0 ? (
+        {loaded && items.length === 0 && pending.length === 0 && dbExtras.length === 0 ? (
           <Empty icon={<MessageSquare size={22} />} text="发送第一条消息开始对话" />
         ) : (
           <>
             <TranscriptView items={items} />
+            {dbExtras.map((e) =>
+              e.kind === "user" ? (
+                <div className="tx-row user" key={`db-${e.id}`}>
+                  <div className="tx-msg user">
+                    <div className="tx-text">{e.body}</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="tx-row asst" key={`db-${e.id}`}>
+                  <div className="tx-msg asst chat-msg-failed">
+                    <div className="chat-msg-failed-head">
+                      <AlertTriangle size={13} aria-hidden />
+                      <span>执行失败</span>
+                    </div>
+                    <div className="tx-text">{e.error}</div>
+                  </div>
+                </div>
+              )
+            )}
             {pending.map((m, i) => (
               <div className="tx-row user" key={`p${i}`}>
                 <div className="tx-msg user">

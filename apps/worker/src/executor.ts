@@ -1556,6 +1556,7 @@ export async function executeConversationTurn(
     const resumeSessionId = conv.claude_session_id ?? null;
     const stopSync = startConversationSessionSync(conv.id, wtPath, { sinceMs: spawnStartMs, resumeSessionId });
     let exitOk = false;
+    let spawnError: string | null = null;
     try {
       // detached 启动：worker 关机后 claude 继续跑完、写 .jsonl。spawn 后立即把 pid+cwd 落到本轮，供重启重连判活。
       await spawnClaude(config, {
@@ -1578,8 +1579,11 @@ export async function executeConversationTurn(
         }
       });
       exitOk = true; // runCommand 非零退出/超时会 reject，走不到这里
-    } catch {
-      // 非零退出 / 超时 / 被取消杀死 → 下面按未成功收尾（fail，终态守卫保护已 cancelled 的轮）
+    } catch (error) {
+      // 非零退出 / 超时 / 被取消杀死 → 下面按未成功收尾（fail，终态守卫保护已 cancelled 的轮）。
+      // 留住原因（脱敏 + 截断）供下游错误文案区分「进程异常退出」与「无完整结果」，便于诊断与展示。
+      const raw = error instanceof Error ? error.message : String(error);
+      spawnError = raw.length > 500 ? `${raw.slice(0, 500)}…` : raw;
     } finally {
       await stopSync(); // 终态强制最终同步，保证 .jsonl 完整入库
     }
@@ -1592,7 +1596,14 @@ export async function executeConversationTurn(
       resumeSessionId
     }));
     if (!finalized) {
-      await failConversationTurn(pool, { messageId: turn.id, errorMessage: "claude 未正常完成本轮（进程异常退出或无完整结果）" });
+      // 区分两类失败：① 进程异常退出/超时 → 给 stdout/stderr 截断信息；② 退出 0 但 jsonl 没完整 assistant
+      // 回答（claude 中途崩 / 仅 thinking/tool_use）→ 说明结果不完整。文案给到 Web/桌面 UI 直接展示。
+      const errorMessage = exitOk
+        ? "claude 退出了但本轮无完整结果（jsonl 中未找到本轮 assistant 文本，可能模型中断或被外部杀掉）"
+        : spawnError
+          ? `claude 进程异常退出：${spawnError}`
+          : "claude 未正常完成本轮（进程异常退出或无完整结果）";
+      await failConversationTurn(pool, { messageId: turn.id, errorMessage });
     }
   } catch (error) {
     await failConversationTurn(pool, { messageId: turn.id, errorMessage: error instanceof Error ? error.message : String(error) });
