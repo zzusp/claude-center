@@ -153,8 +153,15 @@ export function runCommand(
     if (options.detached && options.stdoutLogFile) {
       try {
         logFd = openSync(options.stdoutLogFile, "a");
-      } catch {
-        logFd = null; // 开文件失败退化为 'ignore'，不阻断启动
+      } catch (error) {
+        // 开文件失败退化为 'ignore'，不阻断启动——但要 warn 出真因，否则调用方只看到「无完整结果」模糊文案
+        //（detached + stdio:'ignore' 会把 claude `--output-format json` 的 stdout 全丢，jsonl 缺失时无从挽回）。
+        // 已知诱因：OneDrive/antivirus 抢锁 EBUSY/EPERM、长路径超 MAX_PATH、目录被并发删等。
+        logFd = null;
+        console.warn(
+          `[shell] 打开 stdoutLogFile 失败，回退 stdio:'ignore'（claude stdout 将丢失）：` +
+            `${(error instanceof Error ? error.message : String(error))} (file=${options.stdoutLogFile})`
+        );
       }
     }
     const child = spawn(command, args, {

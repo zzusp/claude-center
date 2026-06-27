@@ -64,6 +64,7 @@ import {
   finalizeConversationFromSession,
   resumeTask,
   retryFailedTask,
+  tryRecoverConversationTurnFromClaudeLog,
   type ExecHooks
 } from "./executor.js";
 import {
@@ -1118,19 +1119,32 @@ export class ClaudeCenterWorker {
     const pool = getPool();
     try {
       const conv = await getConversation(pool, turn.conversation_id);
-      const done = turn.claude_cwd
-        ? await finalizeConversationFromSession(pool, {
+      let done = false;
+      let recovered = false;
+      if (turn.claude_cwd) {
+        done = await finalizeConversationFromSession(pool, {
+          conversationId: turn.conversation_id,
+          messageId: turn.id,
+          cwd: turn.claude_cwd,
+          sinceMs: turn.claude_started_at ?? null,
+          resumeSessionId: conv?.claude_session_id ?? null
+        });
+        // jsonl 兜底没拿到完整 assistant text 时，再读 stdoutLogFile recover：claude `--output-format json` 已把
+        // {result,session_id} 写文件，executor 路径会 recover、reattach 路径之前直接判 fail。两侧对齐后停机期间
+        // 跑完的轮在重启时也能挽回。
+        if (!done) {
+          recovered = await tryRecoverConversationTurnFromClaudeLog(pool, {
             conversationId: turn.conversation_id,
             messageId: turn.id,
-            cwd: turn.claude_cwd,
-            sinceMs: turn.claude_started_at ?? null,
-            resumeSessionId: conv?.claude_session_id ?? null
-          })
-        : false;
-      if (!done) {
+            wtPath: turn.claude_cwd
+          });
+        }
+      }
+      if (!done && !recovered) {
         await failConversationTurn(pool, { messageId: turn.id, errorMessage: "worker 重启时该轮 claude 进程已退出且无完整结果" });
       }
-      this.log("info", `boot: 在途对话轮 ${turn.id} 进程已退 → ${done ? "从 session 收尾(done)" : "判 fail"}`);
+      const label = done ? "从 session 收尾(done)" : recovered ? "从 stdout JSON recover(done)" : "判 fail";
+      this.log("info", `boot: 在途对话轮 ${turn.id} 进程已退 → ${label}`);
     } catch (error) {
       this.log("error", `finalizeOrFailReconnect ${turn.id}: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -1181,7 +1195,16 @@ export class ClaudeCenterWorker {
             resumeSessionId
           });
           if (!ok) {
-            await failConversationTurn(getPool(), { messageId: turn.id, errorMessage: "重连的 claude 进程已退出但无完整结果" });
+            // 与 executor 兜底逻辑同：jsonl 兜底失败时再读 stdoutLogFile 尝试 recover（claude `--output-format
+            // json` 写到那里），recover 不成才判 fail，避免本地 stdout 已有回复却被强判失败。
+            const recovered = await tryRecoverConversationTurnFromClaudeLog(getPool(), {
+              conversationId: turn.conversation_id,
+              messageId: turn.id,
+              wtPath: cwd
+            });
+            if (!recovered) {
+              await failConversationTurn(getPool(), { messageId: turn.id, errorMessage: "重连的 claude 进程已退出但无完整结果" });
+            }
           }
         }
       } catch (error) {

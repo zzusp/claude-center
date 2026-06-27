@@ -44,7 +44,14 @@ async function main() {
       const target = path.join(dir, `${preferSessionId}.jsonl`);
       try {
         const st = await fsp.stat(target);
-        return { file: target, mtime: st.mtimeMs };
+        if (sinceMs === null) {
+          return { file: target, mtime: st.mtimeMs };
+        }
+        const birth = Number.isFinite(st.birthtimeMs) ? st.birthtimeMs : 0;
+        if (st.mtimeMs >= sinceMs || birth >= sinceMs) {
+          return { file: target, mtime: st.mtimeMs };
+        }
+        // preferSessionId.jsonl 过期 → 回退扫描
       } catch { /* fall through */ }
     }
     let entries;
@@ -91,7 +98,24 @@ async function main() {
   console.log("case 5 (sinceMs in future):", c5);
   if (c5 !== null) { console.error("FAIL: case 5"); process.exit(2); }
 
-  console.log("\nOK — findSessionFile sinceMs / preferSessionId verified");
+  // case 6（新增）：preferSessionId='A' 命中但 A 是过期的（mtime/birthtime < sinceMs）→ 回退扫描，应取新文件。
+  // 真实重现 "claude --resume <id> 派生新 sessionId 写到新 .jsonl" 场景：本路径之前直接 return A，
+  // extractFinalAssistantText 滤时间窗后永远返回 ""，触发 "无完整结果" 假失败。
+  //
+  // Windows 上 birthtime 是文件创建时刻、fs.utimes 改不了——只能用真实时序：先写 A（mtime/birthtime=t0）、
+  // 等一会儿、定 sinceMs=now（已晚于 A 的两个时间戳）、再写 C（mtime/birthtime > sinceMs）。
+  const fileC = path.join(projectsDir, "C.jsonl");
+  // 让 A 的 mtime/birthtime 真实落在 sinceMs 之前——等 150ms 提供足够分辨率。
+  await new Promise((r) => setTimeout(r, 150));
+  const sinceAfterA = Date.now();
+  // 再等一拍，保证 C 的 mtime/birthtime > sinceAfterA。
+  await new Promise((r) => setTimeout(r, 50));
+  fs.writeFileSync(fileC, '{"type":"assistant","message":{"content":[{"type":"text","text":"C"}]}}\n');
+  const c6 = await findSessionFile(cwd, { preferSessionId: "A", sinceMs: sinceAfterA });
+  console.log("case 6 (preferSessionId stale → window fallback):", path.basename(c6.file));
+  if (path.basename(c6.file) !== "C.jsonl") { console.error("FAIL: case 6"); process.exit(2); }
+
+  console.log("\nOK — findSessionFile sinceMs / preferSessionId verified (incl. stale fast-path fallback)");
   fs.rmSync(tmpBase, { recursive: true, force: true });
 }
 

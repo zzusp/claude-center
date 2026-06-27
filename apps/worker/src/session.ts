@@ -38,11 +38,22 @@ async function findSessionFile(
   const preferSessionId = opts?.preferSessionId ?? null;
 
   // 快路径：明确知道 --resume 的 sessionId 且 <id>.jsonl 存在 → 直接锁定，不与同目录其它会话比较。
+  // 快路径仍要过时间窗：claude `-p --resume <id>` 在某些版本会派生新 session id（写到新 <newId>.jsonl）而
+  // 非追加到 <id>.jsonl。直接 return 会让本路径一直锁回上一轮留下的旧 file，extractFinalAssistantText 滤完
+  // 时间窗后永远返回 ""（→ finalize=false → "claude 退出了但本轮无完整结果（jsonl 中未找到本轮 assistant 文本）"
+  // 模糊假失败）。在快路径里同样核对 mtime/birthtime ≥ sinceMs，过期文件就回退扫描去找新派生的 file。
   if (preferSessionId) {
     const target = path.join(dir, `${preferSessionId}.jsonl`);
     try {
       const st = await fsp.stat(target);
-      return { file: target, mtime: st.mtimeMs };
+      if (sinceMs === null) {
+        return { file: target, mtime: st.mtimeMs };
+      }
+      const birth = Number.isFinite(st.birthtimeMs) ? st.birthtimeMs : 0;
+      if (st.mtimeMs >= sinceMs || birth >= sinceMs) {
+        return { file: target, mtime: st.mtimeMs };
+      }
+      // preferSessionId.jsonl 是过期的（未在本轮被写过）→ fall through 到扫描，让时间窗逻辑找新派生的 file。
     } catch {
       // 不存在 / 不可读 → 落到下面的扫描（可能 claude 当轮 fork 出新 sessionId）
     }

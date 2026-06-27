@@ -1902,9 +1902,9 @@ export async function executeConversationTurn(
     // 本轮 claude 的 stdout+stderr 落盘文件：detached + stdio:'ignore' 把真实失败原因藏掉（鉴权失败 / 网络
     // 不通 / args 解析错 etc.），只剩 jsonl 兜底 → "无完整结果" 模糊文案。把 stdout/stderr 写到 worktree 内
     // 的临时文件，失败时读出来回填到 error_message。文件路径走 worktree 内 .claude/（已有目录、随 worktree 清理）。
-    const claudeLogDir = path.join(wtPath, ".claude");
-    try { mkdirSync(claudeLogDir, { recursive: true }); } catch { /* 已存在 / 无权限均不阻塞 */ }
-    const claudeLogFile = path.join(claudeLogDir, `claude-turn-${turn.id}.log`);
+    // 路径用 conversationTurnClaudeLogPath 统一，让 runner 重连/重启路径在 jsonl 兜底失败后也能读同一个文件 recover。
+    const claudeLogFile = conversationTurnClaudeLogPath(wtPath, turn.id);
+    try { mkdirSync(path.dirname(claudeLogFile), { recursive: true }); } catch { /* 已存在 / 无权限均不阻塞 */ }
     let exitOk = false;
     let spawnError: string | null = null;
     try {
@@ -1965,11 +1965,18 @@ export async function executeConversationTurn(
         });
       } else {
         const tail = captured ? truncateForError(captured) : "";
+        // 区分「log 文件不存在/读失败」(captured===null)与「log 文件为空」(captured===""，详见 stdio 配置)：
+        // ① null 多半是 stdoutLogFile open 失败（已在 shell.ts warn 真因）或 unlink 抢跑；② "" 是 claude
+        // 没往 stdout 写、却退 0 —— 几乎只有 stdio:'ignore' 退化 + `-p --output-format json` 路径才会这样。
+        // 把这层告诉用户，避免一直停在「可能模型中断或被外部杀掉」的模糊文案上。
+        const capturedHint = captured == null
+          ? "stdout 日志文件不存在/读取失败，无法判定 claude 真实输出"
+          : "stdout 日志文件为空（detached + ignore 退化或 claude 静默退出）";
         let errorMessage: string;
         if (exitOk) {
           errorMessage = tail
             ? `claude 退出了但本轮无完整结果（jsonl 中未找到本轮 assistant 文本）。claude 输出：\n${tail}`
-            : "claude 退出了但本轮无完整结果（jsonl 中未找到本轮 assistant 文本，可能模型中断或被外部杀掉）";
+            : `claude 退出了但本轮无完整结果（jsonl 中未找到本轮 assistant 文本，可能模型中断或被外部杀掉）。诊断：${capturedHint}`;
         } else if (spawnError) {
           errorMessage = tail
             ? `claude 进程异常退出：${spawnError}\nclaude 输出：\n${tail}`
@@ -1987,6 +1994,36 @@ export async function executeConversationTurn(
   } catch (error) {
     await failConversationTurn(pool, { messageId: turn.id, errorMessage: error instanceof Error ? error.message : String(error) });
   }
+}
+
+// 对话轮 claude 的 stdout/stderr 落盘文件路径（executor 与 runner 重连路径共用，保证两侧算出来的是同一个文件）。
+// detached 启动时 stdout/stderr 写到这里；后续 jsonl 兜底失败时从这里 recover 出 `{ result, session_id }`。
+export function conversationTurnClaudeLogPath(wtPath: string, turnId: string): string {
+  return path.join(wtPath, ".claude", `claude-turn-${turnId}.log`);
+}
+
+// 读对话轮 claude 的 stdout/stderr 落盘文件并尝试从中 recover 出本轮回复——若文件存在且包含 `--output-format json`
+// 的末行 JSON 且 result 非空、is_error 非真，则直接调用 finalizeConversationTurn 把它当成功收尾，返回 true；
+// 任何环节失败（无文件 / 无可解析 JSON / is_error / result 空）→ 返回 false，调用方按失败收尾。
+// 与 executor.executeConversationTurn 的兜底分支同语义，供 runner 重连/重启路径复用（之前两条路径只读 jsonl，
+// 即便 claude 已把回复写进 stdout 日志也会判 fail；本函数让它们也能挽回）。
+export async function tryRecoverConversationTurnFromClaudeLog(
+  pool: ReturnType<typeof getPool>,
+  input: { conversationId: string; messageId: string; wtPath: string }
+): Promise<boolean> {
+  const file = conversationTurnClaudeLogPath(input.wtPath, input.messageId);
+  const captured = await readClaudeLog(file);
+  const recovered = recoverFromClaudeJsonOutput(captured);
+  if (!recovered) return false;
+  await finalizeConversationTurn(pool, {
+    conversationId: input.conversationId,
+    messageId: input.messageId,
+    body: recovered.body,
+    sessionId: recovered.sessionId
+  });
+  // recover 成功后清掉日志文件（与正常路径一致，不污染 worktree）。失败吞掉，避免影响主流程。
+  await unlink(file).catch(() => {});
+  return true;
 }
 
 // claude `-p --output-format json` 退出时往 stdout 写一行 JSON：{ session_id, result, is_error, usage, ... }。
