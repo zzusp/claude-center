@@ -121,15 +121,105 @@ function assertPathCleared(wtPath: string): void {
   );
 }
 
+// 主仓分支保护门（goal「执行任务时不应该影响项目主仓的分支」）：拒绝任何会让主仓 / 别人 worktree 的
+// 既存分支被本任务静默改写的 workBranch；只放行「无人持有且不存在」或「已被自家 wtPath 持有」的分支。
+//
+// 实测触发风险（git 2.39，Windows）：
+//   1) workBranch 已被「另一个 worktree」（含主仓自身）持有：
+//      - `git worktree add --force -B <wb> <wt> <ref>` → fatal: cannot force update the branch
+//        '<wb>' checked out at '<其它路径>'（git 自带保护，但失败语义晦涩，本检查给出友好错误）；
+//      - `git worktree add --force <wt> <wb>`（无 -B）→ 静默 dual checkout 成功，随后本任务 commit
+//        会污染对方分支（用户 / 其它 worktree 的分支被混入本任务提交）。
+//   2) workBranch 已存在但「无 worktree 持有」（用户本地常见情形：曾手动建过同名分支然后切走）：
+//      - 用 `-B` 会**静默**把分支重置到 baseRef，**覆盖用户在该分支上的所有现有提交**（不可恢复）；
+//      - 不用 `-B` 时双 checkout 既存分支，随后 commit 会向该既存分支累计（污染主仓分支）。
+//
+// 例外：worktree 已注册在自家 wtPath（含 detach 状态）时视为「自家分支」——前序终态收尾会 detach
+// 释放 work_branch 让用户可在主检出签同名分支，retry 时该分支理应可被我们重置/重新绑定，不算改写主仓。
+async function assertWorkBranchSafe(
+  localPath: string,
+  wtPath: string,
+  workBranch: string
+): Promise<void> {
+  let listed: string;
+  try {
+    const r = await runCommand("git", ["-C", localPath, "worktree", "list", "--porcelain"], {
+      timeoutMs: 30_000
+    });
+    listed = r.stdout;
+  } catch {
+    // 列不出 worktree（git 异常 / 主仓不可读）→ 跳过本门，让后续 git add 自行抛错（兼容性优先）。
+    return;
+  }
+  const norm = (p: string) => {
+    const r = path.resolve(p);
+    return process.platform === "win32" ? r.toLowerCase() : r;
+  };
+  const ourPath = norm(wtPath);
+  let curWt: string | null = null;
+  let ourWorktreeRegistered = false;
+  let branchHolder: string | null = null;
+  for (const line of listed.split(/\r?\n/)) {
+    if (line.startsWith("worktree ")) {
+      curWt = line.slice("worktree ".length).trim();
+      if (norm(curWt) === ourPath) {
+        ourWorktreeRegistered = true;
+      }
+    } else if (line.startsWith("branch ") && curWt) {
+      const branch = line.slice("branch ".length).trim().replace(/^refs\/heads\//, "");
+      if (branch === workBranch) {
+        branchHolder = curWt;
+      }
+    }
+  }
+
+  if (branchHolder) {
+    if (norm(branchHolder) === ourPath) {
+      return; // 自家 wtPath 持有 → 安全（典型的 retry 复用路径）
+    }
+    throw new Error(
+      `工作分支 "${workBranch}" 已被另一个 worktree 持有：${branchHolder}（主仓：${localPath}）。` +
+        `任务执行只能在自家 worktree 内持有该分支，不能与主仓或别人 worktree 共享——共享会导致主仓 / 别人分支被本任务 commit 污染。` +
+        `请改用其它工作分支名，或先释放占用该分支的 worktree 后重试。`
+    );
+  }
+
+  // 没人持有该分支引用；判断分支本身是否仍存在于主仓（既存本地分支）。
+  let exists = false;
+  try {
+    const r = await runCommand(
+      "git",
+      ["-C", localPath, "show-ref", "--verify", "--quiet", `refs/heads/${workBranch}`],
+      { timeoutMs: 30_000, acceptExitCodes: [0, 1] }
+    );
+    exists = r.exitCode === 0;
+  } catch {
+    // 命令异常视为不存在（保守，宁可让 add 自己报错）。
+  }
+  if (!exists) {
+    return; // 全新分支 → 安全
+  }
+  if (ourWorktreeRegistered) {
+    return; // 既存分支 + 自家 wtPath 已注册（detach 状态）→ 视为自家既往轮次的分支，安全
+  }
+  throw new Error(
+    `工作分支 "${workBranch}" 在主仓 ${localPath} 中已存在但未被任何 worktree 持有，且本任务也无 wtPath 注册痕迹。` +
+      `若用 \`git worktree add -B\` 会**静默重置**该分支、覆盖主仓在该分支上的现有提交（不可恢复）；不用 -B 也会 dual checkout 后向该分支累计提交（污染主仓分支）。` +
+      `请改用其它工作分支名，或确认无误后手动删除主仓既存分支：git -C "${localPath}" branch -D "${workBranch}"`
+  );
+}
+
 // 确保任务的工作树就绪。
 // fresh（新任务）：删旧 → 从 origin/<base> 新建工作分支 workBranch 的工作树。
 // recover（续接/打回重跑）：工作树在就复用；不在则从已有 workBranch 重建。
+// 入口先过 assertWorkBranchSafe 防止主仓 / 别人 worktree 的分支被本任务静默改写。
 export async function ensureWorktree(
   localPath: string,
   wtPath: string,
   opts: { workBranch: string; baseRef?: string; fresh: boolean }
 ): Promise<void> {
   ensureWorktreesIgnored(localPath);
+  await assertWorkBranchSafe(localPath, wtPath, opts.workBranch);
   if (opts.fresh) {
     // removeWorktree 已 robust 清理（git remove + Node 强删 + prune），无论目标是已注册工作树还是孤儿残留目录
     //（含删不净的 node_modules）都清干净，随后的 add 不再撞 "already exists"。
