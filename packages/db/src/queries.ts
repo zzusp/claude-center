@@ -2750,16 +2750,6 @@ export async function markConversationTurnCancelled(
   return cancelled;
 }
 
-export async function closeConversation(
-  client: pg.Pool | pg.PoolClient,
-  conversationId: string
-): Promise<void> {
-  await client.query(
-    `UPDATE conversations SET status = 'closed', updated_at = now() WHERE id = $1`,
-    [conversationId]
-  );
-}
-
 // 重命名会话：仅改标题（不 bump updated_at，避免改名打乱列表按活跃排序）。
 export async function renameConversation(
   client: pg.Pool | pg.PoolClient,

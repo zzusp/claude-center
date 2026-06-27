@@ -1,90 +1,140 @@
 "use client";
 
 import type { Conversation, Project, Worker } from "@claude-center/db";
-import { GitBranch, MessageSquare, Plus, Search, Server, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ArrowLeft,
+  Check,
+  MessageSquare,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Search,
+  Settings2,
+  Trash2,
+  X
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Empty } from "./shared";
 import { Select, useConfirm } from "./controls";
-import { ChatThread, NewConversationPanel } from "./chat-thread";
+import { ChatThread, ConversationSettingsModal, NewConversationPanel } from "./chat-thread";
 import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
 
-// 实时直连对话视图：左侧会话列表 + 新建（项目/分支/worker/模型），右侧消息线（SSE 流式打字机）+ 输入框。
-// 独立于任务流，独立数据通道。详见 docs/spec/worker-direct-chat.md
+// 项目对话工作台：限定到单个项目（project!=null 时按 projectId 过滤；项目尚未载入完成时整体置 loading）。
+// 左侧会话列表（仅标题 + 三点菜单：重命名 / 设置 / 删除）；右侧消息线。
 export function ChatView({
+  project,
   projects,
   workers,
   canCommand,
-  onRequestRefresh
+  onRequestRefresh,
+  onBackToProjects
 }: {
+  project: Project | null;
   projects: Project[];
   workers: Worker[];
   canCommand: boolean;
   onRequestRefresh: () => void;
+  onBackToProjects: () => void;
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
   const [error, setError] = useState("");
-  // 筛选：keyword 走 ILIKE(title/项目名/worker 名/branch)；projectId/workerId 精确过滤。空串 = 不筛。
   const [keyword, setKeyword] = useState("");
-  const [filterProjectId, setFilterProjectId] = useState("");
   const [filterWorkerId, setFilterWorkerId] = useState("");
   const { confirm, dialog } = useConfirm();
 
-  // deep-link：从 worker 详情页「对话」list（或他处）带 ?c=<id> 跳进来时，挂载后定位到该会话。
-  // 仅初始化一次；列表加载后由下方 loadList 的「筛选结果不含则清空」逻辑天然兜底。
+  // 列表项三点菜单：同一时刻只展开一个；用 conversationId 作 key，null=全部关闭。
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  // 行内重命名：编辑中的 id + 当前草稿。
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  // 设置弹窗（自动回复 + 决策预案）：直接复用 chat-thread 里的 ConversationSettingsModal。
+  const [settingsTarget, setSettingsTarget] = useState<Conversation | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  // 切换项目时清空选中态，避免上一项目的会话还显示在右侧。
+  useEffect(() => {
+    setActiveId(null);
+    setKeyword("");
+    setFilterWorkerId("");
+    setOpenMenuId(null);
+    setRenamingId(null);
+  }, [project?.id]);
+
+  // deep-link：?c=<id> 跳进来时定位到该会话（兼容 worker 详情等链接）。
   useEffect(() => {
     const cid = new URLSearchParams(window.location.search).get("c");
     if (cid) setActiveId(cid);
   }, []);
 
-  // 关键词输入做 300ms 防抖再进 filterQuery，避免每敲一字符发一次请求；项目/worker 切换立即生效。
+  // 关键词输入做 300ms 防抖。
   const [debouncedKeyword, setDebouncedKeyword] = useState("");
   useEffect(() => {
     const handle = setTimeout(() => setDebouncedKeyword(keyword.trim()), 300);
     return () => clearTimeout(handle);
   }, [keyword]);
 
-  // 筛选条件聚成 query string；空字段省略，避免每次 ?keyword= 的脏 URL 触发 next 路由缓存击穿。
+  // 筛选条件聚成 query string；projectId 强制锁定为当前项目。
   const filterQuery = useMemo(() => {
+    if (!project) return "";
     const params = new URLSearchParams();
+    params.set("projectId", project.id);
     if (debouncedKeyword) params.set("keyword", debouncedKeyword);
-    if (filterProjectId) params.set("projectId", filterProjectId);
     if (filterWorkerId) params.set("workerId", filterWorkerId);
-    const s = params.toString();
-    return s ? `?${s}` : "";
-  }, [debouncedKeyword, filterProjectId, filterWorkerId]);
+    return `?${params.toString()}`;
+  }, [project, debouncedKeyword, filterWorkerId]);
 
-  const loadList = useCallback(async (query: string, isActive: () => boolean = () => true): Promise<void> => {
-    try {
-      const r = await fetch(`/api/conversations${query}`, { cache: "no-store" });
-      if (!r.ok) {
-        throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "加载失败");
+  const loadList = useCallback(
+    async (query: string, isActive: () => boolean = () => true): Promise<void> => {
+      if (!query) return;
+      try {
+        const r = await fetch(`/api/conversations${query}`, { cache: "no-store" });
+        if (!r.ok) {
+          throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "加载失败");
+        }
+        const d = (await r.json()) as { conversations: Conversation[] };
+        if (!isActive()) return;
+        setConversations(d.conversations);
+        setActiveId((prev) => (prev && d.conversations.some((c) => c.id === prev) ? prev : null));
+        setError("");
+      } catch (e) {
+        if (!isActive()) return;
+        setError(e instanceof Error ? e.message : "加载失败");
       }
-      const d = (await r.json()) as { conversations: Conversation[] };
-      if (!isActive()) return;
-      setConversations(d.conversations);
-      // 筛选结果不含当前展示的会话时清空右侧（活跃会话被筛掉，右侧应回到「请选择会话」空态）
-      setActiveId((prev) => (prev && d.conversations.some((c) => c.id === prev) ? prev : null));
-      setError("");
-    } catch (e) {
-      if (!isActive()) return;
-      setError(e instanceof Error ? e.message : "加载失败");
-    }
-  }, []);
+    },
+    []
+  );
 
-  // 会话列表实时同步：挂载即拉 + 每 POLL_INTERVAL_MS 周期轮询 + relay 快线，让列表项的「回复中」
-  // 标签（generating 派生）随 worker 应答实时亮起/熄灭，与桌面端「对话」面板一致（桌面端为 3s 轮询）。
-  // filterQuery 变化（含防抖后的关键词、项目/worker 切换）即重新拉取。
+  // 会话列表实时同步：filterQuery 变化（含防抖关键词、worker 切换、项目切换）即重拉。
   usePolling((isActive) => loadList(filterQuery, isActive), [filterQuery], POLL_INTERVAL_MS);
-  const filtersActive = Boolean(keyword.trim() || filterProjectId || filterWorkerId);
+
+  // 点菜单外部关闭下拉。
+  useEffect(() => {
+    if (!openMenuId) return;
+    function handler(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpenMenuId(null);
+      }
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [openMenuId]);
+
+  const workerOptions = useMemo(() => {
+    if (!project) return workers;
+    // 当前项目相关的 worker 子集：尽量按 worker 关联项目过滤；当前 worker 接口不返回 link，先全量。
+    return workers;
+  }, [workers, project]);
+
+  const filtersActive = Boolean(keyword.trim() || filterWorkerId);
   function clearFilters(): void {
     setKeyword("");
-    setFilterProjectId("");
     setFilterWorkerId("");
   }
 
   async function delConv(c: Conversation): Promise<void> {
+    setOpenMenuId(null);
     const ok = await confirm({
       title: "删除对话",
       message: `确认删除对话「${c.title || "未命名对话"}」？该对话的所有消息与会话记录将一并删除，且不可恢复。`,
@@ -106,14 +156,68 @@ export function ChatView({
     }
   }
 
+  function startRename(c: Conversation): void {
+    setOpenMenuId(null);
+    setRenamingId(c.id);
+    setRenameDraft(c.title);
+  }
+
+  async function commitRename(c: Conversation): Promise<void> {
+    const t = renameDraft.trim();
+    setRenamingId(null);
+    if (t === c.title) return;
+    try {
+      const r = await fetch(`/api/conversations/${c.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: t })
+      });
+      if (!r.ok) {
+        throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "改名失败");
+      }
+      await loadList(filterQuery);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "改名失败");
+    }
+  }
+
+  async function saveSettings(autoReply: boolean, autoDecisionHints: string): Promise<void> {
+    if (!settingsTarget) return;
+    const r = await fetch(`/api/conversations/${settingsTarget.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ autoReply, autoDecisionHints })
+    });
+    if (!r.ok) {
+      throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "保存失败");
+    }
+    setSettingsTarget(null);
+    await loadList(filterQuery);
+  }
+
   const active = conversations.find((c) => c.id === activeId) ?? null;
 
+  if (!project) {
+    return <div className="chat-projects-loading">加载项目…</div>;
+  }
+
   return (
-    // data-active 驱动移动端主从切换：未选会话(0)显示列表、选中(1)显示消息线（桌面端忽略，双栏并排）。
+    // data-active 驱动移动端主从切换：未选会话(0)显示列表、选中(1)显示消息线（桌面端双栏并排）。
     <div className="chat-wrap" data-active={active ? "1" : "0"}>
       <aside className="chat-list">
         <div className="chat-list-head">
-          <span>会话</span>
+          <button
+            type="button"
+            className="chat-back-projects"
+            onClick={onBackToProjects}
+            title="返回项目列表"
+            aria-label="返回项目列表"
+          >
+            <ArrowLeft size={14} />
+          </button>
+          <span className="chat-list-head-title" title={project.name}>
+            {project.name}
+          </span>
           {canCommand ? (
             <button
               className="btn btn-sm btn-primary"
@@ -134,27 +238,17 @@ export function ChatView({
               type="search"
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
-              placeholder="搜索标题 / 项目 / Worker / 分支"
+              placeholder="搜索标题 / Worker / 分支"
               aria-label="关键词搜索"
             />
           </div>
-          <Select
-            className="chat-filter-select"
-            value={filterProjectId}
-            onChange={setFilterProjectId}
-            options={[
-              { value: "", label: "全部项目" },
-              ...projects.map((p) => ({ value: p.id, label: p.name }))
-            ]}
-            ariaLabel="按项目筛选"
-          />
           <Select
             className="chat-filter-select"
             value={filterWorkerId}
             onChange={setFilterWorkerId}
             options={[
               { value: "", label: "全部 Worker" },
-              ...workers.map((w) => ({ value: w.id, label: w.name }))
+              ...workerOptions.map((w) => ({ value: w.id, label: w.name }))
             ]}
             ariaLabel="按 worker 筛选"
           />
@@ -164,42 +258,92 @@ export function ChatView({
             </button>
           ) : null}
         </div>
-        <div className="chat-list-body">
+        <div className="chat-list-body" ref={menuRef}>
           {conversations.length === 0 ? (
             <Empty icon={<MessageSquare size={20} />} text={filtersActive ? "无匹配的会话" : "暂无对话"} />
           ) : (
-            conversations.map((c) => (
-              <div key={c.id} className={`chat-li${c.id === activeId ? " active" : ""}`}>
-                <button type="button" className="chat-li-main" onClick={() => setActiveId(c.id)}>
-                  <span className="chat-li-title">{c.title || "未命名对话"}</span>
-                  <span className="chat-li-meta">
-                    <Server size={11} /> {c.worker_name}
-                    {c.branch ? (
-                      <>
-                        {" "}
-                        <GitBranch size={11} /> {c.branch}
-                      </>
-                    ) : null}
-                  </span>
-                  <span className="chat-li-foot">
-                    <span className="mono">{c.project_name}</span>
-                    <span className="chat-li-tags">
+            conversations.map((c) => {
+              const isActive = c.id === activeId;
+              const isRenaming = renamingId === c.id;
+              const isMenuOpen = openMenuId === c.id;
+              return (
+                <div key={c.id} className={`chat-li chat-li-simple${isActive ? " active" : ""}`}>
+                  {isRenaming ? (
+                    <div className="chat-li-rename">
+                      <input
+                        autoFocus
+                        value={renameDraft}
+                        maxLength={200}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void commitRename(c);
+                          } else if (e.key === "Escape") {
+                            setRenamingId(null);
+                          }
+                        }}
+                        onBlur={() => void commitRename(c)}
+                        placeholder="对话标题"
+                      />
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        title="保存"
+                        onClick={() => void commitRename(c)}
+                      >
+                        <Check size={13} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="chat-li-main chat-li-main-simple"
+                      onClick={() => setActiveId(c.id)}
+                      title={c.title || "未命名对话"}
+                    >
+                      <span className="chat-li-title">{c.title || "未命名对话"}</span>
                       {c.generating ? <span className="chat-tag live">回复中</span> : null}
-                    </span>
-                  </span>
-                </button>
-                {canCommand ? (
-                  <button
-                    type="button"
-                    className="chat-li-del"
-                    title="删除对话"
-                    onClick={() => void delConv(c)}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                ) : null}
-              </div>
-            ))
+                    </button>
+                  )}
+                  {canCommand && !isRenaming ? (
+                    <div className="chat-li-menu">
+                      <button
+                        type="button"
+                        className="chat-li-more"
+                        title="更多操作"
+                        aria-label="更多操作"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenMenuId(isMenuOpen ? null : c.id);
+                        }}
+                      >
+                        <MoreHorizontal size={14} />
+                      </button>
+                      {isMenuOpen ? (
+                        <div className="chat-li-dropdown">
+                          <button type="button" onClick={() => startRename(c)}>
+                            <Pencil size={13} /> 重命名
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSettingsTarget(c);
+                              setOpenMenuId(null);
+                            }}
+                          >
+                            <Settings2 size={13} /> 对话设置
+                          </button>
+                          <button type="button" className="danger" onClick={() => void delConv(c)}>
+                            <Trash2 size={13} /> 删除对话
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })
           )}
         </div>
       </aside>
@@ -222,6 +366,7 @@ export function ChatView({
         <NewConversationPanel
           projects={projects}
           workers={workers}
+          lockedProjectId={project.id}
           onClose={() => setComposing(false)}
           onCreated={(id) => {
             setComposing(false);
@@ -230,8 +375,16 @@ export function ChatView({
           }}
         />
       ) : null}
+      {settingsTarget ? (
+        <ConversationSettingsModal
+          conversation={settingsTarget}
+          onClose={() => setSettingsTarget(null)}
+          onSave={saveSettings}
+        />
+      ) : null}
       {error ? <div className="chat-error chat-error-float">{error}</div> : null}
       {dialog}
     </div>
   );
 }
+

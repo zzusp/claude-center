@@ -104,16 +104,21 @@ export default function Shell({ currentUser, children }: { currentUser: CurrentU
         </div>
 
         <nav className="nav">
-          {navItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`nav-item${pathname === item.href ? " active" : ""}`}
-            >
-              <span className="nav-ico">{item.icon}</span>
-              <span className="nav-label">{item.label}</span>
-            </Link>
-          ))}
+          {navItems.map((item) => {
+            // 高亮规则：严格匹配「/」=总览；其他菜单项以前缀匹配（覆盖 /chat/[projectId] 等子路由）。
+            const active =
+              item.href === "/" ? pathname === "/" : pathname === item.href || pathname.startsWith(`${item.href}/`);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`nav-item${active ? " active" : ""}`}
+              >
+                <span className="nav-ico">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </Link>
+            );
+          })}
         </nav>
       </aside>
 

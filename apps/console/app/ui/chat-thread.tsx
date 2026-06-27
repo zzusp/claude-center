@@ -1,11 +1,11 @@
 "use client";
 
 import type { AttachmentMeta, Conversation, ConversationMessage, Project, Worker } from "@claude-center/db";
-import { AlertTriangle, ArrowUp, Bot, CalendarClock, Check, ChevronLeft, Clock, GitBranch, Info, MessageSquare, MoreHorizontal, Pencil, Server, Settings2, Sparkles, Square, X } from "lucide-react";
+import { AlertTriangle, ArrowUp, Bot, CalendarClock, Check, ChevronLeft, Clock, GitBranch, Info, MessageSquare, MoreHorizontal, Pencil, Server, Settings2, Sparkles, Square, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Empty, fmtDateTime, postJson } from "./shared";
 import { AttachmentChip, AttachmentList, AttachmentUploader } from "./attachment-uploader";
-import { DateTimePicker, Select } from "./controls";
+import { DateTimePicker, Select, useConfirm } from "./controls";
 import { SessionMetaBar } from "./session-meta";
 import { TranscriptView, parseTranscript } from "./transcript";
 import { usePolling } from "../lib/use-polling";
@@ -60,7 +60,7 @@ export function ChatThread({
   const menuRef = useRef<HTMLDivElement>(null);
   const doneRef = useRef(false);
   const id = conversation.id;
-  const closed = conversation.status !== "active";
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   // 会话切换 / 标题被外部刷新时，重置改名草稿与编辑态。
   useEffect(() => {
@@ -120,10 +120,7 @@ export function ChatThread({
           headers: cached?.etag ? { "If-None-Match": cached.etag } : {}
         });
         if (!isActive()) return;
-        if (r.status === 304) {
-          if (closed) doneRef.current = true;
-          return;
-        }
+        if (r.status === 304) return;
         if (!r.ok) return;
         const etag = r.headers.get("ETag");
         const d = (await r.json()) as { jsonl: string | null };
@@ -132,18 +129,16 @@ export function ChatThread({
         if (cached && cached.jsonl === d.jsonl) {
           jsonlCache.set(id, { jsonl: cached.jsonl, etag });
           setLoaded(true);
-          if (closed) doneRef.current = true;
           return;
         }
         jsonlCache.set(id, { jsonl: d.jsonl, etag });
         setJsonl(d.jsonl);
         setLoaded(true);
-        if (closed) doneRef.current = true;
       } catch {
         /* 轮询失败静默，下次重试 */
       }
     },
-    [id, closed],
+    [id],
     3000
   );
 
@@ -208,7 +203,7 @@ export function ChatThread({
   }, [items, pending, dbExtras]);
 
   // 回复中：有待 worker 落库的乐观消息，或列表派生的 generating（worker 正在跑本轮）。
-  const busy = !closed && (pending.length > 0 || conversation.generating);
+  const busy = pending.length > 0 || conversation.generating;
 
   async function saveTitle(): Promise<void> {
     const t = titleDraft.trim();
@@ -321,12 +316,23 @@ export function ChatThread({
     }
   }
 
-  async function closeConv(): Promise<void> {
+  async function deleteConv(): Promise<void> {
+    const ok = await confirm({
+      title: "删除对话",
+      message: `确认删除对话「${conversation.title || "未命名对话"}」？该对话的所有消息与会话记录将一并删除，且不可恢复。`,
+      confirmText: "删除对话",
+      danger: true
+    });
+    if (!ok) return;
     try {
-      await postJson(`/api/conversations/${id}/close`, {});
+      const r = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+      if (!r.ok) {
+        throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "删除失败");
+      }
       onChanged();
+      if (onBack) onBack();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "结束失败");
+      setErr(e instanceof Error ? e.message : "删除失败");
     }
   }
 
@@ -436,16 +442,16 @@ export function ChatThread({
               >
                 <Info size={13} /> 会话信息
               </button>
-              {canCommand && !closed ? (
+              {canCommand ? (
                 <button
                   type="button"
                   className="danger"
                   onClick={() => {
-                    void closeConv();
+                    void deleteConv();
                     setMenuOpen(false);
                   }}
                 >
-                  <Square size={13} /> 结束对话
+                  <Trash2 size={13} /> 删除对话
                 </button>
               ) : null}
             </div>
@@ -531,9 +537,7 @@ export function ChatThread({
         </div>
       ) : null}
 
-      {closed ? (
-        <div className="chat-closed">对话已结束</div>
-      ) : offline ? (
+      {offline ? (
         <div className="chat-closed">该 worker 当前离线，无法继续对话（恢复在线后可继续）</div>
       ) : canCommand ? (
         <div className="chat-composer">
@@ -642,12 +646,13 @@ export function ChatThread({
           onSave={saveSettings}
         />
       ) : null}
+      {confirmDialog}
     </div>
   );
 }
 
 // 会话级设置弹窗：自动回复（无人值守）开关 + 决策预案。与任务表单的「自动回复」同设计（Select + hints）。
-function ConversationSettingsModal({
+export function ConversationSettingsModal({
   conversation,
   onClose,
   onSave
@@ -723,15 +728,18 @@ function ConversationSettingsModal({
 export function NewConversationPanel({
   projects,
   workers,
+  lockedProjectId,
   onClose,
   onCreated
 }: {
   projects: Project[];
   workers: Worker[];
+  // 锁定的项目 id：项目对话工作台进来时强制只新建该项目下的会话；不传则可自由选择。
+  lockedProjectId?: string;
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
-  const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
+  const [projectId, setProjectId] = useState(lockedProjectId ?? projects[0]?.id ?? "");
   const [branch, setBranch] = useState("");
   const [branches, setBranches] = useState<string[]>([]);
   const [branchState, setBranchState] = useState<"idle" | "loading" | "error">("idle");
@@ -839,7 +847,11 @@ export function NewConversationPanel({
           </label>
           <label className="chat-field chat-field-half">
             <span>项目</span>
-            <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            <select
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              disabled={Boolean(lockedProjectId)}
+            >
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}

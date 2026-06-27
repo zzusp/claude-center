@@ -57,9 +57,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (denied) {
       return denied;
     }
-    if (conversation.status !== "active") {
-      return badRequest("对话已结束");
-    }
     // worker 离线（last_seen_at > 60s）就别让用户继续发：消息能落库但永远等不到应答，反生「为何无人回」的迷惑。
     const worker = await getWorker(getPool(), conversation.worker_id);
     if (!worker || worker.status !== "online") {
