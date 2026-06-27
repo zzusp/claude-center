@@ -4559,6 +4559,25 @@ a.dep-item:hover {
   font-size: 12.5px;
   color: var(--failed);
 }
+/* DB 兜底渲染的失败 assistant 气泡：执行失败的轮没有正文，给一条独立样式让用户能看到错误原因。
+   选择器特异性需高于 .tx-msg.asst（width:100% / max-width:100%）才能盖住默认。 */
+.tx-msg.asst.chat-msg-failed {
+  border: 1px solid var(--failed);
+  border-radius: var(--r-lg, 12px);
+  background: color-mix(in srgb, var(--failed) 8%, var(--surface-1));
+  padding: 9px 13px;
+  width: auto;
+  max-width: 80%;
+  color: var(--failed);
+}
+.chat-msg-failed-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
 .chat-error-float {
   position: absolute;
   bottom: 8px;
