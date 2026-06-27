@@ -8,6 +8,24 @@
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-06-27
+
+### Added
+
+- 已完成任务（success / merged）支持「继续这个任务」：终态任务详情顶栏新增按钮，弹 FormModal 收集补充反馈，PATCH `action='continue'` 原子翻 `claimed` + 落 user 评论 + 触发 `continuation_requested` 事件；Worker 复用原 Claude 会话（`--resume`）再执行一轮——PR 未合则在原 work_branch 上追加 commit、PR 已合则切 `-cont-N` 分支重建 worktree + 新 PR。任务时间线新增 `continuation_requested` / `continuation_started` / `continuation_branch_rotated` 三个事件标签。配套 DB 迁移 `038_task_continuation.sql`（`tasks.continuation_count` + `tasks.continuation_requested_at`，复用现有状态机不重建 check 约束）。
+- 实时对话 SessionMetaBar 显示后台进程指示：解析 jsonl 中 `Bash run_in_background:true` 派发与 `attachment.queued_command` 完成回执，主对话有未结束的后台进程时标「后台 N」chip + 悬浮提示——claude 表面停下但实际还在等后台进程时一眼可见。
+
+### Changed
+
+- 实时对话 `chat-composer` 三按钮整改：定时 / 附件 / 发送统一为右下角圆形按钮（34×34），附件 chips 与定时 chip 上移到 textarea 上方的「草稿带」。`AttachmentUploader` 加 `compact` prop（仅渲染 Paperclip 圆形按钮，chips 由父组件接管）、`DateTimePicker` 加 `compact` prop（trigger 改为 CalendarClock 圆形按钮，已选时 `.is-active` 蓝底）。布局重心从左侧迁到右下，整体更紧凑。
+- 实时对话详情接口轮询节奏 15s → 3s：原 15s 在 jsonl 尚未收录新 user 消息时窗口被拉长（切回页面 / claude 失败时无气泡可显）；同节奏 3s 避免「pending 清掉了、DB 还没来」的空白窗，worker 套餐用量随之同节奏刷新。
+
+### Fixed
+
+- 实时对话过滤伪 user 气泡：`parseTranscript` 跳过 `isMeta` 与首段为 `<command-name>` / `<local-command-*>` / `<system-reminder>` 的 jsonl user 记录，避免 load skill 时 Claude 内部回灌的 skill 文档全文以「用户消息」形式渲染。桌面端 worker 会话面板与 `extractFinalAssistantText` 同步该过滤。
+- 实时对话定时消息走错 session：`findSessionFile` 增加 `sinceMs` 时间窗 + `preferSessionId` 快路径——到点发送时不再被先前其它终端的旧 session jsonl 抢锚；`conversation.claude_session_id` 与本次 claude 启动时间端到端贯穿到同步与收尾。
+- 实时对话执行失败时用户消息消失：失败 / jsonl 未收录窗口里 UI 以 DB 全量消息（`refreshMeta` 拉来）兜底渲染用户气泡 + 失败态，切页面回来或 pending 已清后消息不再消失；乐观消息清理改为 jsonl 或 DB 任一收录即清。
+
 ## [0.2.13] - 2026-06-24
 
 ### Changed
