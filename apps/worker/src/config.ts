@@ -85,6 +85,17 @@ function dataDirOf(): string {
   return process.env.CLAUDE_CENTER_DATA_DIR ?? path.join(os.homedir(), ".claude-center");
 }
 
+// 从 apps/worker/package.json 读 version；dist/config.js 与 src/config.ts 都解析到 apps/worker 根，
+// 与 ../prompts、../config 同样的相对路径模式。读不到时退到 "0.0.0"，避免阻塞启动。
+function readAppVersion(workerDir: string): string {
+  try {
+    const pkg = JSON.parse(readFileSync(path.resolve(workerDir, "../package.json"), "utf8")) as { version?: string };
+    return pkg.version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
 function stateFileOf(dataDir: string): string {
   return path.join(dataDir, "worker.json");
 }
@@ -199,7 +210,7 @@ export function readWorkerConfig(): WorkerConfig {
     workerId: process.env.CLAUDE_CENTER_WORKER_ID || state.workerId,
     workerName: process.env.CLAUDE_CENTER_WORKER_NAME || os.hostname(),
     hostName: os.hostname(),
-    appVersion: "0.1.0",
+    appVersion: readAppVersion(workerDir),
     databaseUrl,
     projects: mergeProjects(readProjectConfig(), state.projects ?? []),
     pollIntervalMs: readNumber("CLAUDE_CENTER_POLL_INTERVAL_MS", 10_000),

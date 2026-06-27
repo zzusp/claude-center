@@ -138,6 +138,8 @@ export type DbState = "unconfigured" | "connected" | "error";
 export type WorkerStatusSnapshot = {
   workerName: string;
   hostName: string;
+  // Worker 桌面端自身版本号（来自 apps/worker/package.json），桌面侧栏底部展示用。
+  appVersion: string;
   workingState: "idle" | "working";
   allowRemoteControl: boolean;
   maxParallel: number;
@@ -689,6 +691,7 @@ export class ClaudeCenterWorker {
     return {
       workerName: this.config.workerName,
       hostName: this.config.hostName,
+      appVersion: this.config.appVersion,
       workingState: runtime?.working_state ?? "idle",
       allowRemoteControl: this.config.allowRemoteControl,
       maxParallel: runtime?.max_parallel ?? this.config.maxParallel,

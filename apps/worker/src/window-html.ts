@@ -81,6 +81,7 @@ export function windowHtml(): string {
           .side-id { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
           .side-name { font-size: 12.5px; font-weight: 600; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
           .side-host { font-size: 11px; color: var(--text-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .side-ver { font-size: 11px; color: var(--text-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); }
 
           /* —— Main —— */
           .main { flex: 1; min-width: 0; height: 100vh; display: flex; flex-direction: column; }
@@ -456,6 +457,7 @@ export function windowHtml(): string {
               <div class="side-id">
                 <span class="side-name" id="sideName">worker</span>
                 <span class="side-host" id="sideHost">—</span>
+                <span class="side-ver" id="sideVer">v—</span>
               </div>
             </div>
           </aside>
@@ -1335,6 +1337,7 @@ export function windowHtml(): string {
             // 侧栏身份
             $("sideName").textContent = s.workerName || "worker";
             $("sideHost").textContent = s.hostName || (s.os && s.os.label) || "—";
+            $("sideVer").textContent = s.appVersion ? "v" + s.appVersion : "v—";
 
             // 顶栏 SSE 中转连通性：dot 着色 + 文案；仅 connected 时脉冲（绿）。
             const relayMeta = {

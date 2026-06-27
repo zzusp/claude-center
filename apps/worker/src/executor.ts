@@ -488,6 +488,14 @@ function workHere(isGit: boolean): string {
 // 可观察行为，跟真 Worker 等价；当时却写「需真实 Worker 在线、未跑」直接收口。下面"反例与等价路径"
 // 段把这种最常见错觉钉死，并明确给出 Worker/Console 的契约是 DB（DB 唯一权威 + 双向轮询），代码
 // 模拟跟真实进程在可观察行为上等价。
+//
+// 2026-06-27 第二次栽（桌面端版本号任务）：本来 PR #174 已把硬线立到位，但白名单只锚定到「apps/console
+// playwright」、反例表第 4 条只写「console UI」，**没列 Electron Worker 桌面端**——执行者就把 worker
+// 桌面端截图当成了"白名单/反例表都没覆盖到的新场景"，绕开了"先 grep 再说不能跑"硬线，写「需要桌面/
+// 显示器，未跑」直接收口（明明 scripts/take-worker-screenshot.mjs 早就在仓里）。
+// 根因：枚举式反例表注定落后一拍。釜底抽薪：硬线第 1 步把 grep 范围明确拆成「数据/契约」+「UI/截图」
+// 两类，强制 grep `scripts/take-*` / `*screenshot*` —— 不论新出现什么 UI 路径，执行者都跑不掉这一步。
+// 同时白名单显式列入 take-worker-screenshot.mjs，反例表第 4 条拆成 Console / Worker 桌面端两条。
 function e2eGuidanceSection(): string[] {
   return [
     "",
@@ -495,7 +503,8 @@ function e2eGuidanceSection(): string[] {
     "- `npm run verify:console`     —— console 401→200 + scheduler.ok 自检",
     "- `npm run db:ephemeral`       —— 临时库跑全量迁移 + DROP，零污染",
     "- `node scripts/fake-gh-hook.cjs` —— 拦截 GitHub API 做 e2e",
-    "- `apps/console` 已配 playwright，可驱动真实浏览器",
+    "- `apps/console` 已配 playwright，可驱动真实浏览器（Console UI 截图）",
+    "- `node scripts/take-worker-screenshot.mjs` —— **Electron Worker 桌面端** UI 截图（playwright `_electron` API 真起主窗口）。**所有 worker 侧栏/顶栏/总览/设置/任务/对话/项目面板的 UI 改动都走这个**——它不是新场景，是已验证可用的白名单脚本，写「未跑（需要桌面/显示器）」就是直接违反规约",
     "",
     "## 缺 .env / 连接信息 / 测试账号等 gitignore 文件时",
     "worktree 不预带这些文件。遇到缺时，去 `$CLAUDE_CENTER_MAIN_REPO/<同相对路径>` 看主仓有没有，**有就 `cp` 过来**（仅复制，禁止 hardlink / symlink，会污染主仓）。`$CLAUDE_CENTER_MAIN_REPO` **仅供读取，禁止 `cd` 进去、禁止写入、禁止 commit**。主仓也没有再报告缺什么。",
@@ -507,9 +516,12 @@ function e2eGuidanceSection(): string[] {
     "",
     "## ❗ 写「未跑/无法验证」前必走三步硬线（违反 = 任务未完成）",
     "发现自己想在 PR body / 验收矩阵写「未跑」「无法验证」「环境不具备」「需 X 才能验证但 X 不在」时，**先停一下**，按顺序做完这三步：",
-    "1. **grep 仓库现有 e2e 资产**：`ls scripts/`、`grep -rl 'mock-\\|fake-\\|smoke-\\|ephemeral\\|verify-'`、看 `docs/acceptance/*/scripts/`。找到的脚本必须实际跑一次（带 `--check` / `--help` 或直接小输入跑都行），看真实报错而不是猜它需要什么。",
+    "1. **grep 仓库现有 e2e 资产**（**两类都要 grep，缺一不可**——只 grep 第一类会漏掉所有 UI 截图脚本，这正是 2026-06-27 第二次栽点）：",
+    "   - **数据/契约类**：`ls scripts/`、`grep -rl 'mock-\\|fake-\\|smoke-\\|ephemeral\\|verify-'`、看 `docs/acceptance/*/scripts/`。",
+    "   - **UI / 截图类**：`ls scripts/take-* scripts/*screenshot*`、`grep -rl 'playwright\\|_electron\\|page.screenshot' scripts/ docs/acceptance/`。**任何含「UI / 桌面端 / 浏览器 / 截图 / 渲染」字眼的任务**——不论改的是 Console、Worker 桌面端、还是任何前端面板——写「未跑」前都必须先 grep 这一组，找到 `take-*.mjs` 直接跑。",
+    "   - 找到的脚本必须实际跑一次（带 `--check` / `--help` 或直接小输入跑都行），看真实报错而不是猜它需要什么。",
     "2. **检查契约层有没有可代码模拟路径**：被验证的组件跟外界的契约是 RPC 还是 DB 还是文件？本仓约定 **Worker ↔ Console 的契约就是 DB（DB 唯一权威 + 双向轮询，见根 CLAUDE.md）**，所以「需要真 Worker / 真 Console」几乎都是错觉——直接 `import` `@claude-center/db` helpers（`addConversationMessage` / `claimNextConversationTurn` / `upsertConversationSession` / `finalizeConversationTurn` / `registerWorker` …）推 DB 状态机，就是 Worker 跟 Console 在可观察契约上的全部行为。`scripts/smoke-conversation-cancel.mts` 就是范本。",
-    "3. **复读上面「本仓 e2e 工具栈」白名单**：白名单上列出来的 = 已经验证可用、必须先试，跳过它们就是直接违反规约。",
+    "3. **复读上面「本仓 e2e 工具栈」白名单**：白名单上列出来的 = 已经验证可用、必须先试，跳过它们就是直接违反规约。**特别提醒**：`scripts/take-worker-screenshot.mjs` 就是为 Electron 桌面端 UI 准备的——别把它当「console UI 截图的边角料」漏掉。",
     "",
     "三步全做完仍跑不通才允许写「未跑」，且**必须附三要素**：尝试的命令（贴出来）+ 实际报错（贴出来）+ 为什么无法绕开（写清楚反证）。空口「环境不具备」「需 Worker」「无法验证」一律不接受。",
     "",
@@ -520,8 +532,10 @@ function e2eGuidanceSection(): string[] {
     "  ✅ 等价：`node scripts/fake-gh-hook.cjs` 拦截 GitHub API 做 e2e",
     "- ❌ 「没有共享 dev 库 schema，无法验迁移 / 鉴权」",
     "  ✅ 等价：`npm run db:ephemeral` 建临时库跑全量迁移 + DROP，零污染",
-    "- ❌ 「UI 改动需要人工浏览器验证，未跑」",
-    "  ✅ 等价：`apps/console` 已配 playwright，参考 `scripts/take-screenshots.mjs` / `docs/acceptance/*/scripts/take-*.mjs` 驱动真浏览器截图"
+    "- ❌ 「**Console** UI 改动需要人工浏览器验证，未跑」",
+    "  ✅ 等价：`apps/console` 已配 playwright，参考 `scripts/take-screenshots.mjs` / `docs/acceptance/*/scripts/take-*.mjs` 驱动真浏览器截图",
+    "- ❌ 「**Worker 桌面端**（Electron）UI 改动需要桌面/显示器，本 headless 跑不了，未跑」",
+    "  ✅ 等价：`node scripts/take-worker-screenshot.mjs` 用 playwright `_electron` API 真起 Electron 主窗口截图（总览/任务/项目/设置 共 4 张落 `docs/screenshots/`），无需物理显示器、headless 也跑得起。Worker 侧栏/顶栏/总览/设置/任务/对话/项目面板**任何** UI 改动都用它——它是白名单脚本不是新场景"
   ];
 }
 
