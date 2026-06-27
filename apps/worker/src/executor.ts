@@ -481,6 +481,13 @@ function workHere(isGit: boolean): string {
 // 反复以「没 .env」「无浏览器」做借口跳过验证（docs/acceptance/pr-testplan-gate/round-1.md 案例）。
 // 在 prompt 末尾列出仓库自带的 e2e 工具栈白名单、显式告知主仓位置可按需 `cp` 取配置、并立硬规矩：
 // 跳过必须附"尝试的命令 + 实际报错 + 为什么无法绕开"三要素，空口"环境不具备"不接受。
+//
+// 2026-06-27 又栽一次（实时对话页重设计任务）：明明 packages/db 暴露了
+// addConversationMessage / claimNextConversationTurn / upsertConversationSession /
+// finalizeConversationTurn —— 直接 import 推 DB 状态机就 = Worker 跟 Console 在 DB 契约层的全部
+// 可观察行为，跟真 Worker 等价；当时却写「需真实 Worker 在线、未跑」直接收口。下面"反例与等价路径"
+// 段把这种最常见错觉钉死，并明确给出 Worker/Console 的契约是 DB（DB 唯一权威 + 双向轮询），代码
+// 模拟跟真实进程在可观察行为上等价。
 function e2eGuidanceSection(): string[] {
   return [
     "",
@@ -496,7 +503,25 @@ function e2eGuidanceSection(): string[] {
     "## e2e 探索原则",
     "1. 第一次必须实际跑命令探查，不允许仅凭\"看起来需要外部依赖\"跳过",
     "2. 遇阻先在仓库里找 mock / fake / 临时替身（`grep fake-`、`ephemeral`、`mock-`），找过再说\"不能跑\"",
-    "3. 跳过必须附三要素：尝试的命令 + 实际报错 + 为什么无法绕开。空口\"环境不具备\" / \"无法验证\"不接受"
+    "3. 跳过必须附三要素：尝试的命令 + 实际报错 + 为什么无法绕开。空口\"环境不具备\" / \"无法验证\"不接受",
+    "",
+    "## ❗ 写「未跑/无法验证」前必走三步硬线（违反 = 任务未完成）",
+    "发现自己想在 PR body / 验收矩阵写「未跑」「无法验证」「环境不具备」「需 X 才能验证但 X 不在」时，**先停一下**，按顺序做完这三步：",
+    "1. **grep 仓库现有 e2e 资产**：`ls scripts/`、`grep -rl 'mock-\\|fake-\\|smoke-\\|ephemeral\\|verify-'`、看 `docs/acceptance/*/scripts/`。找到的脚本必须实际跑一次（带 `--check` / `--help` 或直接小输入跑都行），看真实报错而不是猜它需要什么。",
+    "2. **检查契约层有没有可代码模拟路径**：被验证的组件跟外界的契约是 RPC 还是 DB 还是文件？本仓约定 **Worker ↔ Console 的契约就是 DB（DB 唯一权威 + 双向轮询，见根 CLAUDE.md）**，所以「需要真 Worker / 真 Console」几乎都是错觉——直接 `import` `@claude-center/db` helpers（`addConversationMessage` / `claimNextConversationTurn` / `upsertConversationSession` / `finalizeConversationTurn` / `registerWorker` …）推 DB 状态机，就是 Worker 跟 Console 在可观察契约上的全部行为。`scripts/smoke-conversation-cancel.mts` 就是范本。",
+    "3. **复读上面「本仓 e2e 工具栈」白名单**：白名单上列出来的 = 已经验证可用、必须先试，跳过它们就是直接违反规约。",
+    "",
+    "三步全做完仍跑不通才允许写「未跑」，且**必须附三要素**：尝试的命令（贴出来）+ 实际报错（贴出来）+ 为什么无法绕开（写清楚反证）。空口「环境不具备」「需 Worker」「无法验证」一律不接受。",
+    "",
+    "## ❌ 反例与等价路径（已栽过的，别重蹈）",
+    "- ❌ 「端到端 Worker 应答需要真 Worker 在线，ephemeral 无 Worker，未跑」",
+    "  ✅ 等价：直接 import `@claude-center/db` 的 `addConversationMessage` → `claimNextConversationTurn` → `upsertConversationSession` → `finalizeConversationTurn`，跟真 Worker 走同一份 helper。范例：`docs/acceptance/chat-page-redesign/scripts/take-chat-screenshots.mjs:driveWorkerReply`",
+    "- ❌ 「需要真 GitHub API 才能验 PR / Issue 操作，未跑」",
+    "  ✅ 等价：`node scripts/fake-gh-hook.cjs` 拦截 GitHub API 做 e2e",
+    "- ❌ 「没有共享 dev 库 schema，无法验迁移 / 鉴权」",
+    "  ✅ 等价：`npm run db:ephemeral` 建临时库跑全量迁移 + DROP，零污染",
+    "- ❌ 「UI 改动需要人工浏览器验证，未跑」",
+    "  ✅ 等价：`apps/console` 已配 playwright，参考 `scripts/take-screenshots.mjs` / `docs/acceptance/*/scripts/take-*.mjs` 驱动真浏览器截图"
   ];
 }
 

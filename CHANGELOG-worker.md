@@ -15,6 +15,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 任务下发 prompt 强化 e2e 验证硬线：`apps/worker/src/executor.ts:e2eGuidanceSection` 在原有「e2e 工具栈白名单 + 三要素跳过规约」之上新增「写"未跑/无法验证"前必走三步硬线」段——明确给出 Worker↔Console 契约是 DB（DB 唯一权威 + 双向轮询），列出常见错觉的等价 import 路径（`addConversationMessage` → `claimNextConversationTurn` → `upsertConversationSession` → `finalizeConversationTurn`），并附「❌ 借口 vs ✅ 等价路径」反例表。背景：「实时对话页重设计」任务首轮把端到端 Worker 应答标「未跑」直接收口，实际仓库内有完整可代码模拟的 DB 契约路径——加固后任何 worker 任何机器下发的任务都强制注入这段。
+
 ## [0.2.2] - 2026-06-22
 
 ### Added
