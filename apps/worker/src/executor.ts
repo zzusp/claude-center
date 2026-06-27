@@ -882,6 +882,30 @@ async function findExistingPrUrl(
   }
 }
 
+// 查 PR 状态（OPEN / CLOSED / MERGED）。用于复用 task_repos.pr_url 之前先看那条 PR 是否还可改：
+// 上一轮的 PR 被 merge 之后，pr_url 仍然指向那条 merged PR，原代码直接 `gh pr edit --body` 会把
+// 新一轮的产出贴到已合并的旧 PR（"还在用旧 PR"的根因），而不是新开一条。
+// 返回 null = 查不到 / gh 报错 → 保守按"PR 还可用"走老路径，避免误把还活着的 PR 当死。
+async function getPrState(
+  config: WorkerConfig,
+  subWt: string,
+  prUrl: string
+): Promise<"OPEN" | "CLOSED" | "MERGED" | null> {
+  try {
+    const res = await runCommand(
+      config.ghCommand,
+      ["pr", "view", prUrl, "--json", "state"],
+      { cwd: subWt, timeoutMs: 60_000 }
+    );
+    const parsed = JSON.parse(res.stdout.trim() || "{}") as { state?: string };
+    const s = (parsed.state ?? "").toUpperCase();
+    if (s === "OPEN" || s === "CLOSED" || s === "MERGED") return s;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // 任务进终态前对所有参与仓 worktree detach HEAD 释放 work_branch 占用。
 // 背景：子仓 work_branch 常是用户输入的人类命名（如 `feature/foo`），任务终态后 worktree 永久保留供人工
 // 验收/复用（listActiveTaskIdsForWorker 把 success/merged/failed/cancelled 都进 GC keep 名单），但 git 注册
@@ -1001,18 +1025,37 @@ export async function finalizeTaskMultiRepo(
       // 打回重跑时该仓的 PR 已存在：push 已自动更新；跳过 gh pr create（与原 finalize 同理）。
       // 但 PR 正文原仅在 create 时写一次，重跑不刷新 → 正文会停在首轮内容（旧 worker 建的还是代码块格式）。
       // 这里 best-effort 重写正文，让它反映本轮最新的结构化产出。
+      //
+      // 例外：task_repos.pr_url 指向的 PR 可能已被合并/关闭（上一轮 PR 已 merge 后用户对同一任务再续接
+      // 一轮）。此时直接 `gh pr edit --body` 会把新一轮产出贴到那条 merged PR 上（"还在用旧 PR"的根因），
+      // 而不是新开一条。先查 PR state，MERGED/CLOSED 当成不存在 → 清掉 task_repos.pr_url（防下一轮又
+      // 撞同一条死 PR）→ 落到下面 findExistingPrUrl/`gh pr create` 的新建路径。状态查不到（gh 报错等）
+      // 仍按可用走老路径，避免 gh 偶发失败把活 PR 当死、引出新故障。
       if (ctx.pr_url) {
-        await refreshPrBody(config, subWt, ctx.pr_url, prBody(task, claudeOutput));
-        await updateTaskRepoStatus(pool, ctx.id, "pr_created");
-        await addTaskEvent(pool, task.id, config.workerId, "pr_created", `${repoLabel} 复用已存在 PR（已刷新正文）`, {
-          repoRole: ctx.role,
-          relativePath: ctx.relative_path,
-          prUrl: ctx.pr_url,
-          reused: true,
-          bodyRefreshed: true
-        });
-        results.push({ ctx, sub: "pr_created", prUrl: ctx.pr_url, reused: true });
-        continue;
+        const prState = await getPrState(config, subWt, ctx.pr_url);
+        if (prState === "MERGED" || prState === "CLOSED") {
+          await addTaskEvent(pool, task.id, config.workerId, "pr_stale_skipped", `${repoLabel} 已存 PR 为 ${prState}，将新开 PR`, {
+            repoRole: ctx.role,
+            relativePath: ctx.relative_path,
+            prUrl: ctx.pr_url,
+            prState
+          });
+          await updateTaskRepoPrUrl(pool, ctx.id, null);
+          ctx.pr_url = null;
+          // 落到下方 findExistingPrUrl / gh pr create 路径，不 continue。
+        } else {
+          await refreshPrBody(config, subWt, ctx.pr_url, prBody(task, claudeOutput));
+          await updateTaskRepoStatus(pool, ctx.id, "pr_created");
+          await addTaskEvent(pool, task.id, config.workerId, "pr_created", `${repoLabel} 复用已存在 PR（已刷新正文）`, {
+            repoRole: ctx.role,
+            relativePath: ctx.relative_path,
+            prUrl: ctx.pr_url,
+            reused: true,
+            bodyRefreshed: true
+          });
+          results.push({ ctx, sub: "pr_created", prUrl: ctx.pr_url, reused: true });
+          continue;
+        }
       }
 
       // 幂等建 PR：首轮可能已 `gh pr create` 成功、却在落 pr_url 前失败（task_repos.pr_url 仍空）。
