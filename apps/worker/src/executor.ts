@@ -1446,21 +1446,31 @@ export async function executeDirectCommand(config: WorkerConfig, command: Direct
   }
 }
 
-// 从 session .jsonl 取末条 assistant 的文本（detached/重连下 claude 的 stdout 已不可得，终态结果只能从这里重建）。
+// 从 session .jsonl 取「本轮」末条 assistant 的文本（detached/重连下 claude 的 stdout 已不可得，终态结果只能从这里重建）。
 // 跳过 type=assistant 但 isMeta=true 的内部注入（与 transcript.tsx 的 isMetaUserEntry 同语义对齐）。
-function extractFinalAssistantText(jsonl: string): string {
+// sinceMs：本次 claude 启动时刻——只考虑 entry.timestamp >= sinceMs 的 assistant 条目，避免 --resume 续写
+// 时把上一轮的回答误读成本轮的（同 .jsonl 文件里历轮内容并存）。曾导致两类错位：
+//   ① 本轮 claude 只走了 tool_use 没出文本 → 误返回上一轮 assistant 文本，body 与本轮提问对不上（静默错配）；
+//   ② 当扫到的最后那一条 assistant 不带 text（仅 thinking/tool_use）时，又退回到「全文档无文本」的失败文案。
+function extractFinalAssistantText(jsonl: string, opts?: { sinceMs?: number | null }): string {
+  const sinceMs = opts?.sinceMs ?? null;
   let text = "";
   for (const line of jsonl.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let obj: { type?: string; isMeta?: unknown; message?: { content?: unknown } };
+    let obj: { type?: string; isMeta?: unknown; timestamp?: unknown; message?: { content?: unknown } };
     try {
-      obj = JSON.parse(trimmed) as { type?: string; isMeta?: unknown; message?: { content?: unknown } };
+      obj = JSON.parse(trimmed) as typeof obj;
     } catch {
       continue;
     }
     if (obj.type !== "assistant" || !obj.message) continue;
     if (obj.isMeta === true) continue;
+    // 本轮窗口过滤：留 5s 时钟偏移余量（与 findSessionFile 的 sinceMs 同语义）。entry 无 timestamp 时保守保留。
+    if (sinceMs !== null && typeof obj.timestamp === "string") {
+      const ts = Date.parse(obj.timestamp);
+      if (Number.isFinite(ts) && ts < sinceMs) continue;
+    }
     const content = obj.message.content;
     let cur = "";
     if (typeof content === "string") {
@@ -1471,7 +1481,7 @@ function extractFinalAssistantText(jsonl: string): string {
         .map((b) => b.text as string)
         .join("\n");
     }
-    if (cur.trim()) text = cur; // 留住最后一条有正文的 assistant 轮
+    if (cur.trim()) text = cur; // 留住本轮最后一条有正文的 assistant 条目
   }
   return text;
 }
@@ -1488,7 +1498,9 @@ export async function finalizeConversationFromSession(
 ): Promise<boolean> {
   const info = await findSessionInfo(input.cwd, { sinceMs: input.sinceMs ?? null, preferSessionId: input.resumeSessionId ?? null });
   if (!info) return false;
-  const result = extractFinalAssistantText(info.jsonl);
+  // sinceMs 同时用于条目级时间窗：--resume 续写共用同一文件、上一轮 assistant 文本仍在文件里，
+  // 不过滤会把上一轮回答误绑到本轮（finalize 写错 body / fallback 命中老文本绕过失败兜底）。
+  const result = extractFinalAssistantText(info.jsonl, { sinceMs: input.sinceMs ?? null });
   if (!result.trim()) return false;
   await finalizeConversationTurn(pool, {
     conversationId: input.conversationId,
