@@ -7,6 +7,7 @@ import {
   getAttachmentBlob,
   getConversationLocalPath,
   getConversationPrompt,
+  getPendingContinuationNote,
   getPendingReply,
   getPool,
   getTaskLocalPath,
@@ -25,6 +26,8 @@ import {
   setConversationTurnProcess,
   setTaskClaudeSession,
   setTaskWaiting,
+  setTaskWorkBranch,
+  updateTaskRepoBranchAndResetPr,
   updateTaskRepoPrUrl,
   updateTaskRepoRelativePath,
   updateTaskRepoStatus,
@@ -57,6 +60,7 @@ import {
   ensureSubRepoCloned,
   ensureWorktree,
   isGitRepo,
+  removeWorktree,
   resolveSubRepoRelativePath,
   worktreePathFor
 } from "./worktree.js";
@@ -550,6 +554,43 @@ function freshReplyPrompt(task: Task, reply: string, attachments: AttachmentMeta
   ].join("\n");
 }
 
+// 续跑 prompt:用户对已完成（success/merged）任务点「继续这个任务」时给出的反馈正文，拼到首帧让 Claude
+// 复用原 --resume 会话续作。区分 caseB:caseB 时额外提示「已切到新分支 -cont-N，原 PR 已合并」让 Claude
+// 不要尝试再 push 旧分支或编辑旧 PR。
+function continuationPrompt(
+  task: Task,
+  note: string,
+  attachments: AttachmentMeta[],
+  cwd: string,
+  isGit: boolean,
+  newBranchInfo: { oldWorkBranch: string; newWorkBranch: string; oldPrUrl: string | null } | null
+): string {
+  const head: string[] = [
+    "用户对前轮结果不满意，反馈如下：",
+    "",
+    note,
+    ""
+  ];
+  if (newBranchInfo) {
+    head.push(
+      `提示：上一轮的 PR (${newBranchInfo.oldPrUrl ?? "—"}) 已合并到目标分支，` +
+        `本轮已切到基于 origin/${task.base_branch} 的新分支 \`${newBranchInfo.newWorkBranch}\`（原分支：${newBranchInfo.oldWorkBranch}），` +
+        `请在新分支上提交改动；收尾时将自动开新 PR，不要尝试编辑旧 PR。`,
+      ""
+    );
+  } else {
+    head.push("提示：上一轮的工作分支与 PR 仍可改，请在原分支上追加 commit；收尾时将复用原 PR。", "");
+  }
+  head.push("继续完成 ClaudeCenter 任务。");
+  return [
+    ...dirAnchor(cwd, isGit),
+    ...head,
+    ...attachmentSection(attachments),
+    "",
+    ...replyDirective(task)
+  ].join("\n");
+}
+
 // 续接重试 prompt:failed 任务带上次失败原因(error_message);cancelled 任务无 error_message,
 // 用「此前被中断」措辞。让 Claude 带着「上次为什么没成」接着干（git 在当前分支，非 git 在项目目录就地）。
 function retryPrompt(task: Task, attachments: AttachmentMeta[], cwd: string, isGit: boolean): string {
@@ -573,10 +614,16 @@ function clampForPr(text: string, cap: number): string {
 
 // PR body：直接渲染 Claude 的 Markdown 产出（含 Summary / Changes / Test Plan），不再包代码块。
 // 原始任务需求收进折叠块，末尾加 Worker 署名脚注。
+// 续跑（continuation_count > 0）时在 summary 前注一行「续跑 #N」让 reviewer 看到这是基于反馈的新一轮产出，
+// 前序 PR 在任务详情时间线的 'continuation_branch_rotated' 事件 payload 里（per-repo 全集）。
 function prBody(task: Task, claudeOutput: string): string {
   const summary = clampForPr(claudeOutput, PR_BODY_OUTPUT_CAP) || "_(Claude 未产出结构化总结)_";
+  const continuationNote =
+    task.continuation_count > 0
+      ? `> 续跑 #${task.continuation_count}：上一轮已交付/合并，本轮基于用户反馈再来一轮（前序 PR 见任务详情时间线的「PR 已合并·切新分支」事件）。\n\n`
+      : "";
   return [
-    summary,
+    `${continuationNote}${summary}`,
     "",
     "---",
     "",
@@ -1471,6 +1518,162 @@ export async function retryFailedTask(config: WorkerConfig, task: Task, hooks?: 
       dynamicWorkflow: task.dynamic_workflow,
       onSpawn: hooks?.onClaudeSpawn,
       mainRepoRoot: localPath
+    });
+    await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, isGit, hooks?.onClaudeSpawn);
+  } catch (error) {
+    await markTaskFailed(pool, task.id, config.workerId, error instanceof Error ? error.message : String(error), {
+      failedAt: new Date().toISOString()
+    });
+  }
+}
+
+// 已完成任务（success / merged）的续跑入口：用户在终态点「继续这个任务」并给出反馈，
+// claimNextContinuationTask 已翻 running + 清 continuation_requested_at + 打 continuation_started 事件。
+//
+// 区分两种来源（per-repo 判定，多仓任务可能混合）：
+//   - case A：原 PR 还可改（不存在或 OPEN/CLOSED 但未 MERGED）→ 复用原 work_branch + 原 worktree 追加 commit；
+//     finalize 时若 PR 仍存则刷新正文，否则走 findExistingPrUrl/新建 PR 流。
+//   - case B：原 PR 已被 MERGED → 新分支 <原 work_branch>-cont-<continuation_count>，旧 worktree remove 重建，
+//     finalize 时 findExistingPrUrl 找不到旧分支同名 PR 自然新开（新 PR body 含「续跑 #N，前序 PR：<旧 url>」引用）。
+//
+// 所有续跑任务一律 --resume 原 claude_session_id（claude 会带上历史会话 + 本轮反馈接续），不再塞历史包。
+// 主流程结束后走 handleClaudeTurn → finalizeTaskMultiRepo 现成逻辑收尾。
+export async function continueExistingTask(config: WorkerConfig, task: Task, hooks?: ExecHooks): Promise<void> {
+  const pool = getPool();
+
+  let localPath: string | null = null;
+  try {
+    ensureClaudeAvailable(hooks);
+    localPath = await getTaskLocalPath(pool, task.id, config.workerId);
+    if (!localPath) {
+      throw new Error(`No local path linked for task ${task.id}`);
+    }
+
+    // 续跑反馈正文（claimNextContinuationTask 认领后 continuation_requested 事件已落库，作为锚点）。
+    const note = await getPendingContinuationNote(pool, task.id);
+    if (!note || !note.trim()) {
+      // 理论上 API 端已校验非空；这里兜底直接失败而非空跑 Claude。
+      throw new Error("续跑反馈为空，无法构造 prompt");
+    }
+
+    const isGit = isGitRepo(localPath);
+    const wtPath = isGit ? worktreePathFor(localPath, task.id) : localPath;
+
+    // 非 git 项目：无 worktree / 无 task_repos / 无 PR / 无分支，直接在 localPath 就地续跑。
+    if (!isGit) {
+      const taskAtts = await loadTaskAttachments(task.id);
+      await materializeAttachments(wtPath, taskAtts);
+      const turn = await runTaskClaude(config, task.id, {
+        prompt: continuationPrompt(task, note, taskAtts, wtPath, isGit, null),
+        cwd: wtPath,
+        resumeSessionId: task.claude_session_id ?? undefined,
+        model: task.model,
+        dynamicWorkflow: task.dynamic_workflow,
+        onSpawn: hooks?.onClaudeSpawn
+      });
+      await handleClaudeTurn(config, task, localPath, wtPath, [], turn, isGit, hooks?.onClaudeSpawn);
+      return;
+    }
+
+    // git：先查每个参与仓的 PR 当前状态（per-repo case A/B 判定），命中 MERGED 即落 case B。
+    // 注：getPrState 需要在仓的本地工作目录跑 `gh pr view`；旧 worktree 此刻可能已不在盘上（GC 清过），
+    // 改在 localPath（项目主仓本地）跑——gh 只看 PR url 不看 cwd 内容，结果一致。
+    const ctxs = await loadTaskRepoCtxs(task.id, task.project_id);
+    if (ctxs.length === 0) {
+      throw new Error(`Task ${task.id} has no task_repos rows`);
+    }
+
+    type BranchInfo = { oldWorkBranch: string; newWorkBranch: string; oldPrUrl: string | null };
+    const caseBByCtx = new Map<string, BranchInfo>();
+
+    for (const ctx of ctxs) {
+      if (ctx.sub_status === "skipped" || !ctx.pr_url) {
+        continue;
+      }
+      const repoLocal = repoLocalFor(localPath, ctx);
+      const prState = await getPrState(config, repoLocal, ctx.pr_url);
+      if (prState === "MERGED") {
+        const newBranch = `${ctx.work_branch}-cont-${task.continuation_count}`;
+        caseBByCtx.set(ctx.id, {
+          oldWorkBranch: ctx.work_branch,
+          newWorkBranch: newBranch,
+          oldPrUrl: ctx.pr_url
+        });
+      }
+    }
+
+    // 对 case B 的仓做"切新分支 + 旧 worktree remove + DB 同步"。
+    // 顺序：先 DB 同步 work_branch / 清 pr_url（事务/最终一致：即便后面失败下次也按新分支继续），
+    // 再删除旧 worktree（best-effort，删不掉留给 prepareRepoWorktree 重建时 ensureWorktree 处理）。
+    if (caseBByCtx.size > 0) {
+      await addTaskEvent(pool, task.id, config.workerId, "continuation_branch_rotated",
+        `检测到 ${caseBByCtx.size} 个仓的 PR 已合并，切到新分支续跑`,
+        {
+          continuationCount: task.continuation_count,
+          repos: Array.from(caseBByCtx.entries()).map(([, info]) => ({
+            old: info.oldWorkBranch,
+            new: info.newWorkBranch,
+            oldPrUrl: info.oldPrUrl
+          }))
+        });
+      for (const ctx of ctxs) {
+        const info = caseBByCtx.get(ctx.id);
+        if (!info) continue;
+        await updateTaskRepoBranchAndResetPr(pool, ctx.id, info.newWorkBranch);
+        ctx.work_branch = info.newWorkBranch;
+        ctx.pr_url = null;
+        // 主仓镜像：同步 tasks.work_branch 让 GC / 列表展示一致。
+        if (ctx.role === "main") {
+          await setTaskWorkBranch(pool, task.id, config.workerId, info.newWorkBranch);
+          task.work_branch = info.newWorkBranch;
+        }
+        // 旧 worktree remove：case B 切了新分支，旧路径若还在则 `ensureWorktree` 会以旧 work_branch 复用 → 落到旧分支。
+        // 显式 remove 让 prepareRepoWorktree 走 fresh 路径基于 origin/<base> 新建。删不掉留给 ensureWorktree 兜底（它有 reattach 逻辑）。
+        const oldRepoWt = ctx.role === "main"
+          ? worktreePathFor(localPath, task.id)
+          : path.join(worktreePathFor(localPath, task.id), ctx.relative_path);
+        try {
+          await removeWorktree(repoLocalFor(localPath, ctx), oldRepoWt);
+        } catch (error) {
+          // 不阻塞：prepareRepoWorktree 会基于 origin/<base> fresh 重建，撞 already exists 时再抛清晰错误。
+          console.warn(`[continue] 删除旧 worktree 失败（不阻塞）：${oldRepoWt}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
+
+    // 各仓 prepare：case B 仓 fresh=true（从 origin/<base> 建新分支）；case A 仓 fresh=false（复用 worktree 追加 commit）。
+    for (const ctx of ctxs) {
+      if (ctx.sub_status === "skipped") {
+        continue;
+      }
+      const fresh = caseBByCtx.has(ctx.id);
+      const { repoWt } = await prepareRepoWorktree(localPath, task.id, ctx, fresh);
+      await addTaskEvent(pool, task.id, config.workerId, "worktree_prepared",
+        `${ctx.role === "main" ? "主仓" : ctx.relative_path} 工作树就绪（续跑 #${task.continuation_count}）`,
+        {
+          repoRole: ctx.role,
+          relativePath: ctx.relative_path,
+          workBranch: ctx.work_branch,
+          fresh,
+          continuationCase: fresh ? "B-merged-rotated" : "A-reuse"
+        });
+      await primeRepoDeps(task.id, config.workerId, ctx, repoWt);
+    }
+
+    const taskAtts = await loadTaskAttachments(task.id);
+    await materializeAttachments(wtPath, taskAtts);
+
+    // case B 主仓提示信息（多仓只在 prompt 里展示主仓的变化，避免噪音；多仓 case B 的详情在 task_event 里）。
+    const mainCtx = ctxs.find((c) => c.role === "main");
+    const mainInfo = mainCtx ? caseBByCtx.get(mainCtx.id) ?? null : null;
+
+    const turn = await runTaskClaude(config, task.id, {
+      prompt: continuationPrompt(task, note, taskAtts, wtPath, isGit, mainInfo),
+      cwd: wtPath,
+      resumeSessionId: task.claude_session_id ?? undefined,
+      model: task.model,
+      dynamicWorkflow: task.dynamic_workflow,
+      onSpawn: hooks?.onClaudeSpawn
     });
     await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, isGit, hooks?.onClaudeSpawn);
   } catch (error) {

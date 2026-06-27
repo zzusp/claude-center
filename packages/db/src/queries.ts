@@ -1613,6 +1613,140 @@ export async function claimNextRetryableTask(
   return result.rows[0] ?? null;
 }
 
+// 续跑（continuation）：用户对终态 success/merged 任务点「继续这个任务」时翻 claimed + 打 continuation_requested_at。
+// 与「续接重试」(requestTaskRetry) 的区别：retry 处理 failed/cancelled（带失败原因接着干）；continuation 处理
+// success/merged（用户对交付不满，复用原 Claude 会话再来一轮）。
+//
+// 原子动作（同一条 UPDATE）：
+//   - status → 'claimed'（仍在 listActiveTaskIdsForWorker keep 集合内，worktree 不被 GC 误清；同时把任务从
+//     REPLYABLE_TERMINAL 移出，避免被 claimNextResumableTask 当成「普通终态回复」走 resumeTask）。
+//   - continuation_count += 1（用于命名 -cont-N 分支后缀 / PR body 引用）。
+//   - continuation_requested_at = now()（claimNextContinuationTask 据此扫描；认领后清空）。
+//   - 清空续接前可能残留的「待处理动作」戳与终态清理（cancel_requested_at / retry_requested_at /
+//     finished_at / merge_status / merge_status_checked_at / merge_checked_at / error_message / result）。
+//   - 保留 claimed_by（沿用原 worker 续跑）、claude_session_id（用于 --resume）、pr_url（worker 据此判 case A/B）、
+//     work_branch（case B 时 worker 自行更新为 -cont-N 后缀）。
+//
+// 同事务追加 user 评论（续跑反馈）+ 'continuation_requested' 事件。返回更新后的任务；不满足条件返回 null。
+export async function continueTask(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  note: string
+): Promise<Task | null> {
+  const trimmed = note.trim();
+  if (!trimmed) {
+    throw new Error("continuation_note 不能为空");
+  }
+  const result = await client.query<Task>(
+    `UPDATE tasks
+        SET status = 'claimed',
+            continuation_count = continuation_count + 1,
+            continuation_requested_at = now(),
+            finished_at = null,
+            error_message = null,
+            merge_status = 'unknown',
+            merge_status_checked_at = null,
+            merge_checked_at = null,
+            cancel_requested_at = null,
+            retry_requested_at = null,
+            result = '{}'::jsonb,
+            updated_at = now()
+      WHERE id = $1 AND status IN ('success', 'merged')
+      RETURNING *`,
+    [taskId]
+  );
+  const task = result.rows[0];
+  if (!task) {
+    return null;
+  }
+  // 顺序关键：先落 continuation_requested 事件（作为本轮 note 的下界锚点），再落 user 评论——
+  // 这样 getPendingContinuationNote 用 `created_at > 最近一次 continuation_requested` 谓词时
+  // 能命中本轮反馈（评论时间 > 事件时间）；若反过来会让本轮评论被排在锚点之前漏选。
+  await addTaskEvent(client, taskId, null, "continuation_requested", `用户发起续跑（第 ${task.continuation_count} 轮）`, {
+    continuationCount: task.continuation_count
+  });
+  await client.query(
+    `INSERT INTO task_comments (task_id, author, worker_id, body) VALUES ($1, 'user', NULL, $2)`,
+    [taskId, trimmed]
+  );
+  return task;
+}
+
+// Worker 扫描自己名下、待续跑认领的任务（claimNextContinuationTask 优先级介于 resumable / retryable 之间）。
+// 命中条件：status='claimed' AND claimed_by=$1 AND continuation_requested_at 非空。
+// 认领即原子翻 running + 清 continuation_requested_at（避免重复认领）+ 打 continuation_started 事件
+// （续跑首帧 prompt 拼接的 note 锚点：continuation_requested 与本事件之间的所有 user 评论）。
+export async function claimNextContinuationTask(
+  client: pg.Pool | pg.PoolClient,
+  workerId: string
+): Promise<Task | null> {
+  const result = await client.query<Task>(
+    `WITH candidate AS (
+       SELECT tasks.id
+         FROM tasks
+        WHERE tasks.status = 'claimed'
+          AND tasks.claimed_by = $1
+          AND tasks.continuation_requested_at IS NOT NULL
+        ORDER BY tasks.continuation_requested_at ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+     ),
+     claimed AS (
+       UPDATE tasks
+          SET status = 'running',
+              continuation_requested_at = null,
+              updated_at = now()
+         FROM candidate
+        WHERE tasks.id = candidate.id
+        RETURNING tasks.*
+     ),
+     marker AS (
+       -- 认领即打点：worker 起手续跑（防失败重入；与 resume_claimed 同思路）。
+       INSERT INTO task_events (task_id, worker_id, event_type, message, payload)
+       SELECT id, $1, 'continuation_started', '已认领续跑', jsonb_build_object('continuationCount', continuation_count) FROM claimed
+     )
+     SELECT * FROM claimed`,
+    [workerId]
+  );
+  return result.rows[0] ?? null;
+}
+
+// Worker 续跑首帧 prompt 拼接用：取最近一次 continuation_requested 事件之后的所有 user 评论（按时间拼接）。
+// continueTask 顺序：先落 continuation_requested 事件 → 再落 user 评论 → 评论时间 > 事件时间 → 谓词 `>` 命中本轮反馈。
+// 多轮续跑时只取本轮（最新一次锚点之后），不混入上一轮。worker 认领落 continuation_started 事件不影响此谓词。
+// 无则返回 null。
+export async function getPendingContinuationNote(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string
+): Promise<string | null> {
+  const result = await client.query<{ note: string | null }>(
+    `SELECT string_agg(body, E'\n\n' ORDER BY created_at) AS note
+       FROM task_comments
+      WHERE task_id = $1
+        AND author = 'user'
+        AND created_at > COALESCE(
+          (SELECT max(created_at) FROM task_events
+            WHERE task_id = $1 AND event_type = 'continuation_requested'),
+          'epoch'::timestamptz)`,
+    [taskId]
+  );
+  return result.rows[0]?.note ?? null;
+}
+
+// 单任务状态查询（TOCTOU 二次校验用）：gcWorktrees 遍历删除前对每个待删 taskId 再查一次现状，
+// 若状态已翻入「需保留 worktree」的集合（claimed/running/waiting/success/merged/failed/cancelled）则跳过删除。
+// 不存在返回 null（调用方按「真孤儿」处理，仍可清掉残留树）。
+export async function getTaskStatusById(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string
+): Promise<string | null> {
+  const result = await client.query<{ status: string }>(
+    `SELECT status FROM tasks WHERE id = $1 LIMIT 1`,
+    [taskId]
+  );
+  return result.rows[0]?.status ?? null;
+}
+
 // 任务暂停等待用户回复：记下续接所需的 Claude session id。
 export async function setTaskWaiting(
   client: pg.Pool | pg.PoolClient,
@@ -2861,6 +2995,41 @@ export async function updateTaskRepoRelativePath(
   await client.query(
     `UPDATE task_repos SET relative_path = $2, updated_at = now() WHERE id = $1`,
     [taskRepoId, relativePath]
+  );
+}
+
+// 续跑 case B（原 PR 已合）专用：worker 把分支换成 -cont-<N> 新分支，并清空 pr_url（让 finalize 走新建 PR 路径）。
+// 同步刷新 sub_status='pending'（让 finalize 不被旧 pr_created/no_changes 状态误导）。
+export async function updateTaskRepoBranchAndResetPr(
+  client: pg.Pool | pg.PoolClient,
+  taskRepoId: string,
+  newWorkBranch: string
+): Promise<void> {
+  await client.query(
+    `UPDATE task_repos
+        SET work_branch = $2,
+            pr_url = NULL,
+            sub_status = 'pending',
+            error_message = NULL,
+            updated_at = now()
+      WHERE id = $1`,
+    [taskRepoId, newWorkBranch]
+  );
+}
+
+// 续跑 case B：把任务的主仓 work_branch 镜像（tasks.work_branch）同步成 -cont-<N>。
+// 仅 worker 续跑路径调用，不与 updateTask 草稿编辑路径冲突（后者只在 PUBLISHABLE_STATUSES 命中）。
+export async function setTaskWorkBranch(
+  client: pg.Pool | pg.PoolClient,
+  taskId: string,
+  workerId: string,
+  newWorkBranch: string
+): Promise<void> {
+  await client.query(
+    `UPDATE tasks
+        SET work_branch = $3, updated_at = now()
+      WHERE id = $1 AND claimed_by = $2`,
+    [taskId, workerId, newWorkBranch]
   );
 }
 

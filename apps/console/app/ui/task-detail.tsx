@@ -3,7 +3,7 @@
 import type { Task, TaskEvent, TaskPredecessor, TaskRepo, Worker } from "@claude-center/db";
 import {
   ChevronLeft, Clock, Cpu, ExternalLink, FolderGit2, GitBranch, GitPullRequest, Hash,
-  Pencil, RefreshCw, RotateCcw, Send, Trash2, X
+  Pencil, PlayCircle, RefreshCw, RotateCcw, Send, Trash2, X
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -45,6 +45,11 @@ export default function TaskDetailPage({
   const [editing, setEditing] = useState(false);
   const [reactivating, setReactivating] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  // 续跑（已完成任务点「继续这个任务」）：开启表单弹窗采集反馈正文，提交后调 PATCH action='continue'。
+  const [continuingOpen, setContinuingOpen] = useState(false);
+  const [continuingNote, setContinuingNote] = useState("");
+  const [continuingSubmitting, setContinuingSubmitting] = useState(false);
+  const [continuingError, setContinuingError] = useState<string | null>(null);
   // Tab 化后顶栏 actions：编辑走 Drawer、删除走 useConfirm，与列表页一致。
   const [activeTab, setActiveTab] = useState<DetailTabKey>("overview");
   const { confirm, dialog } = useConfirm();
@@ -176,6 +181,38 @@ export default function TaskDetailPage({
     }
   }
 
+  // 继续这个任务（续跑）：success/merged 终态用户对交付不满意，带反馈让 Claude 复用原会话再来一轮。
+  // API 端原子翻 claimed + continuation_count++ + 写 user 评论 + 'continuation_requested' 事件，
+  // 同 worker 下一轮认领（claimNextContinuationTask）按 case A（PR 未合：复用分支）/case B（PR 已合：-cont-N 新分支）接续。
+  async function submitContinue() {
+    const note = continuingNote.trim();
+    if (!note) {
+      setContinuingError("请填写反馈：哪没修好 / 还需要补什么");
+      return;
+    }
+    setContinuingSubmitting(true);
+    setContinuingError(null);
+    try {
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "continue", continuationNote: note })
+      });
+      if (response.ok) {
+        await loadTask();
+        setContinuingOpen(false);
+        setContinuingNote("");
+      } else {
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        setContinuingError(data.error ?? "提交失败，请稍后重试");
+      }
+    } catch (error) {
+      setContinuingError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setContinuingSubmitting(false);
+    }
+  }
+
   const isBlocked = task.status === "pending" && (task.blocked ?? false);
   const canPublish = (task.status === "draft" || task.status === "scheduled") && canCreateTask;
   // 在途态可取消（已认领 / 执行中 / 等待回复）。
@@ -187,6 +224,8 @@ export default function TaskDetailPage({
   // 失败/已取消可续接重试（保留工作树/会话，接着干）或激活回草稿（清空重写）。
   const canRetry = (task.status === "failed" || task.status === "cancelled") && canCreateTask;
   const canReactivate = canRetry;
+  // 已完成（success / merged）任务可发起「继续这个任务」续跑——复用原 Claude 会话 + 反馈拼到首帧。
+  const canContinue = (task.status === "success" || task.status === "merged") && canCreateTask;
 
   // 生命周期:已完成节点根据终态显示「执行完成 / 已合并落地 / 执行失败 / 已取消」;
   // success/merged 都是终态,无中间签收步骤。
@@ -257,6 +296,20 @@ export default function TaskDetailPage({
               <button type="button" className="btn btn-primary btn-sm" disabled={retrying} onClick={() => void retry()}>
                 <RotateCcw size={14} />
                 {retrying ? "重试中…" : "续接重试"}
+              </button>
+            ) : null}
+            {canContinue ? (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => {
+                  setContinuingNote("");
+                  setContinuingError(null);
+                  setContinuingOpen(true);
+                }}
+              >
+                <PlayCircle size={14} />
+                继续这个任务
               </button>
             ) : null}
             {canReactivate ? (
@@ -379,6 +432,64 @@ export default function TaskDetailPage({
             onCancel={() => setEditing(false)}
           />
         ) : null}
+      </FormModal>
+
+      <FormModal
+        open={continuingOpen}
+        title="继续这个任务"
+        size="md"
+        onClose={() => {
+          if (continuingSubmitting) return;
+          setContinuingOpen(false);
+        }}
+      >
+        <form
+          className="form"
+          style={{ width: "100%" }}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submitContinue();
+          }}
+        >
+          <section className="form-section">
+            <p className="field-hint" style={{ marginBottom: 12 }}>
+              原 Claude 会话将被恢复（<code>--resume</code>），反馈会作为首帧拼到 prompt。
+              {task.status === "merged"
+                ? "上一轮 PR 已合并，本轮会在新分支续跑并新开 PR。"
+                : "上一轮 PR 仍可改，本轮会在原分支追加 commit。"}
+            </p>
+            <div className="field">
+              <label className="field-label">反馈：哪没修好 / 还需要补什么</label>
+              <textarea
+                rows={6}
+                autoFocus
+                value={continuingNote}
+                onChange={(event) => setContinuingNote(event.target.value)}
+                placeholder="例如：登录按钮点击后没有弹出登录框；缺少表单校验；还需要加单元测试…"
+                disabled={continuingSubmitting}
+              />
+            </div>
+          </section>
+          {continuingError ? <div className="error-box">{continuingError}</div> : null}
+          <div className="form-actions">
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setContinuingOpen(false)}
+              disabled={continuingSubmitting}
+            >
+              取消
+            </button>
+            <button
+              type="submit"
+              className="btn btn-primary btn-sm"
+              disabled={continuingSubmitting || !continuingNote.trim()}
+            >
+              <PlayCircle size={14} />
+              {continuingSubmitting ? "提交中…" : "继续执行"}
+            </button>
+          </div>
+        </form>
       </FormModal>
 
       {dialog}

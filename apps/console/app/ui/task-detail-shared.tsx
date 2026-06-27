@@ -48,7 +48,10 @@ export const EVENT_META: Record<string, EventMeta> = {
   cancel_requested: { label: "请求取消", tone: "cancelled" },
   cancelled: { label: "已取消", tone: "cancelled" },
   retry_requested: { label: "已请求续接重试", tone: "pending" },
-  merged: { label: "已合并", tone: "merged" }
+  merged: { label: "已合并", tone: "merged" },
+  continuation_requested: { label: "用户发起续跑", tone: "pending" },
+  continuation_started: { label: "已认领续跑", tone: "queued" },
+  continuation_branch_rotated: { label: "续跑·PR 已合并·切新分支", tone: "running" }
 };
 
 export function eventMeta(type: string): EventMeta {
@@ -56,7 +59,7 @@ export function eventMeta(type: string): EventMeta {
 }
 
 // 「执行起点」事件:每个都开启一轮新的执行尝试(attempt),时间线据此把事件切成可折叠的轮次。
-export const ROUND_START_EVENTS = new Set(["running", "resumed", "rerun_started", "retry_started"]);
+export const ROUND_START_EVENTS = new Set(["running", "resumed", "rerun_started", "retry_started", "continuation_started"]);
 
 // 失败类事件:任务当前停在 failed/cancelled 时,这些节点旁渲染「续接重试」入口。
 export const FAILURE_EVENTS = new Set(["failed", "cancelled", "auto_reply_blocked"]);
@@ -67,6 +70,7 @@ export const EXECUTION_LINK_EVENTS = new Set([
   "resumed",
   "rerun_started",
   "retry_started",
+  "continuation_started",
   "claude_turn_finished"
 ]);
 

@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import {
   addTaskComment,
+  claimNextContinuationTask,
   claimNextConversationTurn,
   claimNextDirectCommand,
   claimNextResumableTask,
@@ -56,6 +57,7 @@ import {
   type WorkerProjectConfig
 } from "./config.js";
 import {
+  continueExistingTask,
   executeConversationTurn,
   executeDirectCommand,
   executeTask,
@@ -1224,7 +1226,7 @@ export class ClaudeCenterWorker {
       return true;
     }
 
-    // 优先级:续接等待中任务 > 失败/取消续接重试 > 全新任务。
+    // 优先级:续接等待中任务 > 失败/取消续接重试 > 已完成任务续跑 > 全新任务。
     // 「打回重跑」「合并清理」分支均已移除——前者随人工验收一起去掉,后者由 Console 30s 轮询 + 翻 merged
     // 直接完成,Worker 不再做 worktree/分支清理(spec docs/spec/drop-accepted-rejected.md)。
     const resumable = await claimNextResumableTask(pool, this.config.workerId);
@@ -1245,6 +1247,19 @@ export class ClaudeCenterWorker {
         (hooks) => retryFailedTask(this.config, retryable, hooks)
       );
       this.publishTask(retryable);
+      return true;
+    }
+
+    // 续跑：用户对已完成（success/merged）任务点「继续这个任务」（continuation_requested_at 非空）的任务。
+    // 复用原 Claude 会话（--resume）+ 区分两种终态：success 复用 work_branch 追加 commit；
+    // merged 用 -cont-<N> 后缀新分支 + 新 PR（细节见 executor.continueExistingTask）。
+    const continuation = await claimNextContinuationTask(pool, this.config.workerId);
+    if (continuation) {
+      this.startActive(
+        { key: `task:${continuation.id}`, taskId: continuation.id, kind: "task", title: continuation.title },
+        (hooks) => continueExistingTask(this.config, continuation, hooks)
+      );
+      this.publishTask(continuation);
       return true;
     }
 

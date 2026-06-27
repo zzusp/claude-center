@@ -223,6 +223,11 @@ export type Task = {
   // 重试请求时间戳：用户对 failed/cancelled 任务点「重试」时打此戳；Worker 的 claimNextRetryableTask
   // 据此续接重跑并清空。未请求为 null。
   retry_requested_at: string | null;
+  // 续跑轮次：每次从 success/merged 由「继续这个任务」复活 +1，用于命名 -cont-N 分支后缀 / PR body 引用。默认 0。
+  continuation_count: number;
+  // 续跑请求时间戳：Console 对 success/merged 任务发起续跑时打此戳；Worker 的 claimNextContinuationTask
+  // 据此认领并清空（同 retry_requested_at 设计）。未请求为 null。
+  continuation_requested_at: string | null;
   // 任务开发累计 token 用量：Worker 每轮 claude 执行后把该轮 usage（input+output+两类 cache）求和逐轮累加。
   // DB 为 bigint（pg 原样返回字符串）；listTasks 统一转 number 供列表展示 / 排序。默认 0。
   total_tokens: number;

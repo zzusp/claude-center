@@ -1,6 +1,20 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, type Dirent } from "node:fs";
 import path from "node:path";
+import { getPool, getTaskStatusById } from "@claude-center/db";
 import { runCommand, type CommandResult } from "./shell.js";
+
+// gcWorktrees TOCTOU 二次校验：keep 集合是 tick 起点的快照，遍历删除前对每个待删 taskId 再查一次现状,
+// 防止与 continueTask（success/merged → claimed）的并发：API 端原子翻 claimed 后该 worktree 应当被保留,
+// 但 GC 仍在用旧 keep 集合会误清。这些状态下都不应删 worktree。
+const KEEP_AFTER_RECHECK = new Set([
+  "claimed",
+  "running",
+  "waiting",
+  "success",
+  "merged",
+  "failed",
+  "cancelled"
+]);
 
 // 真并发执行的工作树隔离：每个工作类任务一棵独立 git worktree，互不踩工作树（含同项目并发）。
 // 主仓（localPath）只用于 fetch 与 worktree 管理，不被切到工作分支，全程保持稳定。
@@ -560,8 +574,24 @@ export async function gcWorktrees(localPath: string, keepTaskIds: Set<string>): 
       continue;
     }
     const taskId = name.slice(TASK_WT_PREFIX.length);
-    if (!keepTaskIds.has(taskId)) {
-      await removeWorktree(localPath, wtPath);
+    if (keepTaskIds.has(taskId)) {
+      continue;
     }
+    // TOCTOU 二次校验：keep 集合来自 tick 起点 SELECT，与 continueTask（success/merged → claimed）等
+    // 并发可能让本 task 在 listing→remove 之间翻入 KEEP_AFTER_RECHECK；删除前再查一次现状，
+    // 仍在该集合则跳过（保留 worktree），不在或不存在才真删（真孤儿）。
+    let currentStatus: string | null = null;
+    try {
+      currentStatus = await getTaskStatusById(getPool(), taskId);
+    } catch (error) {
+      // 查不到状态时保守跳过本轮删除：宁可下轮 GC 再清，也不冒「正在跑被误清」的风险。
+      console.warn(`[gc] 二次校验状态查询失败，跳过 ${wtPath}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    if (currentStatus !== null && KEEP_AFTER_RECHECK.has(currentStatus)) {
+      // 与 keep 集合 race：本 tick 起点该 task 不在 keep（如 success），现在已翻 claimed（用户刚发起续跑），不删。
+      continue;
+    }
+    await removeWorktree(localPath, wtPath);
   }
 }

@@ -1,4 +1,5 @@
 import {
+  continueTask,
   createTaskRepos,
   deleteTask,
   deleteTaskRepos,
@@ -100,6 +101,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       model?: TaskModel;
       dynamicWorkflow?: boolean;
       scheduledAt?: string | null;
+      // 续跑（continueTask）：用户对终态 success/merged 任务点「继续这个任务」时携带的反馈正文。
+      continuationNote?: string;
       // 前置任务（spec docs/spec/task-acceptance-dependencies.md）：编辑时整批替换 task_dependencies。
       // 显式数组才替换；undefined 时保持原依赖不动（兼容不带依赖 UI 的旧前端）。
       dependsOn?: string[];
@@ -248,6 +251,24 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const task = await requestTaskRetry(getPool(), id);
       if (!task) {
         return NextResponse.json({ error: "无法重试：仅失败或已取消的任务可续接重试" }, { status: 409 });
+      }
+      publishTaskUpserted(task);
+      return NextResponse.json({ task });
+    }
+
+    // 续跑（continueTask）：用户对终态 success/merged 任务点「继续这个任务」并给出反馈正文。
+    // 处理路径（落库由 db.continueTask 原子完成）：status→claimed + continuation_count++ +
+    // continuation_requested_at=now()，同事务追加 user 评论与 'continuation_requested' 事件。
+    // Worker 端由 claimNextContinuationTask 扫到后翻 running 并按 case A/B 接续执行
+    //（A=原 PR 还可改：复用分支追加 commit；B=原 PR 已合：新建 -cont-N 分支与新 PR）。
+    if (body.action === "continue") {
+      const note = (body.continuationNote ?? "").trim();
+      if (!note) {
+        return badRequest("继续任务需要填写反馈（哪没修好 / 还需要补什么）");
+      }
+      const task = await continueTask(getPool(), id, note);
+      if (!task) {
+        return NextResponse.json({ error: "无法继续：仅已完成（success / merged）任务可发起续跑" }, { status: 409 });
       }
       publishTaskUpserted(task);
       return NextResponse.json({ task });
