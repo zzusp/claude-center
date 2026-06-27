@@ -15,6 +15,7 @@ export function ChatView({
   initialProjectId,
   initialConversationId,
   projects,
+  conversationsByProject,
   workers,
   loaded,
   canCommand,
@@ -25,6 +26,9 @@ export function ChatView({
   initialProjectId: string | null;
   initialConversationId: string | null;
   projects: Project[];
+  // 进页面时由 /api/projects?include=conversations 一次拿齐的「每个项目下的对话」预载缓存。
+  // 项目展开即从这里读取直接显示，避免再发 /api/conversations?projectId=X 触发「加载中…」。
+  conversationsByProject: Record<string, Conversation[]>;
   workers: Worker[];
   loaded: boolean;
   canCommand: boolean;
@@ -35,8 +39,14 @@ export function ChatView({
 }) {
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(initialProjectId);
   const [activeConvId, setActiveConvId] = useState<string | null>(initialConversationId);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [convsLoaded, setConvsLoaded] = useState(false);
+  const [conversations, setConversations] = useState<Conversation[]>(
+    initialProjectId ? conversationsByProject[initialProjectId] ?? [] : []
+  );
+  // convsLoaded 表征「列表已可信展示」：有预载缓存或刚拉过一次即 true。
+  // 项目展开时若 conversationsByProject 已含该项目对话，直接 true → 不闪「加载中…」。
+  const [convsLoaded, setConvsLoaded] = useState(
+    !initialProjectId || initialProjectId in conversationsByProject
+  );
   const [error, setError] = useState("");
   const [composing, setComposing] = useState(false);
   const [composeProjectId, setComposeProjectId] = useState<string | null>(null);
@@ -61,11 +71,20 @@ export function ChatView({
     }
   }, [loaded, projects, initialProjectId, onProjectChange]);
 
-  // 切换展开项目时复位会话态，避免上一项目的对话残影。
+  // 切换展开项目时复位会话态：若上层已预载该项目对话则直接喂初值（避免「加载中…」闪烁），
+  // 否则置空等首次轮询回数据。
   useEffect(() => {
-    setConversations([]);
-    setConvsLoaded(false);
+    if (expandedProjectId && expandedProjectId in conversationsByProject) {
+      setConversations(conversationsByProject[expandedProjectId] ?? []);
+      setConvsLoaded(true);
+    } else {
+      setConversations([]);
+      setConvsLoaded(!expandedProjectId);
+    }
     setRenamingId(null);
+    // conversationsByProject 仅作初值快照，不进 deps 否则每轮上层 refresh 都会把当前展开项目
+    // 的本地实时态（含 generating 翻转、新增对话）覆盖回上一拍的快照值。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedProjectId]);
 
   const filterQuery = useMemo(() => {
