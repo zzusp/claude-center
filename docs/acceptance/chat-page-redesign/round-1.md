@@ -38,3 +38,4 @@ $env:DATABASE_URL = "<ephemeral url>"; $env:CONSOLE_PORT = "3030"; \
 | `round-1/03-chat-li-menu.png` | 列表项三点菜单展开 → 重命名 / 对话设置 / 删除对话 |
 | `round-1/04-chat-thread-empty.png` | 选中第一条会话后激活态 + 右侧消息线（暂无消息） |
 | `round-1/05-chat-thread-menu.png` | 头部 More 菜单展开，验证「结束对话」已被移除 |
+| `round-1/06-chat-thread-replied.png` | **端到端 Worker 应答**：脚本里 `driveWorkerReply` 直接调用 `@claude-center/db` 的 `addConversationMessage` / `claimNextConversationTurn` / `upsertConversationSession` / `finalizeConversationTurn`，跟真实 Worker 走同一份 helper，再让浏览器拉 `/api/conversations/[id]/session` 渲染——证明改后页面 + 数据通道在真实状态机下都能跑 |

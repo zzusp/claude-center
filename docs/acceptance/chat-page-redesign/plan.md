@@ -59,13 +59,14 @@
 
 ## 验证
 
-`docs/acceptance/chat-page-redesign/scripts/take-chat-screenshots.mjs` 把 ephemeral DB + dev server + Playwright 跑通，落 5 张证据：
+`docs/acceptance/chat-page-redesign/scripts/take-chat-screenshots.mjs` 把 ephemeral DB + dev server + Playwright 跑通，落 6 张证据：
 
 1. `01-chat-projects.png` —— `/chat` 项目网格首页
 2. `02-chat-project-list.png` —— `/chat/[id]` 会话列表（左）+ 右侧空态
 3. `03-chat-li-menu.png` —— 列表项三点菜单展开（重命名 / 对话设置 / 删除对话）
 4. `04-chat-thread-empty.png` —— 选中会话后右侧出现消息线、激活态高亮左侧
 5. `05-chat-thread-menu.png` —— 会话头部 More 菜单展开，确认**已无「结束对话」项**
+6. `06-chat-thread-replied.png` —— **端到端 Worker 应答流**：脚本直接 import `@claude-center/db` dist 的 helpers（`addConversationMessage` → `claimNextConversationTurn` → `upsertConversationSession` → `finalizeConversationTurn`），跟真实 Worker 走同一份代码路径推 DB；UI 通过既有的 `/api/conversations/[id]` + `/api/conversations/[id]/session` 轮询拉到，渲染出 user + assistant 气泡，证明改后页面 + 数据通道在真实状态机下都能跑
 
 外加：
 

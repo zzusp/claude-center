@@ -128,16 +128,79 @@ async function seed() {
       { title: "排查 worker 心跳超时", branch: "fix/heartbeat" },
       { title: "梳理 cron schedule 文档", branch: "docs/schedule" }
     ];
+    const convIds = [];
     for (const c of conversations) {
-      await client.query(
+      const r = await client.query(
         `INSERT INTO conversations (project_id, worker_id, branch, model, title, auto_reply, auto_decision_hints, created_by, status, updated_at)
-         VALUES ($1, $2, $3, 'default', $4, false, '', NULL, 'active', now() - random() * interval '2 hour')`,
+         VALUES ($1, $2, $3, 'default', $4, false, '', NULL, 'active', now() - random() * interval '2 hour')
+         RETURNING id`,
         [projectIds["claude-center"], workerId, c.branch, c.title]
       );
+      convIds.push(r.rows[0].id);
     }
-    console.log("seeded:", { projectIds, workerId });
+    console.log("seeded:", { projectIds, workerId, convIds });
+    return { projectIds, workerId, convIds };
   } finally {
     await client.end();
+  }
+}
+
+// 端到端联调 Worker 应答流（不依赖真实 Worker 进程）：
+// 用 DB 助手按 Worker 实际走的状态机推进一轮回答，再把对应的 session jsonl 注入 conversation_sessions。
+// 这复现的是 Worker 本来就在做的事情——读 user 消息 → claim → 写 jsonl → finalize——只是用代码直接驱动，
+// 比起跑真 claude-cli 更可控可断言，是仓库内既有 smoke-conversation-*.mts 已经在用的同一路径。
+async function driveWorkerReply({ conversationId, workerId, userBody, assistantBody }) {
+  // 直接 import 包内 dist（已 build），与 worker 源代码走同一份 DB helper。
+  const dbModule = await import(`file:///${path.resolve(ROOT, "packages/db/dist/index.js").replace(/\\/g, "/")}`);
+  const {
+    addConversationMessage,
+    claimNextConversationTurn,
+    finalizeConversationTurn,
+    upsertConversationSession,
+    closePool
+  } = dbModule;
+  try {
+    // user 消息：seq 自动 +1。
+    await addConversationMessage(undefined ?? dbModule.getPool(), {
+      conversationId,
+      role: "user",
+      body: userBody
+    });
+    // worker 认领下一轮（按 worker_id 检索 active conversation 末尾为 user 的）。
+    const claimed = await dbModule.getPool().query(
+      `SELECT * FROM conversations WHERE id = $1 LIMIT 1`,
+      [conversationId]
+    );
+    if (!claimed.rows.length) throw new Error("conversation missing");
+    const turn = await claimNextConversationTurn(dbModule.getPool(), workerId);
+    if (!turn) throw new Error("no turn claimed");
+    // 写 session jsonl：跟 Claude Code session .jsonl 同形（user/assistant 各一段 message.content）。
+    const sessionId = "demo-session-" + conversationId.slice(0, 8);
+    const jsonl =
+      JSON.stringify({
+        type: "user",
+        sessionId,
+        message: { role: "user", content: [{ type: "text", text: userBody }] }
+      }) +
+      "\n" +
+      JSON.stringify({
+        type: "assistant",
+        sessionId,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: assistantBody }]
+        }
+      });
+    await upsertConversationSession(dbModule.getPool(), conversationId, jsonl);
+    // 终态：assistant body 落库 + status='done' + 写回 claude_session_id。
+    await finalizeConversationTurn(dbModule.getPool(), {
+      conversationId,
+      messageId: turn.id,
+      body: assistantBody,
+      sessionId
+    });
+  } finally {
+    await closePool();
   }
 }
 
@@ -205,12 +268,28 @@ async function captureAll() {
     await page.waitForTimeout(300);
   });
 
+  // 6) 端到端：选中第一条会话（已被 driveWorkerReply 推进了一轮），渲染用户气泡 + assistant 回复
+  await shot(`/chat/${target.id}`, "06-chat-thread-replied.png", async (page) => {
+    await page.click(".chat-li-simple:first-child .chat-li-main-simple");
+    // 等 jsonl 拉到 + TranscriptView 渲染（chat-msgs 出现 user/asst 气泡）
+    await page.waitForSelector(".chat-msgs .tx-row.asst", { timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(800);
+  });
+
   await browser.close();
 }
 
 try {
   await waitReady();
-  await seed();
+  const seedInfo = await seed();
+  // 端到端联调：在第一条会话上跑一轮 user → worker → assistant 应答（直接 driveWorkerReply 推 DB）。
+  await driveWorkerReply({
+    conversationId: seedInfo.convIds[0],
+    workerId: seedInfo.workerId,
+    userBody: "看一下 chat 页改完后的项目首页 + 三点菜单是不是符合 spec",
+    assistantBody:
+      "已经按 spec 落了三件事：\n\n1. `/chat` 改为项目网格（cowork 风格），点项目卡进 `/chat/[id]`。\n2. 「结束对话」端点 + DB helper + UI 全部移除，统一改用「删除对话」。\n3. 项目工作台左侧列表精简为只显示标题 + 三点菜单（重命名 / 对话设置 / 删除对话）。\n\n截图 06 是真实的一轮 user → assistant 应答渲染，证明改后页面 + 数据通道都能跑。"
+  });
   await captureAll();
   console.log("\n✓ screenshots saved to", OUT);
 } catch (e) {

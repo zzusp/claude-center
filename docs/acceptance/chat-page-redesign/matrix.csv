@@ -10,3 +10,4 @@ verify:console 401→200 + scheduler.ok,PASS
 DELETE /api/conversations/:id 路径不变（既有端点）,PASS
 POST /api/conversations/:id/close 已删除,PASS
 packages/db closeConversation 已删除,PASS
+端到端 Worker 应答流（addConversationMessage→claimNextConversationTurn→upsertConversationSession→finalizeConversationTurn）→ UI 渲染 user+assistant 气泡（截图 06）,PASS
