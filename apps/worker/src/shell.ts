@@ -164,6 +164,15 @@ export function runCommand(
         );
       }
     }
+    // Windows 永远不传 detached:true。Node 把 detached:true 翻成 DETACHED_PROCESS，会让
+    // PowerShell（pwsh.exe -Command ...）启动后立刻退 0、根本不执行脚本体（实测 -File 同样如此；
+    // cmd.exe 也会断掉孙子进程的 stdio 继承）——表现为 stdoutLogFile 始终 0 字节、jsonl 缺本轮 assistant
+    // 文本，对话轮永远落到「无完整结果」失败文案。Windows 不需要 DETACHED_PROCESS 来保「父退子活」：
+    // 默认子进程不与父绑 Job Object，父退出后子进程继续运行；脱离 stdio 由 stdio:[ignore,fd,fd]/'ignore'
+    // 完成，事件循环独立由 child.unref() 保证。POSIX 仍按原意 setsid（detached || newProcessGroup）。
+    const spawnDetached = process.platform === "win32"
+      ? false
+      : Boolean(options.detached || options.newProcessGroup);
     const child = spawn(command, args, {
       // 默认 shell:false（直接 CreateProcess，不经 cmd.exe）。Windows 下 shell:true 会把 args
       // 用空格拼成命令行交给 cmd.exe 且不给含空格的参数加引号，commit message / PR 标题等被按空格
@@ -176,9 +185,8 @@ export function runCommand(
       windowsHide: true,
       env: options.env ?? process.env,
       // detached 下 stdio 必须脱离父进程管道：保留管道会让子进程在父退出后随断管而亡（实测结论）。
-      // detached 或 newProcessGroup 任一为真都让子进程成为新进程组组长；但仅 detached 时改写 stdio。
       // 优先用 logFd（文件 fd，OS 持有、不依赖父进程）；无 fd 时仍用 'ignore'（默认行为）。
-      detached: Boolean(options.detached || options.newProcessGroup),
+      detached: spawnDetached,
       stdio: options.detached ? (logFd != null ? ["ignore", logFd, logFd] : "ignore") : undefined
     });
     // 父进程立即关掉本地复制的文件 fd——子进程已继承（OS 复制了一份给它），父这边持有反而占用资源。
