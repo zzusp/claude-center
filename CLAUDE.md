@@ -15,6 +15,23 @@ npm -w @claude-center/relay run selftest   # relay 自验证：投递/保活/Las
 - **build 绿 ≠ dev 绿**：`instrumentation.ts` / edge runtime 的问题在 dev（Turbopack）与 build（webpack）下表现不同（见下「Next.js 编译坑」）。改 instrumentation / 中间件 / 服务端入口后，必须 `verify:console` 看到 `401→200` 且 `scheduler.ok:true` 才算验证过，光 `build` 绿是假信号。
 - `verify:console` 默认起在 `3000`；撞端口用 `$env:CONSOLE_PORT="<空闲口>"`。
 
+## ❗ e2e 验证：写「未跑/无法验证」前必走三步硬线
+
+发现自己想在 PR body / `matrix.csv` / Test Plan 写「未跑」「无法验证」「环境不具备」「需 X 才能验证但 X 不在」时，**先停一下**，按顺序做完这三步——三步全做完仍跑不通才允许写「未跑」，且**必须附三要素**：尝试的命令 + 实际报错 + 为什么无法绕开。空口「环境不具备」「需 Worker」「无法验证」一律视为任务未完成（任务下发 prompt 与本规约一致，见 `apps/worker/src/executor.ts:e2eGuidanceSection`）。
+
+1. **grep 仓库现有 e2e 资产**：`ls scripts/`、`grep -rl 'mock-\|fake-\|smoke-\|ephemeral\|verify-'`、看 `docs/acceptance/*/scripts/`。找到的脚本必须实际跑一次（带 `--check` / `--help` 或直接小输入跑都行），看真实报错而不是猜它需要什么。
+2. **检查契约层有没有可代码模拟路径**：被验证的组件跟外界的契约是 RPC 还是 DB 还是文件？本仓约定 **Worker ↔ Console 的契约就是 DB（DB 唯一权威 + 双向轮询）**，所以「需要真 Worker / 真 Console」几乎都是错觉——直接 `import` `@claude-center/db` 的 helpers 推 DB 状态机，在可观察契约上跟真实进程等价。范本：`scripts/smoke-conversation-cancel.mts`、`docs/acceptance/chat-page-redesign/scripts/take-chat-screenshots.mjs:driveWorkerReply`。
+3. **复读本仓 e2e 工具栈白名单**：`npm run verify:console` / `npm run db:ephemeral` / `node scripts/fake-gh-hook.cjs` / `apps/console` playwright —— 白名单上列出的 = 已经验证可用、必须先试。
+
+**反例与等价路径**（已栽过的，别重蹈；详见 `apps/worker/src/executor.ts:e2eGuidanceSection`）：
+
+| ❌ 借口 | ✅ 等价路径 |
+| --- | --- |
+| 端到端 Worker 应答需要真 Worker，ephemeral 无 Worker，未跑 | import `@claude-center/db` 的 `addConversationMessage` → `claimNextConversationTurn` → `upsertConversationSession` → `finalizeConversationTurn`，跟真 Worker 走同一份 helper |
+| 需要真 GitHub API 才能验 PR / Issue 操作 | `node scripts/fake-gh-hook.cjs` 拦截 GitHub API 做 e2e |
+| 共享 dev 库 schema 不稳，无法验迁移 / 鉴权 | `npm run db:ephemeral` 建临时库跑全量迁移 + DROP，零污染 |
+| UI 改动需要人工浏览器验证 | `apps/console` 已配 playwright，参考 `scripts/take-screenshots.mjs` 驱动真浏览器截图 |
+
 ## SSE 中转服务（`apps/relay`，可选实时线）
 
 - 在「DB 唯一权威 + 双向轮询」之上叠加一条低延迟 SSE 线：可用时优先走中转（亚秒级），不可用时退回数据库轮询（功能不降级）。完整方案见 `docs/spec/sse-relay-service.md`。

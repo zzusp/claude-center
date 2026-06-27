@@ -8,6 +8,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 实时对话页重设计：`/chat` 改为项目网格首页（cowork 风格），点项目卡进 `/chat/[projectId]` 项目工作台；左侧会话列表精简为 Claude 网页版风格，每条只展示标题 + 右侧三点菜单（重命名 / 对话设置 / 删除对话）。原 `/chat` 顶部「按项目筛选」下拉去掉（已经按项目锁定）。
+- 「结束对话」概念整体下线：`apps/console/app/api/conversations/[id]/close/route.ts` 端点与 `packages/db/src/queries.ts:closeConversation` 删除；`POST /api/conversations/:id/messages` 不再做 `status='active'` 校验；`chat-thread` 头部菜单的「结束对话」替换为「删除对话」（沿用既有 `DELETE /api/conversations/:id` + `useConfirm`）。
+
 ## [0.2.14] - 2026-06-27
 
 ### Added

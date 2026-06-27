@@ -1,0 +1,13 @@
+case,round-1
+typecheck (5 pkgs),PASS
+build (含 /chat 与 /chat/[projectId] 路由),PASS
+verify:console 401→200 + scheduler.ok,PASS
+/chat 项目网格首页（截图 01）,PASS
+/chat/[id] 会话列表（仅标题；截图 02）,PASS
+列表项三点菜单：重命名 / 对话设置 / 删除对话（截图 03）,PASS
+选中会话后激活态 + 消息线（截图 04）,PASS
+会话头部 More 菜单已无「结束对话」（截图 05）,PASS
+DELETE /api/conversations/:id 路径不变（既有端点）,PASS
+POST /api/conversations/:id/close 已删除,PASS
+packages/db closeConversation 已删除,PASS
+端到端 Worker 应答流（addConversationMessage→claimNextConversationTurn→upsertConversationSession→finalizeConversationTurn）→ UI 渲染 user+assistant 气泡（截图 06）,PASS
