@@ -1,14 +1,20 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "../../lib/session";
-import ChatProjectsClient from "./chat-projects-client";
+import ChatShellClient from "./chat-shell-client";
 
 export const dynamic = "force-dynamic";
 
-// 实时对话首页：项目网格。点击项目卡进入 /chat/[projectId] 的会话工作台。
+// 实时对话首页：项目树侧栏（无项目展开）+ 右侧空态。
 export default async function Page() {
   const user = await getCurrentUser();
   if (!user) {
     redirect("/login");
   }
-  return <ChatProjectsClient canCommand={user.permissions.includes("command.create")} />;
+  return (
+    <ChatShellClient
+      initialProjectId={null}
+      initialConversationId={null}
+      canCommand={user.permissions.includes("command.create")}
+    />
+  );
 }

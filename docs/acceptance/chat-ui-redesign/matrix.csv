@@ -1,0 +1,6 @@
+case,round-1
+sidebar empty state (/chat),PASS
+sidebar expanded with conversation list,PASS
+conversation menu dropdown (rename/settings/delete),PASS
+e2e conversation thread with worker reply,PASS
+typecheck (db/relay-client/console/worker/relay),PASS
