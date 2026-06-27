@@ -170,6 +170,11 @@ type ClaudeCallOpts = {
   // 真正的错误说明本来在 stdout/stderr 里，但 detached 默认 stdio:'ignore' 把这些丢了；落到文件就能拿
   // 来回填 error_message，让用户看到实际失败原因（不再只显示模糊的"无完整结果"）。
   stdoutLogFile?: string;
+  // 主仓（task localPath）的绝对路径：当前 cwd 多半是某个 worktree（gitignore 的 .env / 测试账号等
+  // 配置不会随 worktree 带过来）。通过环境变量 CLAUDE_CENTER_MAIN_REPO 把主仓位置告诉 Claude 子进程，
+  // 让它在缺配置时去主仓里按需 `cp` 同名文件——配合 prompt 里「e2e 工具栈白名单 + 探索原则」段使用。
+  // undefined（定向指令场景）则不注入该变量，沿用旧行为。
+  mainRepoRoot?: string;
 };
 
 // 「动态工作流」按任务开关映射到 claude 进程 env。ground truth（claude 2.1.x 二进制）：
@@ -193,6 +198,8 @@ function spawnClaude(config: WorkerConfig, opts: ClaudeCallOpts): Promise<Comman
   const modelArg = opts.model && opts.model !== "default" ? opts.model : null;
   // 动态工作流通过 env 注入（非 CLI flag），直接 / 终端两形态共用。
   const wfEnv = workflowEnv(opts.dynamicWorkflow);
+  // 主仓根：仅在调用方明确传入（任务执行 / 对话轮）时注入；定向指令传 undefined 不注入。
+  const repoEnv: Record<string, string> = opts.mainRepoRoot ? { CLAUDE_CENTER_MAIN_REPO: opts.mainRepoRoot } : {};
   const usesTerminal = config.claudePreCommand !== "" || config.terminalCommand !== "";
 
   if (!usesTerminal) {
@@ -223,7 +230,7 @@ function spawnClaude(config: WorkerConfig, opts: ClaudeCallOpts): Promise<Comman
       // POSIX：让 claude 成新进程组组长，取消/超时时可整组杀掉它派生的 git/gh/npm/MCP/子代理
       //（Windows 走 taskkill /T 杀树，不需要）。detached 的对话轮已自带新组，置此无副作用。
       newProcessGroup: process.platform !== "win32",
-      env: { ...process.env, ...wfEnv }
+      env: { ...process.env, ...wfEnv, ...repoEnv }
     });
   }
 
@@ -244,11 +251,12 @@ function spawnClaude(config: WorkerConfig, opts: ClaudeCallOpts): Promise<Comman
     [CLAUDE_ENV.PROMPT]: opts.prompt,
     [CLAUDE_ENV.SETTINGS]: config.claudeSettingsPath,
     [CLAUDE_ENV.RULES]: config.claudeRulesPath,
-    ...wfEnv
+    ...wfEnv,
+    ...repoEnv
   };
-  // WSL 不继承 Windows 进程 env，需在 WSLENV 声明转发的变量名（冒号分隔）；动态工作流变量一并转发。
+  // WSL 不继承 Windows 进程 env，需在 WSLENV 声明转发的变量名（冒号分隔）；动态工作流 + 主仓根一并转发。
   if (isWsl(terminalCommand)) {
-    const names = [CLAUDE_ENV.CMD, CLAUDE_ENV.PROMPT, CLAUDE_ENV.SETTINGS, CLAUDE_ENV.RULES, ...Object.keys(wfEnv)].join(":");
+    const names = [CLAUDE_ENV.CMD, CLAUDE_ENV.PROMPT, CLAUDE_ENV.SETTINGS, CLAUDE_ENV.RULES, ...Object.keys(wfEnv), ...Object.keys(repoEnv)].join(":");
     env.WSLENV = process.env.WSLENV ? `${process.env.WSLENV}:${names}` : names;
   }
 
@@ -278,6 +286,7 @@ function runClaudeJson(
     model?: string;
     dynamicWorkflow?: boolean;
     onSpawn?: (child: ChildProcess) => void;
+    mainRepoRoot?: string;
   }
 ): Promise<ClaudeTurn> {
   return spawnClaude(config, { ...opts, full: true }).then((raw) => {
@@ -303,6 +312,7 @@ function runTaskClaude(
     model?: string;
     dynamicWorkflow?: boolean;
     onSpawn?: (child: ChildProcess) => void;
+    mainRepoRoot?: string;
   }
 ): Promise<ClaudeTurn> {
   const stopSync = startTaskSessionSync(taskId, opts.cwd);
@@ -463,6 +473,29 @@ function workHere(isGit: boolean): string {
     : "Work directly in this directory. Implement the requested changes, keep edits scoped, and run the most relevant local verification command when possible.";
 }
 
+// 主仓按需取 + e2e 工具栈白名单：worktree 不预带 .env / 测试账号等 gitignore 文件，且历史上 Claude
+// 反复以「没 .env」「无浏览器」做借口跳过验证（docs/acceptance/pr-testplan-gate/round-1.md 案例）。
+// 在 prompt 末尾列出仓库自带的 e2e 工具栈白名单、显式告知主仓位置可按需 `cp` 取配置、并立硬规矩：
+// 跳过必须附"尝试的命令 + 实际报错 + 为什么无法绕开"三要素，空口"环境不具备"不接受。
+function e2eGuidanceSection(): string[] {
+  return [
+    "",
+    "## 本仓 e2e 工具栈（必须先尝试，不能假设不能用）",
+    "- `npm run verify:console`     —— console 401→200 + scheduler.ok 自检",
+    "- `npm run db:ephemeral`       —— 临时库跑全量迁移 + DROP，零污染",
+    "- `node scripts/fake-gh-hook.cjs` —— 拦截 GitHub API 做 e2e",
+    "- `apps/console` 已配 playwright，可驱动真实浏览器",
+    "",
+    "## 缺 .env / 连接信息 / 测试账号等 gitignore 文件时",
+    "worktree 不预带这些文件。遇到缺时，去 `$CLAUDE_CENTER_MAIN_REPO/<同相对路径>` 看主仓有没有，**有就 `cp` 过来**（仅复制，禁止 hardlink / symlink，会污染主仓）。`$CLAUDE_CENTER_MAIN_REPO` **仅供读取，禁止 `cd` 进去、禁止写入、禁止 commit**。主仓也没有再报告缺什么。",
+    "",
+    "## e2e 探索原则",
+    "1. 第一次必须实际跑命令探查，不允许仅凭\"看起来需要外部依赖\"跳过",
+    "2. 遇阻先在仓库里找 mock / fake / 临时替身（`grep fake-`、`ephemeral`、`mock-`），找过再说\"不能跑\"",
+    "3. 跳过必须附三要素：尝试的命令 + 实际报错 + 为什么无法绕开。空口\"环境不具备\" / \"无法验证\"不接受"
+  ];
+}
+
 function taskPrompt(task: Task, attachments: AttachmentMeta[], cwd: string, isGit: boolean): string {
   return [
     ...dirAnchor(cwd, isGit),
@@ -474,7 +507,8 @@ function taskPrompt(task: Task, attachments: AttachmentMeta[], cwd: string, isGi
     workHere(isGit),
     ...attachmentSection(attachments),
     "",
-    ...replyDirective(task)
+    ...replyDirective(task),
+    ...e2eGuidanceSection()
   ].join("\n");
 }
 
@@ -488,7 +522,8 @@ function resumePrompt(task: Task, reply: string, attachments: AttachmentMeta[], 
     "Continue the ClaudeCenter task using this answer.",
     ...attachmentSection(attachments),
     "",
-    ...replyDirective(task)
+    ...replyDirective(task),
+    ...e2eGuidanceSection()
   ].join("\n");
 }
 
@@ -510,7 +545,8 @@ function freshReplyPrompt(task: Task, reply: string, attachments: AttachmentMeta
     workHere(isGit),
     ...attachmentSection(attachments),
     "",
-    ...replyDirective(task)
+    ...replyDirective(task),
+    ...e2eGuidanceSection()
   ].join("\n");
 }
 
@@ -521,7 +557,7 @@ function retryPrompt(task: Task, attachments: AttachmentMeta[], cwd: string, isG
   const head = task.error_message?.trim()
     ? ["Your previous run failed with this error:", "", task.error_message.trim(), "", `Fix the cause and complete the task ${where}.`]
     : ["Your previous run was interrupted before completing.", "", `Continue and complete the task ${where}.`];
-  return [...dirAnchor(cwd, isGit), ...head, ...attachmentSection(attachments), "", ...replyDirective(task)].join("\n");
+  return [...dirAnchor(cwd, isGit), ...head, ...attachmentSection(attachments), "", ...replyDirective(task), ...e2eGuidanceSection()].join("\n");
 }
 
 // GitHub PR body 上限 65536 字符；正文主体（Claude 的结构化产出）留足额度，超长才从尾部截断
@@ -797,7 +833,8 @@ async function handleClaudeTurn(
         cwd: wtPath,
         resumeSessionId: current.sessionId ?? undefined,
         model: task.model,
-        onSpawn
+        onSpawn,
+        mainRepoRoot: localPath
       });
       continue;
     }
@@ -1332,7 +1369,8 @@ export async function executeTask(config: WorkerConfig, task: Task, hooks?: Exec
       cwd: wtPath,
       model: task.model,
       dynamicWorkflow: task.dynamic_workflow,
-      onSpawn: hooks?.onClaudeSpawn
+      onSpawn: hooks?.onClaudeSpawn,
+      mainRepoRoot: localPath
     });
     await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, isGit, hooks?.onClaudeSpawn);
   } catch (error) {
@@ -1385,7 +1423,8 @@ export async function resumeTask(config: WorkerConfig, task: Task, hooks?: ExecH
       resumeSessionId: task.claude_session_id ?? undefined,
       model: task.model,
       dynamicWorkflow: task.dynamic_workflow,
-      onSpawn: hooks?.onClaudeSpawn
+      onSpawn: hooks?.onClaudeSpawn,
+      mainRepoRoot: localPath
     });
     await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, isGit, hooks?.onClaudeSpawn);
   } catch (error) {
@@ -1430,7 +1469,8 @@ export async function retryFailedTask(config: WorkerConfig, task: Task, hooks?: 
       resumeSessionId: task.claude_session_id ?? undefined,
       model: task.model,
       dynamicWorkflow: task.dynamic_workflow,
-      onSpawn: hooks?.onClaudeSpawn
+      onSpawn: hooks?.onClaudeSpawn,
+      mainRepoRoot: localPath
     });
     await handleClaudeTurn(config, task, localPath, wtPath, ctxs, turn, isGit, hooks?.onClaudeSpawn);
   } catch (error) {
@@ -1635,6 +1675,7 @@ export async function executeConversationTurn(
         full: true,
         detached: true,
         stdoutLogFile: claudeLogFile,
+        mainRepoRoot: localPath,
         onSpawn: (child) => {
           hooks?.onClaudeSpawn?.(child);
           const pid = child.pid;
