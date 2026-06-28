@@ -1,7 +1,7 @@
 "use client";
 
-import { ChevronRight, Wrench } from "lucide-react";
-import { useEffect, useState } from "react";
+import { AlertTriangle, ChevronRight, Wrench } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { extractBackgroundJobs, isMetaUserEntry, parseTranscript, pendingBackgroundJobs } from "./transcript-parse";
@@ -65,51 +65,104 @@ function toolSummary(name: string, input: unknown): string {
 // 长对话从「同步渲染 500+ 块」降到「同步渲染 30 块」，首屏可感秒出；往上滚有极短挂载延迟，绝大多数场景无感。
 const FIRST_BATCH = 30;
 
-export function TranscriptView({ items }: { items: TItem[] }) {
+// 失败/报错记录：DB 里的 failed assistant 消息，按 created_at 在 jsonl 时间轴上插入到对应位置。
+// 否则历史报错全堆在 jsonl 末尾、与实际发生顺序串位（用户在失败后又发送了新消息时尤其明显）。
+export type FailureInsert = { id: string; error: string; ts: string };
+
+type Entry =
+  | { kind: "item"; item: TItem; idx: number }
+  | { kind: "failure"; failure: FailureInsert };
+
+// 把 items + failures 合并成按时间正序的渲染序列。
+// 规则：失败条 ts <= 当前 item.ts → 在该 item 之前插入；item.ts 为 null 时不阻挡（视作时间无穷大、不强行插入）。
+// 末尾把剩余失败条追加。tool_use → tool_result 配对仍按完整 items 集合算（一次扫描，跨分块也能命中）。
+function mergeEntries(items: TItem[], failures: FailureInsert[]): Entry[] {
+  const out: Entry[] = [];
+  const sorted = failures.slice().sort((a, b) => a.ts.localeCompare(b.ts));
+  let fi = 0;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]!;
+    while (fi < sorted.length && it.ts != null && sorted[fi]!.ts <= it.ts) {
+      out.push({ kind: "failure", failure: sorted[fi]! });
+      fi++;
+    }
+    out.push({ kind: "item", item: it, idx: i });
+  }
+  while (fi < sorted.length) {
+    out.push({ kind: "failure", failure: sorted[fi]! });
+    fi++;
+  }
+  return out;
+}
+
+export function TranscriptView({ items, failures }: { items: TItem[]; failures?: FailureInsert[] }) {
   // 配对：tool_use_id → 工具返回（claude 把 tool_result 放进下一条 user 消息）。配对后该 result 显示在调用下，
   // 该「纯 tool_result」的 user 消息整条不再渲染为气泡。
-  const results = new Map<string, ToolResult>();
-  for (const it of items) {
-    for (const b of it.blocks) {
-      if (b.kind === "tool_result" && b.toolUseId) {
-        results.set(b.toolUseId, { text: b.text, isError: b.isError });
+  const results = useMemo(() => {
+    const m = new Map<string, ToolResult>();
+    for (const it of items) {
+      for (const b of it.blocks) {
+        if (b.kind === "tool_result" && b.toolUseId) {
+          m.set(b.toolUseId, { text: b.text, isError: b.isError });
+        }
       }
     }
-  }
+    return m;
+  }, [items]);
 
-  const [revealed, setRevealed] = useState(() => Math.min(FIRST_BATCH, items.length));
+  const entries = useMemo(() => mergeEntries(items, failures ?? []), [items, failures]);
 
-  // items.length 增长时（轮询拉到新消息）也跟着抬高已揭示数量；避免 100 条对话首屏只显示 30 后
+  const [revealed, setRevealed] = useState(() => Math.min(FIRST_BATCH, entries.length));
+
+  // entries.length 增长时（轮询拉到新消息）也跟着抬高已揭示数量；避免 100 条对话首屏只显示 30 后
   // 再增长到 130 时仍然停在 30。
   useEffect(() => {
-    setRevealed((cur) => Math.max(cur, Math.min(FIRST_BATCH, items.length)));
-  }, [items.length]);
+    setRevealed((cur) => Math.max(cur, Math.min(FIRST_BATCH, entries.length)));
+  }, [entries.length]);
 
   // 全量挂载：浏览器空闲时把剩余消息一次性补上。requestIdleCallback 不可用（Safari < 15.4 / 旧 Firefox）
   // 时回退到 setTimeout(16)，无功能性降级。
   useEffect(() => {
-    if (revealed >= items.length) return;
+    if (revealed >= entries.length) return;
     type IdleHandle = number;
     type RIC = (cb: () => void) => IdleHandle;
     type CIC = (h: IdleHandle) => void;
     const w = window as unknown as { requestIdleCallback?: RIC; cancelIdleCallback?: CIC };
     const ric: RIC = w.requestIdleCallback ?? ((cb) => window.setTimeout(cb, 16) as unknown as IdleHandle);
     const cic: CIC = w.cancelIdleCallback ?? ((h) => window.clearTimeout(h as unknown as number));
-    const handle = ric(() => setRevealed(items.length));
+    const handle = ric(() => setRevealed(entries.length));
     return () => cic(handle);
-  }, [items.length, revealed]);
+  }, [entries.length, revealed]);
 
-  // items 按时间正序：末尾 revealed 条先挂，前面延后；保证首屏可见范围（底部）立即渲染。
-  const start = Math.max(0, items.length - revealed);
-  const visible = items.slice(start);
+  // entries 按时间正序：末尾 revealed 条先挂，前面延后；保证首屏可见范围（底部）立即渲染。
+  const start = Math.max(0, entries.length - revealed);
+  const visible = entries.slice(start);
 
   return (
     <div className="tx">
-      {visible.map((item, i) => {
+      {visible.map((entry, i) => {
+        if (entry.kind === "failure") {
+          return <FailureRow key={`f-${entry.failure.id}`} error={entry.failure.error} />;
+        }
+        const { item, idx } = entry;
         const renderable = item.blocks.filter((b) => b.kind !== "tool_result");
         if (renderable.length === 0) return null;
-        return <MessageRow key={start + i} role={item.role} blocks={renderable} results={results} />;
+        return <MessageRow key={`i-${idx}-${start + i}`} role={item.role} blocks={renderable} results={results} />;
       })}
+    </div>
+  );
+}
+
+function FailureRow({ error }: { error: string }) {
+  return (
+    <div className="tx-row asst">
+      <div className="tx-msg asst chat-msg-failed">
+        <div className="chat-msg-failed-head">
+          <AlertTriangle size={13} aria-hidden />
+          <span>执行失败</span>
+        </div>
+        <div className="tx-text">{error}</div>
+      </div>
     </div>
   );
 }

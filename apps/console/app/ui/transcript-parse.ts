@@ -7,7 +7,8 @@ export type TBlock =
   | { kind: "tool_use"; id: string; name: string; input: unknown }
   | { kind: "tool_result"; toolUseId: string | null; text: string; isError: boolean };
 
-export type TItem = { role: "user" | "assistant"; blocks: TBlock[] };
+// ts：jsonl 行自带的 timestamp（ISO 字符串），用来给 TranscriptView 按时间插入失败错误条；旧 jsonl 可能没有 → null。
+export type TItem = { role: "user" | "assistant"; ts: string | null; blocks: TBlock[] };
 
 function str(v: unknown): string {
   return typeof v === "string" ? v : "";
@@ -64,7 +65,7 @@ export function parseTranscript(jsonl: string): TItem[] {
   for (const line of jsonl.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let obj: { type?: string; isMeta?: unknown; message?: { content?: unknown } };
+    let obj: { type?: string; isMeta?: unknown; timestamp?: unknown; message?: { content?: unknown } };
     try {
       obj = JSON.parse(trimmed);
     } catch {
@@ -92,7 +93,8 @@ export function parseTranscript(jsonl: string): TItem[] {
         });
       }
     }
-    if (blocks.length) items.push({ role: obj.type as "user" | "assistant", blocks });
+    const ts = typeof obj.timestamp === "string" ? obj.timestamp : null;
+    if (blocks.length) items.push({ role: obj.type as "user" | "assistant", ts, blocks });
   }
   return items;
 }

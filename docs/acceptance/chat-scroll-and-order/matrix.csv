@@ -1,0 +1,6 @@
+case,description,round-1
+P1,parseTranscript 为每条 TItem 写入 jsonl timestamp（ts 字段非空）,PASS
+P2,mergeEntries 把 failure 按 ts 插到 items 之间（msg-2 fail msg-3 顺序）,PASS
+P3,mergeEntries 多个 failure 各自按 ts 分别插入,PASS
+P4,真 Console + Playwright：6 行 .tx-row 顺序正确（失败条夹在 msg-2 与 msg-3 之间）,PASS
+P5,真 Console + Playwright：chat-msgs overflow 时滚到顶后 4.5s 轮询不被自动回底,PASS

@@ -1,12 +1,13 @@
 "use client";
 
 import type { AttachmentMeta, Conversation, ConversationMessage, Project, Worker } from "@claude-center/db";
-import { AlertTriangle, ArrowUp, Bot, CalendarClock, Check, ChevronLeft, Clock, GitBranch, Info, MessageSquare, MoreHorizontal, Pencil, Server, Settings2, Sparkles, Square, Trash2, X } from "lucide-react";
+import { ArrowUp, Bot, CalendarClock, Check, ChevronLeft, Clock, GitBranch, Info, MessageSquare, MoreHorizontal, Pencil, Server, Settings2, Sparkles, Square, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Empty, fmtDateTime, postJson } from "./shared";
 import { AttachmentChip, AttachmentList, AttachmentUploader } from "./attachment-uploader";
 import { DateTimePicker, Select, useConfirm } from "./controls";
 import { SessionMetaBar } from "./session-meta";
+import type { FailureInsert } from "./transcript";
 import { TranscriptView, parseTranscript } from "./transcript";
 import { usePolling } from "../lib/use-polling";
 
@@ -176,11 +177,12 @@ export function ChatThread({
   // DB 兜底：把 user 消息 / 失败 assistant 消息按 seq 升序拼一份，逐条决定是否补显示——
   // jsonl 已收录正文（user）或 TranscriptView 不会代显（失败 assistant 无正文 → 永远展示错误条）。
   // 解决 jsonl 未就绪 / claude 失败 / 切页面回来 pending 已清三种「正文消失」的场景。
-  const dbExtras = useMemo(() => {
-    type Extra =
-      | { kind: "user"; id: string; body: string }
-      | { kind: "failed"; id: string; error: string };
-    const out: Extra[] = [];
+  // - userExtras：jsonl 尚未收录的 user 消息，按 seq 顺序追加到列表末尾（典型是刚发出、jsonl 未捕获的最新一条）。
+  // - failureExtras：失败的 assistant 消息，带 created_at；TranscriptView 按时间插入到对应位置，
+  //   避免历史多轮失败全堆在末尾、与实际发生顺序串位。
+  const { userExtras, failureExtras } = useMemo(() => {
+    const u: { id: string; body: string }[] = [];
+    const f: FailureInsert[] = [];
     const sorted = dbMessages
       .filter((m) => m.seq != null)
       .slice()
@@ -190,17 +192,41 @@ export function ChatThread({
         if (m.status === "scheduled") continue;
         if (!m.body) continue;
         if (jsonl && jsonl.includes(m.body)) continue;
-        out.push({ kind: "user", id: m.id, body: m.body });
+        u.push({ id: m.id, body: m.body });
       } else if (m.role === "assistant" && m.status === "failed") {
-        out.push({ kind: "failed", id: m.id, error: m.error_message ?? "执行失败" });
+        f.push({ id: m.id, error: m.error_message ?? "执行失败", ts: m.created_at });
       }
     }
-    return out;
+    return { userExtras: u, failureExtras: f };
   }, [dbMessages, jsonl]);
 
+  // 粘底滚动：仅当用户当前就贴近底部时才追随新内容自动滚到底。
+  // 用户主动往上翻看历史后保持原位（不再被 3s 轮询/新到内容拽回底部）。
+  // 切换会话或首次发送消息时强制回底（见下面 effect 与 send()）。
+  const atBottomRef = useRef(true);
+  const handleMsgsScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    atBottomRef.current = distance < 64;
+  }, []);
+
+  // 切换会话 / 首次加载完成：强制滚到底（新会话默认看最新）。
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [items, pending, dbExtras]);
+    if (!loaded) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight });
+    atBottomRef.current = true;
+  }, [id, loaded]);
+
+  // 内容变化：只有在「用户当前贴近底部」时才追随滚动；用户向上翻看历史时保持位置。
+  useEffect(() => {
+    if (!atBottomRef.current) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight });
+  }, [items, pending, userExtras, failureExtras]);
 
   // 回复中：有待 worker 落库的乐观消息，或列表派生的 generating（worker 正在跑本轮）。
   const busy = pending.length > 0 || conversation.generating;
@@ -242,6 +268,8 @@ export function ChatThread({
     setDraftAtts([]);
     if (scheduledAt) setScheduleAt("");
     if (optimisticKey) setPending((p) => [...p, optimisticKey]);
+    // 用户主动发送：哪怕之前翻到了历史区，也要回底看自己发出去的气泡。
+    atBottomRef.current = true;
     setSending(true);
     setErr("");
     try {
@@ -251,7 +279,7 @@ export function ChatThread({
         ...(scheduledAt ? { scheduledAt } : {})
       });
       // 服务端落库即触发一次本对话的元信息刷新：让 dbMessages 即刻拿到这条 user 消息，
-      // pending 与 dbExtras 任一渲染即可保证文本始终在视图上。
+      // pending 与 userExtras 任一渲染即可保证文本始终在视图上。
       void refreshMeta();
     } catch (e) {
       // 失败回滚：移除该乐观气泡 + 恢复输入草稿，避免「点了发送，结果什么都没留下」。
@@ -461,31 +489,19 @@ export function ChatThread({
 
       <SessionMetaBar planModel={conversation.model} worker={worker} jsonl={jsonl} open={metaOpen} />
 
-      <div className="chat-msgs" ref={scrollRef}>
-        {loaded && items.length === 0 && pending.length === 0 && dbExtras.length === 0 ? (
+      <div className="chat-msgs" ref={scrollRef} onScroll={handleMsgsScroll}>
+        {loaded && items.length === 0 && pending.length === 0 && userExtras.length === 0 && failureExtras.length === 0 ? (
           <Empty icon={<MessageSquare size={22} />} text="发送第一条消息开始对话" />
         ) : (
           <>
-            <TranscriptView items={items} />
-            {dbExtras.map((e) =>
-              e.kind === "user" ? (
-                <div className="tx-row user" key={`db-${e.id}`}>
-                  <div className="tx-msg user">
-                    <div className="tx-text">{e.body}</div>
-                  </div>
+            <TranscriptView items={items} failures={failureExtras} />
+            {userExtras.map((e) => (
+              <div className="tx-row user" key={`db-${e.id}`}>
+                <div className="tx-msg user">
+                  <div className="tx-text">{e.body}</div>
                 </div>
-              ) : (
-                <div className="tx-row asst" key={`db-${e.id}`}>
-                  <div className="tx-msg asst chat-msg-failed">
-                    <div className="chat-msg-failed-head">
-                      <AlertTriangle size={13} aria-hidden />
-                      <span>执行失败</span>
-                    </div>
-                    <div className="tx-text">{e.error}</div>
-                  </div>
-                </div>
-              )
-            )}
+              </div>
+            ))}
             {pending.map((m, i) => (
               <div className="tx-row user" key={`p${i}`}>
                 <div className="tx-msg user">
