@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, type Dirent } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync, type Dirent } from "node:fs";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import { getPool, getTaskStatusById } from "@claude-center/db";
 import { runCommand, type CommandResult } from "./shell.js";
@@ -81,7 +82,12 @@ async function gitTolerant(args: string[]): Promise<void> {
 }
 
 // 强删 wtPath 目录（Node 递归删）。Windows 上 `git worktree remove --force` 对含 node_modules 的长路径常删不净，
-// 用 Node rmSync 兜底（能删 >260 长路径 + 只读文件）；maxRetries 兜杀软扫描 / 句柄未释放的瞬时锁（EBUSY/EPERM/ENOTEMPTY）。
+// 用 Node fs.rm 兜底（能删 >260 长路径 + 只读文件）；maxRetries 兜杀软扫描 / 句柄未释放的瞬时锁（EBUSY/EPERM/ENOTEMPTY）。
+//
+// 【为什么必须用 async fs.rm 而不是 rmSync】桌面端 Worker 是 Electron 主进程，rmSync 会同步阻塞事件循环——
+// 清含 node_modules 的 worktree 要遍历几万个小文件（Windows 下尤其慢），期间 BrowserWindow 无法重绘、IPC 全部 stuck，
+// 用户看到的是「桌面端清理 worktree 窗口卡住无响应」。改用 fs/promises.rm 让每个 fs op 走 libuv 线程池，
+// JS 主线程可继续跑 UI 刷新和其它 IPC。
 //
 // 【真因·第四轮才挖到，解释「拉新代码 + 重启 worker 仍每轮复发」】Worker 本身是 **Electron** 进程，Electron 给
 // Node `fs` 打了 **asar 集成补丁**：任何 fs 操作一旦碰到 `.asar` 文件，Electron 会把该归档**打开并进程级缓存/映射、
@@ -89,23 +95,33 @@ async function gitTolerant(args: string[]): Promise<void> {
 // rmSync 反而被 asar 补丁**把这个文件自锁住**（EBUSY，删不掉）——而且**每个新 Worker 第一次 rmSync 都会重新自锁**，
 // 所以重启 worker 永远治不好（实测：锁主就是当前运行的 Worker 进程本身，Restart Manager 确认）。
 // 解药：删除期间临时关掉 asar 集成（`process.noAsar = true`），让 `.asar` 当普通文件删、不缓存不映射。
-// 仅在本同步删除窗口内开启、finally 复原；rmSync 内部不 require Worker 自身代码，故即便打包版（自身在 app.asar 内）也安全。
 // 纯 Node（非 Electron）下 `process.noAsar` 无意义、无副作用。
+//
+// 【为什么要全局串行】`process.noAsar` 是**全进程**标志，三路调用方（executor 任务执行 / GC tick / 桌面端用户清理）
+// 可能重叠。旧的 save/restore 嵌套在并发下会 leak：A 先 set true、B 进来 prev=true、A 完成 restore=undefined、
+// B 完成 restore=true → noAsar 被永久打开。同步 rmSync 时两路天然不重叠掩盖了这个 bug，改异步必须显式串行。
 type NoAsarProc = { noAsar?: boolean };
-function rmWorktreeDir(wtPath: string): void {
-  if (!existsSync(wtPath)) {
-    return;
-  }
-  const proc = process as NoAsarProc;
-  const prevNoAsar = proc.noAsar;
-  proc.noAsar = true; // 关 Electron asar 集成，避免删 default_app.asar 时被自锁
-  try {
-    rmSync(wtPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-  } catch {
-    // 删不掉留给 worktree add 报 "already exists"，上层据此标 failed。
-  } finally {
-    proc.noAsar = prevNoAsar;
-  }
+let rmQueue: Promise<unknown> = Promise.resolve();
+function rmWorktreeDir(wtPath: string): Promise<void> {
+  // 把本次删除挂到全局队列尾：任意时刻只有一个 rm 在跑（也即 noAsar 切换闭合），不与其它 worktree 删并发。
+  const next = rmQueue.then(async () => {
+    if (!existsSync(wtPath)) {
+      return;
+    }
+    const proc = process as NoAsarProc;
+    const prevNoAsar = proc.noAsar;
+    proc.noAsar = true; // 关 Electron asar 集成，避免删 default_app.asar 时被自锁
+    try {
+      await rm(wtPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch {
+      // 删不掉留给 worktree add 报 "already exists"，上层据此标 failed。
+    } finally {
+      proc.noAsar = prevNoAsar;
+    }
+  });
+  // 即便本次内部 throw，队列也要继续往下走（catch 吞错让队列不卡死）；调用方拿到的仍是 next 的真实结果。
+  rmQueue = next.catch(() => undefined);
+  return next;
 }
 
 // 移除一棵工作树并 prune 元数据。容错。
@@ -113,7 +129,7 @@ function rmWorktreeDir(wtPath: string): void {
 // 留下无 .git 的孤儿目录）→ prune 清悬挂注册。三步后该路径在盘上与 git 注册里都不再残留，下次 add 不撞车。
 export async function removeWorktree(localPath: string, wtPath: string): Promise<void> {
   await gitTolerant(["-C", localPath, "worktree", "remove", "--force", wtPath]);
-  rmWorktreeDir(wtPath);
+  await rmWorktreeDir(wtPath);
   await gitTolerant(["-C", localPath, "worktree", "prune"]);
 }
 
