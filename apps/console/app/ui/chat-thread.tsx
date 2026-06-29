@@ -490,7 +490,12 @@ export function ChatThread({
       <SessionMetaBar planModel={conversation.model} worker={worker} jsonl={jsonl} open={metaOpen} />
 
       <div className="chat-msgs" ref={scrollRef} onScroll={handleMsgsScroll}>
-        {loaded && items.length === 0 && pending.length === 0 && userExtras.length === 0 && failureExtras.length === 0 ? (
+        {!loaded ? (
+          // jsonl 首次未到位前显示加载中：避免 dbMessages（refreshMeta 先回）派生的 user 气泡
+          // 先一闪、随后 jsonl 到位补齐 assistant 时整段 reconcile 的「闪烁」。
+          // 缓存命中走 useEffect[id] 同步 setLoaded(true)，二次切换无延迟。
+          <Empty icon={<MessageSquare size={22} />} text="加载中…" />
+        ) : items.length === 0 && pending.length === 0 && userExtras.length === 0 && failureExtras.length === 0 ? (
           <Empty icon={<MessageSquare size={22} />} text="发送第一条消息开始对话" />
         ) : (
           <>
