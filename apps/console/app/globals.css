@@ -5790,6 +5790,75 @@ a.ds-v:hover {
   color: var(--text-4);
 }
 
+/* 多轮任务（docs/spec/multi-round-task-history.md）：rounds[] 每轮一张折叠卡片，
+   最新轮置顶默认展开、更早轮折叠；每轮内部仍用 .ov-result-md / .ov-result-text 渲染 output。 */
+.ov-result-rounds {
+  gap: 10px;
+}
+.ov-result-round {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  padding: 0;
+}
+.ov-result-round[open] {
+  background: var(--surface-2);
+}
+.ov-result-round > .ov-result-round-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.ov-result-round > .ov-result-round-head::-webkit-details-marker {
+  display: none;
+}
+.ov-result-round[open] > .ov-result-round-head {
+  border-bottom: 1px solid var(--border);
+}
+.ov-result-round-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.ov-result-round-time {
+  font-size: 12px;
+  color: var(--text-4);
+}
+.ov-result-round-prs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 12px 0;
+  font-size: 12.5px;
+}
+.ov-result-round-prs-label {
+  color: var(--text-3);
+  font-weight: 500;
+}
+.ov-result-round-pr-link {
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-all;
+}
+.ov-result-round-pr-link:hover {
+  text-decoration: underline;
+}
+.ov-result-embedded {
+  padding: 8px 12px 12px;
+  gap: 6px;
+}
+.ov-result-embedded .ov-result-head {
+  margin-top: 4px;
+}
+.ov-result-spacer {
+  flex: 1;
+}
+
 /* 任务描述：对话记录（claude 提问 / 用户答复）。 */
 .ov-qa {
   margin-top: 14px;

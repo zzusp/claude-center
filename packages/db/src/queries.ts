@@ -1278,13 +1278,50 @@ export async function markTaskRunning(client: pg.Pool | pg.PoolClient, taskId: s
   await addTaskEvent(client, taskId, workerId, "running", "Task execution started", {});
 }
 
+// 多轮任务累计（docs/spec/multi-round-task-history.md）：单轮元数据。
+// markTaskSuccess 内部 read-modify-write 把它 append 到 tasks.result.rounds[]，
+// PR body / Console 执行结果 / 历史 PR 列表都从 rounds[] 读历轮，不再覆盖最新一轮。
+export type TaskRoundEntry = {
+  // 任务当时的 continuation_count（0=首轮，1=第一次续跑，依此类推）。
+  round: number;
+  // 本轮 Claude 结构化产出（即 claudeOutput）。
+  output: string;
+  // 本轮完成时间（ISO8601，markTaskSuccess 写入时戳）。
+  completedAt: string;
+  // 本轮新建 / 复用的 PR URL（pr 模式可能多仓多条；push / non-git 为 []）。
+  prUrls: string[];
+  // pr=submit_mode=pr 路径；push=submit_mode=push；none=非 git 项目（finalizeNonGitTask）。
+  submitMode: "pr" | "push" | "none";
+};
+
 export async function markTaskSuccess(
   client: pg.Pool | pg.PoolClient,
   taskId: string,
   workerId: string,
   resultPayload: Record<string, unknown>,
-  prUrl: string | null
+  prUrl: string | null,
+  round: Pick<TaskRoundEntry, "output" | "prUrls" | "submitMode">
 ): Promise<void> {
+  // 多轮累计：先读当前 result + continuation_count（同一 task 由唯一 worker claim 串行写，
+  // 无并发竞态），append 一条 round entry 后写回。旧任务 result.rounds 缺失时按空数组起。
+  const cur = await client.query<{ result: Record<string, unknown> | null; continuation_count: number }>(
+    `SELECT result, continuation_count FROM tasks WHERE id = $1 LIMIT 1`,
+    [taskId]
+  );
+  const prevResult = cur.rows[0]?.result ?? {};
+  const prevRoundsRaw = (prevResult as { rounds?: unknown }).rounds;
+  const prevRounds: TaskRoundEntry[] = Array.isArray(prevRoundsRaw) ? (prevRoundsRaw as TaskRoundEntry[]) : [];
+  const newRound: TaskRoundEntry = {
+    round: cur.rows[0]?.continuation_count ?? 0,
+    output: round.output,
+    completedAt: new Date().toISOString(),
+    prUrls: round.prUrls,
+    submitMode: round.submitMode
+  };
+  const mergedResult: Record<string, unknown> = {
+    ...resultPayload,
+    rounds: [...prevRounds, newRound]
+  };
   await client.query(
     `UPDATE tasks
         SET status = 'success',
@@ -1294,9 +1331,9 @@ export async function markTaskSuccess(
             error_message = NULL,
             updated_at = now()
       WHERE id = $1 AND claimed_by = $2`,
-    [taskId, workerId, resultPayload, prUrl]
+    [taskId, workerId, mergedResult, prUrl]
   );
-  await addTaskEvent(client, taskId, workerId, "success", "Task completed", resultPayload);
+  await addTaskEvent(client, taskId, workerId, "success", "Task completed", mergedResult);
   const taskMeta = await getTaskMetaForNotify(client, taskId);
   if (taskMeta) {
     await emitTaskNotification(client, {
@@ -1637,6 +1674,9 @@ export async function continueTask(
   if (!trimmed) {
     throw new Error("continuation_note 不能为空");
   }
+  // 续跑时清掉本轮一次性字段（claudeResult/multiRepo/workdir），但**保留 rounds[]**——
+  // docs/spec/multi-round-task-history.md 要求多轮累计：续跑只是开新一轮，历史轮不应被清。
+  // 若旧任务 result 缺 rounds 字段，COALESCE 兜底为 []，新一轮 markTaskSuccess 后正常 append。
   const result = await client.query<Task>(
     `UPDATE tasks
         SET status = 'claimed',
@@ -1649,7 +1689,7 @@ export async function continueTask(
             merge_checked_at = null,
             cancel_requested_at = null,
             retry_requested_at = null,
-            result = '{}'::jsonb,
+            result = jsonb_build_object('rounds', COALESCE(result->'rounds', '[]'::jsonb)),
             updated_at = now()
       WHERE id = $1 AND status IN ('success', 'merged')
       RETURNING *`,

@@ -297,7 +297,31 @@ function ExecLiveness({ task }: { task: Task }) {
   );
 }
 
-// 执行结果:成功/已合并显示「执行结果摘要」(result.claudeResult);失败/取消显示「错误说明」(error_message)。
+// 多轮任务累计（docs/spec/multi-round-task-history.md）：tasks.result.rounds[] 每轮一条记录。
+// 旧任务 result 缺 rounds 时退化到 claudeResult fallback，保持向后兼容。
+type ResultRound = {
+  round: number;
+  output: string;
+  completedAt: string;
+  prUrls: string[];
+  submitMode: "pr" | "push" | "none";
+};
+
+function readResultRounds(result: Task["result"] | null | undefined): ResultRound[] {
+  const rounds = (result as { rounds?: unknown } | null | undefined)?.rounds;
+  if (!Array.isArray(rounds)) return [];
+  // 仅做基础类型守卫；缺字段的条目跳过。
+  return rounds.filter(
+    (r): r is ResultRound =>
+      typeof r === "object" &&
+      r !== null &&
+      typeof (r as ResultRound).round === "number" &&
+      typeof (r as ResultRound).output === "string"
+  );
+}
+
+// 执行结果：成功 / 已合并按轮渲染（rounds[]，最新轮置顶，前轮折叠）；失败 / 取消展示 error_message。
+// 旧任务 result.rounds 缺失时 fallback 到 result.claudeResult（与改造前形态一致）。
 function ResultPanel({ task }: { task: Task }) {
   const isFailed = task.status === "failed" || task.status === "cancelled";
   if (isFailed) {
@@ -313,22 +337,69 @@ function ResultPanel({ task }: { task: Task }) {
     );
   }
   const isDone = task.status === "success" || task.status === "merged";
-  if (isDone) {
-    const summary = typeof task.result?.claudeResult === "string" ? task.result.claudeResult : "";
-    return summary ? (
-      <ResultSummary summary={summary} />
-    ) : (
-      <div className="ov-result">
-        <div className="ov-result-title">执行结果摘要</div>
-        <div className="ov-result-empty">无结果摘要</div>
-      </div>
-    );
+  if (!isDone) {
+    return <div className="ov-result-empty">任务尚未结束，暂无执行结果</div>;
   }
-  return <div className="ov-result-empty">任务尚未结束，暂无执行结果</div>;
+  const rounds = readResultRounds(task.result);
+  if (rounds.length > 0) {
+    // 按 round 降序：最近一轮在最上方且默认展开，更早轮折叠。
+    const sorted = [...rounds].sort((a, b) => b.round - a.round);
+    return <ResultRoundList rounds={sorted} />;
+  }
+  // Fallback（旧任务）：只取最新一轮的 claudeResult。
+  const summary = typeof task.result?.claudeResult === "string" ? task.result.claudeResult : "";
+  return summary ? (
+    <ResultSummary summary={summary} />
+  ) : (
+    <div className="ov-result">
+      <div className="ov-result-title">执行结果摘要</div>
+      <div className="ov-result-empty">无结果摘要</div>
+    </div>
+  );
+}
+
+// 多轮卡片：第 0 轮为首轮、>=1 为第 N 轮续跑；首轮默认展开，更早轮折叠。
+// 顺序按入参顺序展示（调用方按 round 降序传入），不再二次排序。
+function ResultRoundList({ rounds }: { rounds: ResultRound[] }) {
+  return (
+    <div className="ov-result ov-result-rounds">
+      <div className="ov-result-title">执行结果摘要（共 {rounds.length} 轮）</div>
+      {rounds.map((r, idx) => (
+        <ResultRoundCard key={`${r.round}-${r.completedAt}`} round={r} defaultOpen={idx === 0} />
+      ))}
+    </div>
+  );
+}
+
+function ResultRoundCard({ round, defaultOpen }: { round: ResultRound; defaultOpen: boolean }) {
+  const headLabel = round.round === 0 ? "首轮" : `第 ${round.round} 轮续跑`;
+  const completedAgo = fmtAgo(round.completedAt);
+  return (
+    <details className="ov-result-round" open={defaultOpen}>
+      <summary className="ov-result-round-head">
+        <span className="ov-result-round-title">{headLabel}</span>
+        <span className="ov-result-round-time" title={fmtDateTime(round.completedAt)}>
+          {completedAgo}
+        </span>
+      </summary>
+      {round.prUrls.length > 0 ? (
+        <div className="ov-result-round-prs">
+          <span className="ov-result-round-prs-label">本轮 PR：</span>
+          {round.prUrls.map((u) => (
+            <a key={u} href={u} target="_blank" rel="noreferrer" className="ov-result-round-pr-link">
+              {u}
+            </a>
+          ))}
+        </div>
+      ) : null}
+      <ResultSummary summary={round.output} hideTitle />
+    </details>
+  );
 }
 
 // 执行结果摘要:支持 Markdown / 纯文本切换渲染,以及放大到弹窗内查看(卡内空间有限,长结果便于阅读)。
-function ResultSummary({ summary }: { summary: string }) {
+// hideTitle:多轮模式下父卡片 ResultRoundCard 已经渲染了轮次标题,这里只剩工具栏 + 内容,不重复显示「执行结果摘要」。
+function ResultSummary({ summary, hideTitle = false }: { summary: string; hideTitle?: boolean }) {
   const [asMarkdown, setAsMarkdown] = useState(true);
   const [zoomed, setZoomed] = useState(false);
 
@@ -342,9 +413,9 @@ function ResultSummary({ summary }: { summary: string }) {
     );
 
   return (
-    <div className="ov-result">
+    <div className={hideTitle ? "ov-result ov-result-embedded" : "ov-result"}>
       <div className="ov-result-head">
-        <div className="ov-result-title">执行结果摘要</div>
+        {hideTitle ? <div className="ov-result-spacer" /> : <div className="ov-result-title">执行结果摘要</div>}
         <div className="ov-result-tools">
           <button
             type="button"
