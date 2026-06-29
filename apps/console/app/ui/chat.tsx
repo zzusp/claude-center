@@ -2,12 +2,11 @@
 
 import type { Conversation, Project, Worker } from "@claude-center/db";
 import { MessageSquare } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Empty } from "./shared";
 import { useConfirm } from "./controls";
 import { ChatSidebar, type ConvAction } from "./chat-sidebar";
 import { ChatThread, ConversationSettingsModal, NewConversationPanel } from "./chat-thread";
-import { POLL_INTERVAL_MS, usePolling } from "../lib/use-polling";
 
 // 实时对话总视图：左侧项目树（点项目展开内嵌会话历史）+ 右侧消息线（未选 → 空态）。
 // 与旧版「项目网格首页 + 单项目工作台」相比，这一版按 Claude 网页版风格把项目导航与会话历史合并到同一栏。
@@ -39,14 +38,6 @@ export function ChatView({
 }) {
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(initialProjectId);
   const [activeConvId, setActiveConvId] = useState<string | null>(initialConversationId);
-  const [conversations, setConversations] = useState<Conversation[]>(
-    initialProjectId ? conversationsByProject[initialProjectId] ?? [] : []
-  );
-  // convsLoaded 表征「列表已可信展示」：有预载缓存或刚拉过一次即 true。
-  // 项目展开时若 conversationsByProject 已含该项目对话，直接 true → 不闪「加载中…」。
-  const [convsLoaded, setConvsLoaded] = useState(
-    !initialProjectId || initialProjectId in conversationsByProject
-  );
   const [error, setError] = useState("");
   const [composing, setComposing] = useState(false);
   const [composeProjectId, setComposeProjectId] = useState<string | null>(null);
@@ -55,71 +46,26 @@ export function ChatView({
   const [settingsTarget, setSettingsTarget] = useState<Conversation | null>(null);
   const { confirm, dialog } = useConfirm();
 
-  // URL → 内部态同步：返回键 / 直接刷新等场景下，page 上层会重新挂载并传入新的 initial*。
-  useEffect(() => {
-    setExpandedProjectId(initialProjectId);
-  }, [initialProjectId]);
-  useEffect(() => {
-    setActiveConvId(initialConversationId);
-  }, [initialConversationId]);
-
   // 项目载入完成且初始 projectId 不在可见列表里（无权 / 已删）：退回首页。
   useEffect(() => {
     if (!loaded) return;
     if (initialProjectId && !projects.some((p) => p.id === initialProjectId)) {
       onProjectChange(null);
+      setExpandedProjectId(null);
     }
   }, [loaded, projects, initialProjectId, onProjectChange]);
 
-  // 切换展开项目时复位会话态：若上层已预载该项目对话则直接喂初值（避免「加载中…」闪烁），
-  // 否则置空等首次轮询回数据。
+  // 切换展开项目时复位行内改名草稿；对话列表由 conversationsByProject 直接派生，无需本地缓存。
   useEffect(() => {
-    if (expandedProjectId && expandedProjectId in conversationsByProject) {
-      setConversations(conversationsByProject[expandedProjectId] ?? []);
-      setConvsLoaded(true);
-    } else {
-      setConversations([]);
-      setConvsLoaded(!expandedProjectId);
-    }
     setRenamingId(null);
-    // conversationsByProject 仅作初值快照，不进 deps 否则每轮上层 refresh 都会把当前展开项目
-    // 的本地实时态（含 generating 翻转、新增对话）覆盖回上一拍的快照值。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedProjectId]);
 
-  const filterQuery = useMemo(() => {
-    if (!expandedProjectId) return "";
-    return `?projectId=${encodeURIComponent(expandedProjectId)}`;
-  }, [expandedProjectId]);
-
-  const loadList = useCallback(
-    async (query: string, isActive: () => boolean = () => true): Promise<void> => {
-      if (!query) {
-        setConversations([]);
-        setConvsLoaded(true);
-        return;
-      }
-      try {
-        const r = await fetch(`/api/conversations${query}`, { cache: "no-store" });
-        if (!r.ok) {
-          throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "加载失败");
-        }
-        const d = (await r.json()) as { conversations: Conversation[] };
-        if (!isActive()) return;
-        setConversations(d.conversations);
-        setConvsLoaded(true);
-        setError("");
-      } catch (e) {
-        if (!isActive()) return;
-        setError(e instanceof Error ? e.message : "加载失败");
-        setConvsLoaded(true);
-      }
-    },
-    []
+  // 当前展开项目对应的对话列表：父组件一次性拿齐 conversationsByProject 后，展开时直接派生，
+  // 不再发 /api/conversations?projectId=X，也不在切项目时触发任何网络请求。
+  const conversations = useMemo<Conversation[]>(
+    () => (expandedProjectId ? conversationsByProject[expandedProjectId] ?? [] : []),
+    [expandedProjectId, conversationsByProject]
   );
-
-  // filterQuery 变化（含项目切换）即重拉；展开后按 POLL 间隔同步对话列表。
-  usePolling((isActive) => loadList(filterQuery, isActive), [filterQuery], POLL_INTERVAL_MS);
 
   // 项目展开切换：同项目→收起；异项目→替换。
   function toggleProject(id: string): void {
@@ -170,7 +116,7 @@ export function ChatView({
       if (!r.ok) {
         throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "改名失败");
       }
-      await loadList(filterQuery);
+      onRequestRefresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "改名失败");
     }
@@ -193,7 +139,7 @@ export function ChatView({
         setActiveConvId(null);
         if (expandedProjectId) onConversationChange(expandedProjectId, null);
       }
-      await loadList(filterQuery);
+      onRequestRefresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "删除失败");
     }
@@ -210,7 +156,7 @@ export function ChatView({
       throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "保存失败");
     }
     setSettingsTarget(null);
-    await loadList(filterQuery);
+    onRequestRefresh();
   }
 
   const active = conversations.find((c) => c.id === activeConvId) ?? null;
@@ -226,7 +172,7 @@ export function ChatView({
         projects={projects}
         expandedProjectId={expandedProjectId}
         conversations={conversations}
-        conversationsLoaded={convsLoaded}
+        conversationsLoaded={loaded}
         activeConvId={activeConvId}
         canCommand={canCommand}
         renamingConvId={renamingId}
@@ -246,7 +192,7 @@ export function ChatView({
             key={active.id}
             conversation={active}
             canCommand={canCommand}
-            onChanged={() => void loadList(filterQuery)}
+            onChanged={onRequestRefresh}
             onBack={() => {
               setActiveConvId(null);
               if (expandedProjectId) onConversationChange(expandedProjectId, null);
@@ -273,7 +219,7 @@ export function ChatView({
               setExpandedProjectId(composeProjectId);
               onConversationChange(composeProjectId, id);
             }
-            void loadList(filterQuery);
+            onRequestRefresh();
           }}
         />
       ) : null}
