@@ -36,7 +36,8 @@ import {
   type ConversationMessage,
   type DirectCommand,
   type Task,
-  type TaskRepo
+  type TaskRepo,
+  type TaskRoundEntry
 } from "@claude-center/db";
 import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -640,9 +641,11 @@ function retryPrompt(task: Task, attachments: AttachmentMeta[], cwd: string, isG
   return [...dirAnchor(cwd, isGit), ...head, ...attachmentSection(attachments), "", ...replyDirective(task), ...e2eGuidanceSection()].join("\n");
 }
 
-// GitHub PR body 上限 65536 字符；正文主体（Claude 的结构化产出）留足额度，超长才从尾部截断
-// （Summary/Changes 在前，优先保留）。Test Plan 门禁解析用的是未截断全量文本，不受这里影响。
-const PR_BODY_OUTPUT_CAP = 55_000;
+// GitHub PR body 上限 65536 字符；本轮 + 历轮 + 原始需求共享额度。
+// 当前轮置顶占大头（PR_BODY_CURRENT_CAP），历轮共享 PR_BODY_HISTORY_CAP（按轮平分；超长 drop 最旧）。
+// Test Plan 门禁解析用的是未截断全量文本，不受这里影响。
+const PR_BODY_CURRENT_CAP = 30_000;
+const PR_BODY_HISTORY_CAP = 22_000;
 const PR_BODY_REQUEST_CAP = 8_000;
 
 function clampForPr(text: string, cap: number): string {
@@ -651,19 +654,69 @@ function clampForPr(text: string, cap: number): string {
   return `${t.slice(0, cap)}\n\n_…（内容过长已截断）_`;
 }
 
-// PR body：直接渲染 Claude 的 Markdown 产出（含 Summary / Changes / Test Plan），不再包代码块。
+function fmtRoundCompletedAt(iso: string): string {
+  // 取 yyyy-mm-dd HH:MM（UTC，避免 worker 本地时区噪声；reviewer 一眼看个相对顺序即可）。
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
+}
+
+function renderPreviousRounds(previousRounds: TaskRoundEntry[]): string {
+  if (previousRounds.length === 0) return "";
+  // 按轮均摊预算；不足以塞下任意一轮时（极端情况）drop 最旧轮直到能塞。
+  const perRoundCap = Math.max(1000, Math.floor(PR_BODY_HISTORY_CAP / previousRounds.length));
+  // 按 round 升序，但展示按倒序（最近的历史轮在最上面，最旧的在底部）。
+  const sorted = [...previousRounds].sort((a, b) => a.round - b.round);
+  const blocks: string[] = [];
+  let used = 0;
+  let dropped = 0;
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const r = sorted[i]!;
+    const prLines = r.prUrls.length > 0 ? r.prUrls.map((u) => `- ${u}`).join("\n") : "_(无 PR)_";
+    const head = r.round === 0 ? "首轮" : `第 ${r.round} 轮续跑`;
+    const block = [
+      `### ${head} · ${fmtRoundCompletedAt(r.completedAt)}`,
+      "",
+      "**本轮 PR**：",
+      prLines,
+      "",
+      clampForPr(r.output, perRoundCap),
+      ""
+    ].join("\n");
+    if (used + block.length > PR_BODY_HISTORY_CAP) {
+      dropped = i + 1; // i 及之前的轮被丢弃
+      break;
+    }
+    used += block.length;
+    blocks.push(block);
+  }
+  const dropNote = dropped > 0 ? `\n_（共 ${previousRounds.length} 轮历史，最旧 ${dropped} 轮已省略以适配 PR body 长度上限）_\n\n` : "";
+  return [
+    "",
+    "---",
+    "",
+    "<details>",
+    `<summary>历史轮次（${previousRounds.length} 轮）</summary>`,
+    "",
+    `${dropNote}${blocks.join("\n")}`,
+    "</details>",
+    ""
+  ].join("\n");
+}
+
+// PR body：当前轮 claudeOutput 置顶；历轮折叠展示（每轮含完成时间 + 本轮 PR URL + output）。
 // 原始任务需求收进折叠块，末尾加 Worker 署名脚注。
-// 续跑（continuation_count > 0）时在 summary 前注一行「续跑 #N」让 reviewer 看到这是基于反馈的新一轮产出，
-// 前序 PR 在任务详情时间线的 'continuation_branch_rotated' 事件 payload 里（per-repo 全集）。
-function prBody(task: Task, claudeOutput: string): string {
-  const summary = clampForPr(claudeOutput, PR_BODY_OUTPUT_CAP) || "_(Claude 未产出结构化总结)_";
-  const continuationNote =
+// previousRounds：本轮成功前的所有 round 条目（从 task.result.rounds 读），不含本轮。
+function prBody(task: Task, claudeOutput: string, previousRounds: TaskRoundEntry[]): string {
+  const summary = clampForPr(claudeOutput, PR_BODY_CURRENT_CAP) || "_(Claude 未产出结构化总结)_";
+  const roundLabel =
     task.continuation_count > 0
-      ? `> 续跑 #${task.continuation_count}：上一轮已交付/合并，本轮基于用户反馈再来一轮（前序 PR 见任务详情时间线的「PR 已合并·切新分支」事件）。\n\n`
+      ? `> 本 PR 来自**第 ${task.continuation_count} 轮续跑**（基于用户反馈再来一轮）；下方折叠区可展开前 ${previousRounds.length} 轮的产出与对应 PR。\n\n`
       : "";
   return [
-    `${continuationNote}${summary}`,
-    "",
+    `${roundLabel}${summary}`,
+    renderPreviousRounds(previousRounds),
     "---",
     "",
     "<details>",
@@ -675,6 +728,19 @@ function prBody(task: Task, claudeOutput: string): string {
     "",
     `<sub>🤖 本 PR 由 ClaudeCenter 桌面 Worker 自动创建（task ${task.id}）。Claude Code 在本地完成改动。</sub>`
   ].join("\n");
+}
+
+// 本轮收尾前从 tasks.result 取已累计的 rounds[]（前 N-1 轮；本轮还没 append）。
+// 旧任务无 rounds 字段 → 返回 []，prBody 自动退化为「无历史」（与改造前同形态）。
+async function loadPreviousRounds(taskId: string): Promise<TaskRoundEntry[]> {
+  const pool = getPool();
+  const r = await pool.query<{ result: Record<string, unknown> | null }>(
+    `SELECT result FROM tasks WHERE id = $1 LIMIT 1`,
+    [taskId]
+  );
+  const result = r.rows[0]?.result;
+  const rounds = (result as { rounds?: unknown } | null | undefined)?.rounds;
+  return Array.isArray(rounds) ? (rounds as TaskRoundEntry[]) : [];
 }
 
 function extractPrUrl(output: string): string | null {
@@ -952,7 +1018,8 @@ async function finalizeNonGitTask(
       nonGit: true,
       claudeResult: claudeOutput
     },
-    null
+    null,
+    { output: claudeOutput, prUrls: [], submitMode: "none" }
   );
 }
 
@@ -1057,6 +1124,10 @@ export async function finalizeTaskMultiRepo(
   claudeOutput: string
 ): Promise<void> {
   const pool = getPool();
+
+  // 多轮累计（docs/spec/multi-round-task-history.md）：finalize 开头取一次已落库的历轮（前 N-1 轮，
+  // 本轮成功 markTaskSuccess 后才会 append 进 rounds[]）。三个 prBody 调用点共享同一份历史。
+  const previousRounds = await loadPreviousRounds(task.id);
 
   // 按 role 排序：主仓最后处理，让 PR body 可以引用子仓 PR URL（事后回填见 P2）。
   // 提交顺序：子仓先 → 主仓后（强一致 auto_merge 时合并顺序也是子先主后）。
@@ -1167,7 +1238,7 @@ export async function finalizeTaskMultiRepo(
           ctx.pr_url = null;
           // 落到下方 findExistingPrUrl / gh pr create 路径，不 continue。
         } else {
-          await refreshPrBody(config, subWt, ctx.pr_url, prBody(task, claudeOutput));
+          await refreshPrBody(config, subWt, ctx.pr_url, prBody(task, claudeOutput, previousRounds));
           await updateTaskRepoStatus(pool, ctx.id, "pr_created");
           await addTaskEvent(pool, task.id, config.workerId, "pr_created", `${repoLabel} 复用已存在 PR（已刷新正文）`, {
             repoRole: ctx.role,
@@ -1185,7 +1256,7 @@ export async function finalizeTaskMultiRepo(
       // 此时再 create 会因「a pull request already exists」整仓判失败。先查同 head/base 的已开 PR，命中即复用（并刷新正文）。
       const existingPrUrl = await findExistingPrUrl(config, subWt, ctx.work_branch, ctx.target_branch);
       if (existingPrUrl) {
-        await refreshPrBody(config, subWt, existingPrUrl, prBody(task, claudeOutput));
+        await refreshPrBody(config, subWt, existingPrUrl, prBody(task, claudeOutput, previousRounds));
         await updateTaskRepoPrUrl(pool, ctx.id, existingPrUrl);
         await updateTaskRepoStatus(pool, ctx.id, "pr_created");
         await addTaskEvent(pool, task.id, config.workerId, "pr_created", `${repoLabel} 复用已存在 PR（已刷新正文）`, {
@@ -1211,7 +1282,7 @@ export async function finalizeTaskMultiRepo(
           "--title",
           multiRepoPrTitle(task, ctx, order),
           "--body",
-          prBody(task, claudeOutput)
+          prBody(task, claudeOutput, previousRounds)
         ],
         { cwd: subWt, timeoutMs: 10 * 60_000 }
       );
@@ -1258,6 +1329,12 @@ export async function finalizeTaskMultiRepo(
   const mainPrUrl =
     mainResult && mainResult.sub === "pr_created" ? mainResult.prUrl : null;
 
+  // 多轮累计（docs/spec/multi-round-task-history.md）：把本轮所有 PR URL 收集传给 markTaskSuccess，
+  // 由它 append 到 tasks.result.rounds[]。push 模式无 PR → []。
+  const roundPrUrls = results
+    .map((r) => (r.sub === "pr_created" ? r.prUrl : null))
+    .filter((u): u is string => typeof u === "string" && u.length > 0);
+
   if (task.submit_mode === "push") {
     // submit_mode='push':所有参与仓 push 完即 success(终态,无 PR 可合)。
     // 「不再清理 worktree」(spec drop-accepted-rejected.md):保留 worktree 供用户本地复用,
@@ -1273,7 +1350,8 @@ export async function finalizeTaskMultiRepo(
         claudeResult: claudeOutput,
         multiRepo: results.map(serializeRepoResult)
       },
-      null
+      null,
+      { output: claudeOutput, prUrls: [], submitMode: "push" }
     );
     return;
   }
@@ -1290,7 +1368,8 @@ export async function finalizeTaskMultiRepo(
       claudeResult: claudeOutput,
       multiRepo: results.map(serializeRepoResult)
     },
-    mainPrUrl
+    mainPrUrl,
+    { output: claudeOutput, prUrls: roundPrUrls, submitMode: "pr" }
   );
 
   // 强一致自动合并（spec 抉择 2）：所有 PR 都 mergeable 才统一合，否则全不合 + 告警事件。
