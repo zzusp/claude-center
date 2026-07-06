@@ -6042,9 +6042,15 @@ a.ds-v:hover {
   .chat-composer {
     margin: 8px 10px 10px;
   }
-  /* 移动端：紧凑日期面板贴底显示（fixed bottom-sheet），避免按钮右锚下面板左边被视口裁切。
-     不再依赖 .compact.up 的 absolute 上展开。 */
-  .dt-picker.compact .dt-panel {
+  /* 移动端：所有 DateTimePicker 面板统一贴底显示（fixed bottom-sheet）。
+     - compact（对话输入框旁）不再依赖 up 的 absolute 上展开；
+     - 非 compact（「新建对话」/「对话设置」等 chat-modal 内）不再因 modal 的 overflow:hidden
+       + 向下展开而被裁切到屏外。
+     用「多选择器」提升特异性，压过基础规则里 .dt-picker.compact / .dt-picker.up 的方向锚点。 */
+  .dt-picker .dt-panel,
+  .dt-picker.up .dt-panel,
+  .dt-picker.compact .dt-panel,
+  .dt-picker.compact.up .dt-panel {
     position: fixed;
     left: 12px;
     right: 12px;
@@ -6053,10 +6059,6 @@ a.ds-v:hover {
     width: auto;
     min-width: 0;
     max-width: none;
-  }
-  .dt-picker.compact.up .dt-panel {
-    bottom: 12px;
-    top: auto;
   }
 }
 
